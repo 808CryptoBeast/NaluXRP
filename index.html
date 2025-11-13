@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NaluXrp 🌊 – Riding The Ledger Waves</title>
+
+  <meta name="description" content="NaluXrp: Riding The Ledger Waves – Live XRPL analytics, validators, tokens, AMMs, NFTs, and more." />
+  <meta property="og:title" content="NaluXrp 🌊 – Riding The Ledger Waves" />
+  <meta property="og:description" content="Ride the ledger waves with real-time XRP Ledger analytics, tokens, pools, and more." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="assets/logo.png" />
+
+  <link rel="icon" href="assets/logo.png" type="image/png" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://unpkg.com/xrpl@4.4.2/build/xrpl-latest-min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="theme-gold">
+  <!-- ========== NAVBAR ========== -->
+  <nav class="navbar" id="navbar">
+    <div class="nav-content">
+      <div class="nav-logo" onclick="switchPage('dashboard')">
+        🌊 <strong>NaluXrp</strong>
+        <small>Riding The Ledger Waves</small>
+      </div>
+
+      <div class="hamburger" id="hamburger">
+        <span></span><span></span><span></span>
+      </div>
+
+      <div class="nav-links" id="navLinks">
+        <button class="nav-btn" onclick="switchPage('dashboard')">📊 Dashboard</button>
+        
+        <!-- Market Dropdown -->
+        <div class="nav-dropdown">
+          <button class="nav-btn dropdown-toggle">
+            <span>💹 Market</span>
+            <span class="dropdown-arrow">▼</span>
+          </button>
+          <div class="dropdown-menu">
+            <button class="dropdown-item" onclick="switchPage('tokens')">🪙 Tokens</button>
+            <button class="dropdown-item" onclick="switchPage('amm')">💧 AMM Pools</button>
+            <button class="dropdown-item" onclick="switchPage('analytics')">📈 Analytics</button>
+          </div>
+        </div>
+        
+        <!-- Network Dropdown -->
+        <div class="nav-dropdown">
+          <button class="nav-btn dropdown-toggle">
+            <span>🌐 Network</span>
+            <span class="dropdown-arrow">▼</span>
+          </button>
+          <div class="dropdown-menu">
+            <button class="dropdown-item" onclick="switchPage('validators')">🛡️ Validators</button>
+            <button class="dropdown-item" onclick="switchPage('explorer')">🔍 Explorer</button>
+            <button class="dropdown-item" onclick="switchPage('history')">📜 History</button>
+          </div>
+        </div>
+        
+        <button class="nav-btn" onclick="switchPage('nfts')">🎨 NFTs</button>
+        <button class="nav-btn" onclick="switchPage('profile')">👤 Profile</button>
+        
+        <!-- More Dropdown -->
+        <div class="nav-dropdown">
+          <button class="nav-btn dropdown-toggle">
+            <span>⚙️ More</span>
+            <span class="dropdown-arrow">▼</span>
+          </button>
+          <div class="dropdown-menu">
+            <button class="dropdown-item" onclick="switchPage('news')">📰 News</button>
+            <button class="dropdown-item" onclick="switchPage('settings')">⚙️ Settings</button>
+            <button class="dropdown-item" onclick="switchPage('about')">ℹ️ About</button>
+            <button class="dropdown-item" onclick="cycleTheme()">🎨 Theme</button>
+          </div>
+        </div>
+
+        <div class="status-badge">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="connectionStatus">Connecting...</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Toggle Button -->
+  <button class="navbar-toggle-btn" id="navbarToggle" title="Toggle Navbar (Press N)">
+    <span class="toggle-icon">▲</span>
+  </button>
+
+  <!-- Background Effects -->
+  <div class="background-effects">
+    <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
+    <div class="galaxy"></div>
+    <div class="stars-container" id="starsContainer"></div>
+  </div>
+
+  <!-- ========== PAGE SECTIONS ========== -->
+  <div class="container">
+    <section id="dashboard" class="page-section active"></section>
+    <section id="validators" class="page-section"></section>
+    <section id="tokens" class="page-section"></section>
+    <section id="amm" class="page-section"></section>
+    <section id="analytics" class="page-section"></section>
+    <section id="explorer" class="page-section"></section>
+    <section id="nfts" class="page-section"></section>
+    <section id="profile" class="page-section"></section>
+    <section id="news" class="page-section"></section>
+    <section id="history" class="page-section"></section>
+    <section id="settings" class="page-section"></section>
+    <section id="about" class="page-section"></section>
+  </div>
+
+  <!-- ========== JS MODULES (LOAD ORDER MATTERS) ========== -->
+  <script src="js/utils.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/xrpl-connection.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/validators.js"></script>
+  <script src="js/tokens.js"></script>
+  <script src="js/amm.js"></script>
+  <script src="js/analytics.js"></script>
+  <script src="js/explorer.js"></script>
+  <script src="js/nfts.js"></script>
+  <script src="js/profile.js"></script>
+  <script src="js/news.js"></script>
+  <script src="js/history.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/about.js"></script>
+</body>
+</html>

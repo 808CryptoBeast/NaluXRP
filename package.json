@@ -1,0 +1,16 @@
+{
+  "name": "naluxrp",
+  "version": "1.0.0",
+  "description": "NaluXrp/\r │\r ├── index.html\r │\r ├── css/\r │   └── style.css\r │\r ├── js/\r │   ├── xrpl-connection.js     ← live XRPL link + streaming\r │   ├── ui.js                  ← navbar, themes, toggles, animations\r │   ├── utils.js               ← helper & export functions\r │   ├── validators.js          ← UNL list + validator metrics\r │   ├── tokens.js              ← live token data + price feeds\r │   ├── amm.js                 ← liquidity pool data\r │   ├── profile.js             ← user wallet + NFTs + bio\r │   ├── history.js             ← ledger + account history\r │   ├── analytics.js           ← advanced metrics, sparkline data\r │   ├── nfts.js                ← NFT display, mint, metadata\r │   ├── explorer.js            ← tx / account search\r │   ├── news.js                ← XRPL ecosystem + dev news\r │   ├── settings.js            ← preferences + node selector\r │   └── about.js               ← about / credits / contact\r │\r └── assets/\r     ├── icons/\r     ├── backgrounds/\r     └── logo.png",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-fetch": "^2.7.0"
+  }
+}
