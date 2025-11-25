@@ -1,0 +1,871 @@
+/* =========================================
+   NaluXrp 🌊 — Dashboard V2 Stylesheet
+   Clean, glowing, XRPL-themed UI
+   ========================================= */
+
+/* --- Base Reset / Layout --- */
+.dashboard-page {
+  width: 100%;
+  padding: 20px 30px;
+  box-sizing: border-box;
+  animation: fadeIn 0.7s ease-out;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 25px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+/* --- Network Selector --- */
+.network-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.selector-label {
+  font-size: 1em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.net-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg);
+  border: 2px solid var(--accent-tertiary);
+  padding: 6px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 600;
+  transition: all 0.25s ease;
+}
+
+.net-btn:hover {
+  border-color: var(--accent-primary);
+  background: rgba(255,255,255,0.05);
+  transform: translateY(-2px);
+}
+
+.net-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+/* --- Connection Box --- */
+.connection-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card-bg);
+  padding: 8px 14px;
+  border: 2px solid var(--accent-tertiary);
+  border-radius: 10px;
+}
+
+.conn-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffb86c;
+  box-shadow: 0 0 10px #ffb86c;
+}
+.conn-dot.live {
+  background: #00e676;
+  box-shadow: 0 0 15px #00e676;
+}
+
+#connText {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* -----------------------------------------
+   Dashboard Columns Layout
+   ---------------------------------------- */
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 25px;
+}
+
+.dashboard-col-main {}
+.dashboard-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+/* --- Responsive --- */
+@media (max-width: 1100px) {
+  .dashboard-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* -----------------------------------------
+   Metrics Section
+   ---------------------------------------- */
+.dashboard-metrics-title {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: var(--accent-secondary);
+}
+
+.dashboard-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill,minmax(180px,1fr));
+  gap: 15px;
+}
+
+.metric-card {
+  background: var(--card-bg);
+  border: 2px solid var(--accent-tertiary);
+  padding: 15px 18px;
+  border-radius: 12px;
+  box-shadow: 0 0 20px rgba(0,0,0,0.25);
+}
+
+.metric-label {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  margin-bottom: 6px;
+}
+
+.metric-value {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: var(--accent-primary);
+  text-shadow: 0 0 6px var(--glow-color);
+}
+
+.metric-sub {
+  margin-top: 3px;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+/* -----------------------------------------
+   Widget Cards (shared)
+   ---------------------------------------- */
+.widget-card {
+  background: var(--card-bg);
+  border: 2px solid var(--accent-tertiary);
+  border-radius: 15px;
+  padding: 18px 20px;
+  box-shadow: 0 0 20px rgba(0,0,0,0.25);
+}
+
+.widget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.widget-title {
+  font-size: 1.15em;
+  font-weight: 700;
+  color: var(--accent-secondary);
+}
+
+.widget-tag {
+  font-size: 0.8em;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--accent-tertiary);
+  color: var(--text-secondary);
+}
+
+.widget-body {
+  width: 100%;
+}
+
+/* Fix chart overflow / stretching */
+.widget-chart {
+  width: 100%;
+  max-width: 100%;
+  height: 240px;
+  position: relative;
+}
+
+.widget-chart--tall {
+  height: 320px !important;
+}
+
+.widget-chart canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.widget-chart::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 12px;
+  background: radial-gradient(circle, rgba(0,212,255,0.15), transparent 70%);
+  filter: blur(18px);
+  z-index: -1;
+}
+
+/* Pills */
+.widget-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--accent-primary);
+  color: var(--text-primary);
+  font-size: 0.85em;
+  margin: 3px;
+}
+
+/* Whale List */
+.whale-item {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.badge-warn {
+  color: #ff6e6e;
+  font-weight: 700;
+}
+.badge-good {
+  color: #00e676;
+  font-weight: 700;
+}
+
+/* -----------------------------------------
+   Latency Ribbon
+   ---------------------------------------- */
+.latency-ribbon {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.latency-segment {
+  height: 100%;
+  opacity: 0.6;
+}
+
+.latency-segment.fast { background: #00e676; }
+.latency-segment.medium { background: #ffb86c; }
+.latency-segment.slow { background: #ff6e6e; }
+
+/* =========================================
+   Dashboard Layout Constraints
+   ========================================= */
+
+.dashboard-page {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 20px;
+  box-sizing: border-box;
+}
+
+.dashboard-header {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto 20px auto;
+  padding: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 20px;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.dashboard-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  width: 100%;
+}
+
+.dashboard-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 380px;
+  flex-shrink: 0;
+}
+
+/* Constrain main content widgets */
+.dashboard-metrics {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+  width: 100%;
+}
+
+.widget-card {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Network selector constraints */
+.network-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.selector-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.net-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.net-btn:hover {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: var(--accent-secondary);
+}
+
+.net-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+
+/* Connection status */
+.connection-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffb86c;
+  transition: all 0.3s ease;
+}
+
+.conn-dot.live {
+  background: #50fa7b;
+  box-shadow: 0 0 10px #50fa7b;
+}
+
+#connText {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+/* =========================================
+   Neon Ledger Conveyor – Slow V2
+   ========================================= */
+
+.ledger-stream-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ledger-stream-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  padding: 10px 0;
+}
+
+.ledger-stream-track {
+  display: inline-flex;
+  gap: 18px;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+/* SLOW conveyor — 40s per loop */
+.ledger-stream-animate {
+  animation: ledgerConveyorMove 40s linear infinite;
+}
+
+.ledger-stream-shell:hover .ledger-stream-animate {
+  animation-play-state: paused;
+}
+
+@keyframes ledgerConveyorMove {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* Particles under conveyor */
+.ledger-stream-particles {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.ledger-particle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255,255,255,0.6), transparent 70%);
+  opacity: 0.25;
+  filter: blur(1px);
+  animation: ledgerParticleDrift linear infinite;
+}
+
+@keyframes ledgerParticleDrift {
+  from { transform: translateY(0) translateX(0); }
+  to   { transform: translateY(-40px) translateX(-40px); opacity: 0; }
+}
+
+/* =========================================
+   Ledger Cards (wide, neon, animated)
+   ========================================= */
+
+.ledger-card {
+  position: relative;
+  width: 420px;
+  min-width: 420px;
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.04), transparent 55%),
+              var(--bg-secondary);
+  border-radius: 18px;
+  padding: 1px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.04),
+              0 10px 30px rgba(0,0,0,0.7);
+  transform: translateZ(0);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+  z-index: 1;
+}
+
+.ledger-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.9);
+  filter: saturate(1.15);
+}
+
+.ledger-card-inner {
+  background: radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 60%),
+              linear-gradient(135deg, rgba(0,0,0,0.7), rgba(0,0,0,0.8));
+  border-radius: 16px;
+  padding: 14px 18px 16px;
+}
+
+/* Aura effects */
+.ledger-card::before {
+  content: "";
+  position: absolute;
+  inset: -35%;
+  opacity: 0.0;
+  filter: blur(32px);
+  z-index: 0;
+  mix-blend-mode: screen;
+}
+
+/* Aura pulse animations */
+@keyframes ledgerAuraPulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 0.85; transform: scale(1.05); }
+}
+
+.ledger-card--payment::before {
+  background: radial-gradient(circle at 0 0, rgba(80,184,255,0.75), rgba(0,100,255,0.15), transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--offer::before {
+  background: radial-gradient(circle at 100% 0, rgba(191,90,255,0.75), rgba(120,30,255,0.2), transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--nft::before {
+  background: radial-gradient(circle at 50% 0, rgba(255,159,67,0.8), rgba(255,111,0,0.25), transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--trust::before {
+  background: radial-gradient(circle at 0 100%, rgba(0,217,158,0.8), rgba(0,150,136,0.25), transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--other::before {
+  background: radial-gradient(circle at 100% 100%, rgba(241,250,140,0.85), rgba(180,200,80,0.3), transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+
+/* Header */
+.ledger-card-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.ledger-id {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--accent-secondary);
+  text-shadow: 0 0 10px var(--glow-color);
+}
+
+.ledger-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ledger-time {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.ledger-tag {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+/* Stats */
+.ledger-main-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ledger-main-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.ledger-stat-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.ledger-stat-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-secondary);
+}
+
+/* Type Bars */
+.ledger-type-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ledger-type-row {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.ledger-type-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ledger-type-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+}
+
+.ledger-type-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.4s ease-out;
+  box-shadow: 0 0 12px currentColor;
+}
+
+/* Type Colors */
+.type-payment { background: linear-gradient(90deg,#40a9ff,#00d4ff); color:#00d4ff; }
+.type-offer   { background: linear-gradient(90deg,#ff9f43,#ff6b1a); color:#ff9f43; }
+.type-nft     { background: linear-gradient(90deg,#ff9f43,#ff3f81); color:#ff9f43; }
+.type-trust   { background: linear-gradient(90deg,#00e6a8,#00b894); color:#00e6a8; }
+.type-other   { background: linear-gradient(90deg,#f1fa8c,#ffe66d); color:#f1fa8c; }
+
+.ledger-type-count {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* =========================================
+   Ledger Rhythm Orb & Heatmap
+   ========================================= */
+
+/* Neon Orb layout */
+.ledger-orb-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ledger-orb-wrapper {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 240px;
+}
+
+.ledger-orb-wrapper canvas {
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 50%;
+}
+
+.ledger-orb-stats {
+  flex: 1 1 180px;
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.orb-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+/* Tile Heatmap */
+.tx-heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tx-heat-tile {
+  position: relative;
+  padding: 0.75rem 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--accent-tertiary);
+  background: radial-gradient(circle at top, rgba(255,255,255,0.08), transparent),
+              rgba(10, 10, 20, 0.9);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.02),
+              0 10px 25px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+.tx-heat-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.7;
+  background: radial-gradient(circle at 0 0,
+    rgba(0, 212, 255, calc(var(--heat, 0.5) * 0.6)),
+    transparent 70%);
+  pointer-events: none;
+}
+
+.tx-heat-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.tx-heat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.tx-heat-percent {
+  font-size: 0.75rem;
+  color: var(--accent-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.tx-heat-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+
+.tx-heat-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    rgba(0, 212, 255, 0.15),
+    rgba(0, 212, 255, 0.9));
+}
+
+/* Optional per-type hues */
+.tx-heat-tile.heat-payment::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(80, 250, 123, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-offer::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(189, 147, 249, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-nft::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(255, 184, 108, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-trust::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(139, 233, 253, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-other::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(255, 121, 198, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+
+/* =========================================
+   Responsive Design
+   ========================================= */
+
+@media (max-width: 1200px) {
+  .dashboard-columns {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+  
+  .dashboard-col-side {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 15px;
+  }
+  
+  .ledger-card { 
+    width: 380px; 
+    min-width: 380px; 
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-page {
+    padding: 0 15px;
+  }
+  
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  
+  .network-selector {
+    justify-content: center;
+  }
+  
+  .connection-box {
+    justify-content: center;
+  }
+  
+  .ledger-orb-layout {
+    flex-direction: column;
+    text-align: center;
+  }
+  
+  .ledger-orb-stats {
+    width: 100%;
+  }
+  
+  .dashboard-metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .ledger-card { 
+    width: 320px; 
+    min-width: 320px; 
+  }
+  
+  .ledger-main-row { 
+    grid-template-columns: repeat(2,1fr); 
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-metric-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .tx-heatmap-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .ledger-card { 
+    width: 280px; 
+    min-width: 280px; 
+  }
+}
+
+/* Animations */
+@keyframes fadeSlideIn {
+  0% { opacity:0; transform:translateY(-15px); }
+  100% { opacity:1; transform:translateY(0); }
+}
+
+@keyframes fadeIn {
+  from {opacity:0;} to {opacity:1;}
+}

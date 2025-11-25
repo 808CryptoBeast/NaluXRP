@@ -1,0 +1,204 @@
+/* =========================================
+   NAVBAR DROPDOWN FIXES
+   Making dropdown text always readable
+   ========================================= */
+
+/* Dropdown Menu Styles - Always Readable */
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card-bg);
+  border: 2px solid var(--accent-tertiary);
+  border-radius: 12px;
+  min-width: 200px;
+  padding: 10px 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  z-index: 1000;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+/* Show dropdown on hover */
+.nav-dropdown:hover .dropdown-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Dropdown Items - Always Readable */
+.dropdown-item {
+  display: block;
+  padding: 12px 20px;
+  color: var(--text-primary); /* Always use primary text color */
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Dropdown Item Hover State */
+.dropdown-item:hover {
+  background: var(--accent-primary);
+  color: #000; /* Dark text on bright background */
+  padding-left: 25px;
+  font-weight: 600;
+}
+
+/* Dropdown Toggle Button - Always Readable */
+.dropdown-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 12px 20px;
+  background: transparent;
+  border: 2px solid var(--accent-tertiary);
+  color: var(--text-primary); /* Always use primary text color */
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+}
+
+/* Dropdown Toggle Hover */
+.dropdown-toggle:hover {
+  background: var(--accent-primary);
+  color: #000;
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px var(--glow-color);
+}
+
+/* Dropdown Arrow */
+.dropdown-toggle::after {
+  content: '▼';
+  font-size: 0.7em;
+  margin-left: 5px;
+  transition: transform 0.3s ease;
+}
+
+.nav-dropdown:hover .dropdown-toggle::after,
+.nav-dropdown.active .dropdown-toggle::after {
+  transform: rotate(180deg);
+}
+
+/* Logo Section - Add Slogan */
+.nav-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.logo-title {
+  font-size: 1.8em;
+  font-weight: bold;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.logo-slogan {
+  font-size: 0.7em;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0.5px;
+}
+
+/* Mobile Dropdown Styles */
+@media (max-width: 992px) {
+  .dropdown-menu {
+    position: static;
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+    background: var(--bg-secondary);
+    border: none;
+    border-left: 3px solid var(--accent-primary);
+    margin-top: 10px;
+    margin-left: 20px;
+    box-shadow: none;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    padding: 0;
+  }
+
+  .nav-dropdown.active .dropdown-menu {
+    max-height: 500px;
+    padding: 10px 0;
+  }
+
+  .dropdown-item {
+    color: var(--text-primary);
+    padding: 10px 15px;
+  }
+
+  .dropdown-item:hover {
+    background: var(--accent-tertiary);
+    color: var(--text-primary);
+    padding-left: 20px;
+  }
+
+  .dropdown-toggle {
+    width: 100%;
+    justify-content: space-between;
+    border: none;
+    border-bottom: 1px solid var(--accent-tertiary);
+    border-radius: 0;
+    color: var(--text-primary);
+  }
+
+  .dropdown-toggle:hover {
+    background: var(--accent-tertiary);
+    color: var(--text-primary);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .logo-slogan {
+    font-size: 0.6em;
+  }
+}
+
+/* Ensure text is always visible in all themes */
+.theme-gold .dropdown-item,
+.theme-cosmic .dropdown-item,
+.theme-starry .dropdown-item,
+.theme-hawaiian .dropdown-item {
+  color: var(--text-primary);
+}
+
+.theme-gold .dropdown-toggle,
+.theme-cosmic .dropdown-toggle,
+.theme-starry .dropdown-toggle,
+.theme-hawaiian .dropdown-toggle {
+  color: var(--text-primary);
+}
+
+/* Active dropdown state */
+.nav-dropdown.active .dropdown-toggle {
+  background: var(--accent-tertiary);
+  color: var(--text-primary);
+}
+
+/* Fix for dropdown menu positioning */
+.nav-dropdown {
+  position: relative;
+}
+
+/* Ensure dropdowns appear above other content */
+.nav-links {
+  z-index: 100;
+}
+
+.dropdown-menu {
+  z-index: 101;
+}
