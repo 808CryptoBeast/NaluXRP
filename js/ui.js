@@ -17,18 +17,58 @@ window.UI = {
 function switchPage(pageId) {
   console.log(`🔄 Switching to page: ${pageId}`);
   
-  // Update active page section
-  document.querySelectorAll('.page-section').forEach(sec => sec.classList.remove('active'));
-  const target = document.getElementById(pageId);
-  if (target) {
-    target.classList.add('active');
-    window.UI.currentPage = pageId;
+  try {
+    // Hide all page sections
+    document.querySelectorAll('.page-section').forEach(sec => {
+      sec.style.display = 'none';
+    });
     
-    // Call page-specific init functions
-    loadPageContent(pageId);
-  } else {
-    console.error(`❌ Page section not found: ${pageId}`);
+    // Show target page section
+    const target = document.getElementById(pageId);
+    if (target) {
+      target.style.display = 'block';
+      window.UI.currentPage = pageId;
+      
+      // Call page-specific init functions
+      loadPageContent(pageId);
+    } else {
+      console.error(`❌ Page section not found: ${pageId}`);
+      // For analytics specifically, create it dynamically
+      if (pageId === 'analytics') {
+        createAnalyticsPage();
+      } else {
+        showDefaultPage(pageId);
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Error switching to ${pageId}:`, error);
   }
+}
+
+/* ---------- CREATE ANALYTICS PAGE IF MISSING ---------- */
+function createAnalyticsPage() {
+  console.log('📊 Creating analytics page dynamically...');
+  
+  const mainContainer = document.querySelector('main') || document.body;
+  
+  // Create analytics section
+  const analyticsSection = document.createElement('section');
+  analyticsSection.id = 'analytics';
+  analyticsSection.className = 'page-section';
+  analyticsSection.style.display = 'block';
+  analyticsSection.innerHTML = `
+    <div class="page-header">
+      <h1>📈 Analytics</h1>
+      <p>Deep network insights and performance metrics</p>
+    </div>
+    <div id="analytics-content" class="page-content">
+      <!-- Analytics content will be loaded here -->
+    </div>
+  `;
+  
+  mainContainer.appendChild(analyticsSection);
+  window.UI.currentPage = 'analytics';
+  loadPageContent('analytics');
 }
 
 function loadPageContent(pageId) {
@@ -64,8 +104,17 @@ function loadPageContent(pageId) {
         else showDefaultPage('amm');
         break;
       case 'analytics':
-        if (typeof initAnalytics === 'function') initAnalytics();
-        else showDefaultPage('analytics');
+        if (typeof initAnalytics === 'function') {
+          // Use the specific analytics content container
+          const analyticsContainer = document.getElementById('analytics-content') || document.getElementById('analytics');
+          if (analyticsContainer) {
+            analyticsContainer.innerHTML = ''; // Clear any existing content
+          }
+          initAnalytics();
+        } else {
+          console.warn('⚠️ Analytics module not loaded');
+          showDefaultPage('analytics');
+        }
         break;
       case 'explorer':
         if (typeof initExplorer === 'function') initExplorer();

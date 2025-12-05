@@ -1,155 +1,142 @@
-// navbar.js - Enhanced Navbar Functionality
+// =======================================================
+// navbar.js – FIXED + Mobile Friendly + Stable
+// Option A: Full-width slide-down menu with accordion dropdowns
+// =======================================================
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener("DOMContentLoaded", () => {
   initNavbar();
 });
 
+/* ------------------------------------------------------
+   INIT NAVBAR
+------------------------------------------------------ */
 function initNavbar() {
-  initHamburgerMenu();
-  initDropdowns();
-  initNavbarToggle();
+  setupNavLinks();
+  setupHamburger();
+  setupDropdowns();
+  setupScrollHideDesktop();
 }
 
-function initHamburgerMenu() {
-  const hamburger = document.getElementById('hamburger');
-  const navLinks = document.getElementById('navLinks');
+/* ------------------------------------------------------
+   FIXED: Handle navigation WITHOUT overwriting dropdowns
+------------------------------------------------------ */
+function setupNavLinks() {
+  document.querySelectorAll("[data-page]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      const page = btn.dataset.page;
+      if (!page) return;
 
-  if (!hamburger || !navLinks) return;
-
-  hamburger.addEventListener('click', function(e) {
-    e.stopPropagation();
-    hamburger.classList.toggle('active');
-    navLinks.classList.toggle('show');
-    document.body.classList.toggle('mobile-menu-open');
-  });
-
-  // Close mobile menu when clicking a nav button (except dropdown toggles)
-  navLinks.querySelectorAll('.nav-btn:not(.dropdown-toggle)').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (window.innerWidth <= 992) {
-        closeMobileMenu();
-      }
-    });
-  });
-
-  // Close mobile menu when clicking outside
-  document.addEventListener('click', function(e) {
-    if (window.innerWidth <= 992 && 
-        !e.target.closest('.nav-links') && 
-        !e.target.closest('.hamburger')) {
-      closeMobileMenu();
-    }
-  });
-}
-
-function initDropdowns() {
-  // Mobile dropdown toggle functionality
-  document.querySelectorAll('.dropdown-toggle').forEach(toggle => {
-    toggle.addEventListener('click', function(e) {
-      // Only handle mobile behavior
-      if (window.innerWidth > 992) {
-        e.preventDefault();
-        return; // Let CSS handle hover on desktop
-      }
-      
       e.preventDefault();
-      e.stopPropagation();
+      navigateToPage(page);
 
-      const dropdown = this.closest('.nav-dropdown');
-      const isActive = dropdown.classList.contains('active');
-
-      // Close all other dropdowns
-      document.querySelectorAll('.nav-dropdown').forEach(d => {
-        if (d !== dropdown) {
-          d.classList.remove('active');
-        }
-      });
-
-      // Toggle current dropdown
-      dropdown.classList.toggle('active', !isActive);
-    });
-  });
-
-  // Close dropdowns when clicking outside on mobile
-  document.addEventListener('click', function(e) {
-    if (window.innerWidth <= 992) {
-      if (!e.target.closest('.nav-dropdown')) {
-        document.querySelectorAll('.nav-dropdown').forEach(dropdown => {
-          dropdown.classList.remove('active');
-        });
-      }
-    }
-  });
-
-  // Close dropdowns when clicking a dropdown item on mobile
-  document.querySelectorAll('.dropdown-item').forEach(item => {
-    item.addEventListener('click', function() {
+      // Close mobile menu after navigating
       if (window.innerWidth <= 992) {
-        closeAllDropdowns();
         closeMobileMenu();
       }
     });
   });
-
-  // Reset dropdowns on window resize
-  window.addEventListener('resize', function() {
-    if (window.innerWidth > 992) {
-      closeAllDropdowns();
-      closeMobileMenu();
-    }
-  });
 }
 
-function initNavbarToggle() {
-  const navbar = document.getElementById('navbar');
-  const toggleBtn = document.getElementById('navbarToggle');
-  
-  if (!navbar || !toggleBtn) return;
-
-  // Toggle navbar visibility
-  toggleBtn.addEventListener('click', function() {
-    navbar.classList.toggle('hide');
-  });
-
-  // Keyboard shortcut (N key)
-  document.addEventListener('keydown', function(e) {
-    if (e.key.toLowerCase() === 'n' && !e.target.matches('input, textarea')) {
-      navbar.classList.toggle('hide');
-    }
-  });
-
-  // Auto-hide navbar on scroll
-  let lastScrollY = window.scrollY;
-  window.addEventListener('scroll', function() {
-    if (window.innerWidth > 992) { // Only on desktop
-      if (window.scrollY > lastScrollY && window.scrollY > 100) {
-        navbar.classList.add('hide');
-      } else if (window.scrollY < lastScrollY) {
-        navbar.classList.remove('hide');
-      }
-      lastScrollY = window.scrollY;
-    }
-  });
-}
-
-// Utility functions
-function closeMobileMenu() {
-  const hamburger = document.getElementById('hamburger');
-  const navLinks = document.getElementById('navLinks');
-  
-  if (hamburger && navLinks) {
-    hamburger.classList.remove('active');
-    navLinks.classList.remove('show');
-    document.body.classList.remove('mobile-menu-open');
+function navigateToPage(pageId) {
+  if (typeof window.switchPage === "function") {
+    window.switchPage(pageId);
+  } else {
+    console.error("switchPage() not found!");
   }
 }
 
-function closeAllDropdowns() {
-  document.querySelectorAll('.nav-dropdown').forEach(dropdown => {
-    dropdown.classList.remove('active');
+/* ------------------------------------------------------
+   MOBILE MENU (Hamburger)
+------------------------------------------------------ */
+function setupHamburger() {
+  const hamburger = document.getElementById("hamburger");
+  const navLinks = document.getElementById("navLinks");
+
+  if (!hamburger || !navLinks) return;
+
+  hamburger.addEventListener("click", e => {
+    e.stopPropagation();
+    hamburger.classList.toggle("active");
+    navLinks.classList.toggle("show");
+    document.body.classList.toggle("mobile-menu-open");
+  });
+
+  // Tap outside closes menu
+  document.addEventListener("click", e => {
+    if (window.innerWidth <= 992) {
+      if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
+        closeMobileMenu();
+      }
+    }
   });
 }
 
-// Make functions globally available
+function closeMobileMenu() {
+  const hamburger = document.getElementById("hamburger");
+  const navLinks = document.getElementById("navLinks");
+
+  if (hamburger) hamburger.classList.remove("active");
+  if (navLinks) navLinks.classList.remove("show");
+
+  document.body.classList.remove("mobile-menu-open");
+}
+
+/* ------------------------------------------------------
+   MOBILE DROPDOWNS (Accordion)
+------------------------------------------------------ */
+function setupDropdowns() {
+  const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
+
+  dropdownToggles.forEach(toggle => {
+    toggle.addEventListener("click", e => {
+      // Desktop: allow hover default behavior
+      if (window.innerWidth > 992) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const parent = toggle.closest(".nav-dropdown");
+
+      // Close other dropdowns
+      document.querySelectorAll(".nav-dropdown").forEach(d => {
+        if (d !== parent) d.classList.remove("active");
+      });
+
+      // Toggle current
+      parent.classList.toggle("active");
+    });
+  });
+}
+
+/* ------------------------------------------------------
+   DESKTOP: Scroll-hide Navbar
+   (Disabled on mobile)
+------------------------------------------------------ */
+function setupScrollHideDesktop() {
+  const navbar = document.getElementById("navbar");
+  if (!navbar) return;
+
+  let lastScrollY = window.scrollY;
+
+  window.addEventListener("scroll", () => {
+    if (window.innerWidth <= 992) return; // ❗ disable on mobile
+
+    const currentY = window.scrollY;
+
+    if (currentY > lastScrollY && currentY > 80) {
+      navbar.classList.add("hide");
+    } else {
+      navbar.classList.remove("hide");
+    }
+
+    lastScrollY = currentY;
+  });
+}
+
+/* ------------------------------------------------------
+   EXPORT
+------------------------------------------------------ */
+window.navigateToPage = navigateToPage;
 window.closeMobileMenu = closeMobileMenu;
-window.closeAllDropdowns = closeAllDropdowns;
+
+console.log("✅ Navbar module loaded (Fully Mobile Friendly)");
