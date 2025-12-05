@@ -12,9 +12,15 @@
   <meta property="og:image" content="assets/logo.png" />
 
   <link rel="icon" href="assets/logo.png" type="image/png" />
-  <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="css/dashboard.css" />
 
+  <!-- CSS (modular) -->
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/navbar.css" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+  <link rel="stylesheet" href="css/validator.css" />
+  <link rel="stylesheet" href="css/responsive.css" />
+
+  <!-- XRPL + Charts -->
   <script src="https://unpkg.com/xrpl@4.4.2/build/xrpl-latest-min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -27,13 +33,11 @@
 
       <!-- Logo with Slogan -->
       <div class="nav-logo" onclick="switchPage('dashboard')">
-        <div class="logo-text">
-          🌊 <strong>NaluXrp</strong>
-        </div>
+        <div class="logo-text">🌊 <strong>NaluXrp</strong></div>
         <small class="logo-slogan">Riding The Ledger Waves</small>
       </div>
 
-      <!-- Hamburger Menu -->
+      <!-- Hamburger (mobile only) -->
       <div class="hamburger" id="hamburger">
         <span></span><span></span><span></span>
       </div>
@@ -41,11 +45,15 @@
       <!-- Navigation Links -->
       <div class="nav-links" id="navLinks">
 
-        <button class="nav-btn" onclick="switchPage('dashboard')">📊 Dashboard</button>
+        <button class="nav-btn" onclick="switchPage('dashboard')">
+          <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
+        </button>
 
         <!-- Network Dropdown -->
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">🌐 Network</button>
+          <button class="nav-btn dropdown-toggle">
+            <span class="nav-icon">🌐</span><span class="nav-label">Network</span>
+          </button>
           <div class="dropdown-menu">
             <a class="dropdown-item" onclick="switchPage('validators')">🛡️ Validators</a>
             <a class="dropdown-item" onclick="switchPage('analytics')">📈 Analytics</a>
@@ -55,7 +63,9 @@
 
         <!-- DeFi Dropdown -->
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">💰 DeFi</button>
+          <button class="nav-btn dropdown-toggle">
+            <span class="nav-icon">💰</span><span class="nav-label">DeFi</span>
+          </button>
           <div class="dropdown-menu">
             <a class="dropdown-item" onclick="switchPage('tokens')">🪙 Tokens</a>
             <a class="dropdown-item" onclick="switchPage('amm')">💧 AMM Pools</a>
@@ -65,7 +75,9 @@
 
         <!-- Resources Dropdown -->
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">📚 Resources</button>
+          <button class="nav-btn dropdown-toggle">
+            <span class="nav-icon">📚</span><span class="nav-label">Resources</span>
+          </button>
           <div class="dropdown-menu">
             <a class="dropdown-item" onclick="switchPage('news')">📰 News</a>
             <a class="dropdown-item" onclick="switchPage('history')">📜 History</a>
@@ -73,10 +85,15 @@
           </div>
         </div>
 
-        <button class="nav-btn" onclick="switchPage('profile')">👤 Profile</button>
-        <button class="nav-btn" onclick="switchPage('settings')">⚙️ Settings</button>
-        <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme">🎨</button>
-
+        <button class="nav-btn" onclick="switchPage('profile')">
+          <span class="nav-icon">👤</span><span class="nav-label">Profile</span>
+        </button>
+        <button class="nav-btn" onclick="switchPage('settings')">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
+        </button>
+        <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme">
+          🎨
+        </button>
       </div>
 
       <!-- Connection Status -->
@@ -85,20 +102,22 @@
         <span id="connectionStatus">Connecting...</span>
       </div>
 
-      <!-- Navbar Toggle Button -->
+      <!-- Navbar Toggle (desktop show/hide) -->
       <button class="navbar-toggle" id="navbarToggle" title="Toggle Navbar (N)">☰</button>
 
     </div>
   </nav>
 
-  <!-- Toggle Button -->
-  <button class="navbar-toggle-btn" id="navbarToggle" title="Toggle Navbar (Press N)">
+  <!-- Secondary toggle (scroll / floating) -->
+  <button class="navbar-toggle-btn" id="navbarToggleBtn" title="Toggle Navbar (Press N)">
     <span class="toggle-icon">▲</span>
   </button>
 
   <!-- Background Effects -->
   <div class="background-effects">
-    <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
+    <div class="smoke"></div>
+    <div class="smoke"></div>
+    <div class="smoke"></div>
     <div class="galaxy"></div>
     <div class="stars-container" id="starsContainer"></div>
   </div>
@@ -108,62 +127,52 @@
 
     <section id="dashboard" class="page-section active"></section>
 
-    <section id="validators" class="page-section"></section>
-
-    <section id="tokens" class="page-section">
-
+    <!-- ========= VALIDATORS ========= -->
+    <section id="validators" class="page-section">
       <div class="chart-section">
-        <div class="chart-title">🪙 XRPL Tokens</div>
+        <div class="chart-title">🛡️ XRPL Validators</div>
 
-        <!-- Controls Section -->
-        <div class="tokens-controls">
-          <div class="input-group">
-            <input type="text" id="ledgerAccountInput" placeholder="Enter XRPL address or use connected wallet" />
-            <button id="fetchLedgerTokensBtn" class="primary-btn">Fetch Tokens</button>
+        <div class="chart-subtitle">
+          Live validator status from XRPL public APIs.<br />
+          <strong>Ripple UNL</strong> = recommended Unique Node List.
+          <strong>Community</strong> = independent validators.
+        </div>
+
+        <div class="validators-summary-grid">
+          <div class="validators-summary-card">
+            <div class="summary-title">UNL vs Community</div>
+            <div class="summary-body">
+              UNL validators participate in consensus.
+              Community nodes also validate but are not on the recommended list.
+            </div>
           </div>
 
-          <div class="search-group">
-            <input type="text" id="tokenSearch" placeholder="Search tokens by name or issuer..." />
+          <div class="validators-summary-card">
+            <div class="summary-title">Uptime & Agreement</div>
+            <div class="summary-body">
+              Measures how consistently validators validate and how often they match the network majority.
+            </div>
           </div>
 
-          <div class="mode-toggle">
-            <button id="ledgerMode" class="mode-btn active">Ledger Mode</button>
-            <button id="globalMode" class="mode-btn">Global Mode</button>
+          <div class="validators-summary-card">
+            <div class="summary-title">Deep Dive</div>
+            <div class="summary-body">
+              Click any validator to see reliability, UNL status, amendment votes, and more.
+            </div>
           </div>
         </div>
 
-        <!-- Stats Overview -->
-        <div class="tokens-stats" id="tokensStats">
-          <div class="stat-card">
-            <div class="stat-value" id="totalTokens">0</div>
-            <div class="stat-label">Total Tokens</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value" id="totalBalance">0</div>
-            <div class="stat-label">Total Balance</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value" id="uniqueIssuers">0</div>
-            <div class="stat-label">Unique Issuers</div>
-          </div>
+        <div class="input-group">
+          <input id="validatorSearch" type="text" placeholder="Search validators…" />
         </div>
 
-        <!-- Chart -->
-        <div class="chart-container">
-          <canvas id="tokenDistributionChart"></canvas>
-        </div>
-
-        <!-- Tokens List -->
-        <div class="tokens-header">
-          <h3>Token Trustlines</h3>
-          <div class="pagination-info" id="paginationInfo">Showing 0 of 0</div>
-        </div>
-
-        <div id="tokensList" class="tokens-grid"></div>
-
-        <div id="tokensPagination" class="pagination-container"></div>
-
+        <div id="validatorsList" class="validators-grid"></div>
       </div>
+    </section>
+
+    <!-- ========= TOKENS ========= -->
+    <section id="tokens" class="page-section">
+      <!-- your existing Tokens markup here -->
     </section>
 
     <section id="amm" class="page-section"></section>
@@ -178,17 +187,14 @@
 
   </div>
 
-  <!-- ========== JS MODULES (CORRECT LOAD ORDER) ========== -->
+  <!-- JS MODULES -->
   <script src="js/utils.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/xrpl-connection.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/validators.js"></script>
-
-  <!-- TOKENS MODULE WITH DISTRIBUTION MAP -->
   <script src="js/tokens.js"></script>
   <script src="js/token-distribution.js"></script>
-
   <script src="js/amm.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/explorer.js"></script>

@@ -1,0 +1,284 @@
+🌊 NaluXrp — Riding The Ledger Waves
+Real-Time XRPL Analytics • Validators • Tokens • AMMs • NFTs • Explorer • Dashboard
+
+A modern single-page application (SPA) providing live analytics and monitoring for the XRP Ledger, built with a modular frontend architecture and real-time WebSocket streams.
+
+📌 Table of Contents
+
+About the Project
+
+Features
+
+Live Architecture Overview
+
+Tech Stack
+
+Screenshots
+
+Installation
+
+Project Structure
+
+XRPL Data Sources
+
+Security
+
+Contributing
+
+License
+
+🌟 About the Project
+
+NaluXrp is a high-performance, real-time analytics platform built as an SPA that runs entirely client-side.
+It connects live to XRPL nodes via WebSocket, aggregates ledger events, visualizes validator performance, and provides modules for:
+
+Ledger and transaction monitoring
+
+XRPL validators & UNL deep-dive
+
+Token exploration and metadata
+
+AMM pool analytics
+
+NFT scanning
+
+Whale activity
+
+System health metrics
+
+Network visualization
+
+Customizable themes
+
+Full mobile-responsive UI
+
+The app is designed to feel like a professional trading terminal meets blockchain explorer, but smoother, lighter, and fully front-end based.
+
+🚀 Features
+📊 Real-Time Dashboard
+
+Live ledger feed (animated conveyor view)
+
+TPS gauge with intensity classification
+
+Latency and network health indicators
+
+Ledger rhythm orb visualizer
+
+Transaction heatmaps (Payments, Offers, NFTs, Trustlines, Other)
+
+🛡 Validators Engine (Deep-Dive)
+
+Live fetch from Ripple public validator API
+
+Reliability scoring (1h/24h uptime + agreement)
+
+UNL detection
+
+Warning indicators & anomaly detection
+
+Full modal with identity, voting, performance metrics
+
+🪙 Token Explorer
+
+Metadata fetch
+
+Trustlines & distribution analytics
+
+Holder concentration
+
+Token verification & warnings
+
+Search + pagination
+
+💧 AMM Pools
+
+Constant product analytics
+
+Live liquidity, volume, pool depth
+
+Price & ratio calculations
+
+LP share estimation
+
+🎨 Themable Interface
+
+Gold
+
+Cosmic
+
+Starry
+
+Hawaiian
+
+(Extensible)
+
+📱 Fully Mobile Responsive
+
+Adaptive navbar
+
+Icon-only compact mode
+
+Slide-in menu
+
+Tap-friendly dropdowns
+
+🏗 Live Architecture Overview
+                    ┌────────────────────────────────────┐
+                    │            NaluXrp SPA              │
+                    │      (HTML / CSS / JavaScript)      │
+                    └────────────────────────────────────┘
+                                  ▲
+                                  │ WebSocket (live)
+                                  │ REST API (analytics)
+                                  │
+        ┌─────────────────────────────────────────────────────────┐
+        │                     XRPL Data Sources                    │
+        │  • wss://s1.ripple.com                                 │
+        │  • data.ripple.com (validators, metrics)               │
+        │  • XRPL Testnet & Devnet                               │
+        └─────────────────────────────────────────────────────────┘
+
+Submodules:
+  • dashboard.js — real-time ledger engine
+  • validators.js — UNL/scoring system
+  • tokens.js — token metadata + trustlines
+  • amm.js — AMM math engine
+  • analytics.js — higher-level behavioral modeling
+  • explorer.js — account + tx viewer
+
+💻 Tech Stack
+Layer	Technology
+SPA Framework	Vanilla JavaScript (modular architecture)
+Network	XRPL WebSocket + REST APIs
+Data Viz	Chart.js
+Styling	Modular CSS (navbar.css, dashboard.css, validator.css, responsive.css)
+Rendering	HTML5 components + dynamic DOM templates
+🖼 Screenshots
+
+(placeholder images — replace with real screenshots when ready)
+
+Dashboard
+
+Validators Explorer
+
+Token Explorer
+
+AMM Pools
+
+Mobile Navigation
+
+📥 Installation
+1. Clone repository
+git clone https://github.com/YourRepo/NaluXrp.git
+cd NaluXrp
+
+2. Open locally
+
+No backend required.
+
+Just open index.html in a browser, or run a lightweight server:
+
+npx serve
+
+
+or:
+
+python3 -m http.server 5500
+
+3. Configure API Notes
+
+If using localhost, some Ripple endpoints require a CORS proxy.
+The app is structured to support:
+
+thingproxy.freeboard.io
+
+allorigins.win
+
+Custom proxies
+
+You can configure them in:
+
+js/validators.js
+js/explorer.js
+js/analytics.js
+
+📁 Project Structure
+/assets
+   /icons
+   /screenshots
+/css
+   style.css
+   navbar.css
+   dashboard.css
+   validator.css
+   responsive.css
+/js
+   navbar.js
+   ui.js
+   utils.js
+   dashboard.js
+   validators.js
+   tokens.js
+   amm.js
+   analytics.js
+   explorer.js
+   news.js
+   about.js
+index.html
+README.md
+
+🔗 XRPL Data Sources
+WebSocket
+
+wss://s1.ripple.com
+
+wss://s.altnet.rippletest.net:51233 (Testnet)
+
+REST
+
+https://data.ripple.com/v2/network/validators
+
+https://api.xrpldata.com/ (optional)
+
+https://livenet.xrpl.org (explorer queries)
+
+🔒 Security
+
+This is a frontend-only analytics tool:
+
+No seeds, keys, or signing operations occur in the browser.
+
+No user wallet data is stored or transmitted.
+
+Always warn users never to paste private keys into any unverified interface.
+
+🤝 Contributing
+
+We welcome contributions!
+
+Developer Guidelines
+
+Follow the modular JS structure.
+
+Maintain navbar.js → mobile-first behavior.
+
+Keep CSS scoped to module files.
+
+Use descriptive commits:
+
+feat(validators): add agreement anomaly detection
+fix(navbar): resolve iOS scroll-lock bug
+
+Pull Request Rules
+
+Format with Prettier or standard JS style
+
+No console spam
+
+Include screenshots for UI changes
+
+📄 License
+
+MIT License © 2025
+You may use, modify, and distribute freely with attribution.
