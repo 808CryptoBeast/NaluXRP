@@ -1,0 +1,365 @@
+/* =========================================
+   NaluXrp 🌊 — Validators (validator.css)
+   ========================================= */
+
+/* Summary cards */
+.validators-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.validators-summary-card {
+  background: var(--card-bg, rgba(0, 0, 0, 0.36));
+  border-radius: 14px;
+  border: 1px solid var(--accent-tertiary, rgba(255, 255, 255, 0.12));
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.validators-summary-card .summary-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--accent-secondary, #ffd866);
+}
+
+/* Search */
+#validatorSearch {
+  width: 100%;
+  max-width: 420px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.4);
+  color: var(--text-primary, #f8f8f2);
+  outline: none;
+  font-size: 0.92rem;
+  margin: 10px 0 16px;
+}
+
+#validatorSearch::placeholder {
+  color: rgba(255,255,255,0.45);
+}
+
+/* Grid + cards */
+.validators-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.validator-card {
+  position: relative;
+  background: radial-gradient(circle at top left, rgba(255,215,128,0.12), transparent),
+              var(--card-bg, rgba(0,0,0,0.55));
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 12px 25px rgba(0,0,0,0.35);
+  backdrop-filter: blur(12px);
+}
+
+.validator-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 32px rgba(0,0,0,0.45);
+  border-color: var(--accent-primary, #ffcc66);
+  transition: all 0.2s ease-out;
+}
+
+/* Header */
+.validator-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.validator-key {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--text-primary, #f8f8f2);
+  overflow-wrap: anywhere;
+}
+
+.validator-domain {
+  font-size: 0.86rem;
+  color: var(--text-secondary, #a2a2b3);
+}
+
+/* UNL badge */
+.unl-badge {
+  font-size: 0.72rem;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.unl-full {
+  background: linear-gradient(135deg, #ffe066, #ffb347);
+  color: #201600;
+  box-shadow: 0 0 12px rgba(255,225,120,0.6);
+}
+
+.unl-partial {
+  background: rgba(0,0,0,0.45);
+  color: var(--text-secondary, #bbbbd7);
+}
+
+/* Stats row */
+.validator-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.validator-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+}
+
+.validator-stat span {
+  color: var(--text-secondary, #a2a2b3);
+}
+
+.validator-stat strong {
+  color: var(--text-primary, #f8f8f2);
+  font-size: 0.86rem;
+}
+
+/* Pills */
+.validator-pill {
+  font-size: 0.78rem;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill-score {
+  background: rgba(0,0,0,0.55);
+  color: var(--accent-primary, #ffd866);
+}
+
+.pill-label {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-primary, #f8f8f2);
+}
+
+/* Details button */
+.validator-details-btn {
+  margin-top: 6px;
+  align-self: flex-end;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--accent-primary, #ffd866);
+  background: transparent;
+  color: var(--accent-primary, #ffd866);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+}
+
+.validator-details-btn:hover {
+  background: var(--accent-primary, #ffd866);
+  color: #201600;
+}
+
+/* Loading / error states */
+.validators-loading,
+.validators-error,
+.validators-warning,
+.validators-empty {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.validators-loading,
+.validators-empty {
+  background: rgba(0,0,0,0.4);
+  color: var(--text-secondary, #a2a2b3);
+}
+
+.validators-error {
+  background: rgba(200,60,60,0.2);
+  border: 1px solid rgba(255,120,120,0.6);
+  color: #ffd7d7;
+}
+
+.validators-warning {
+  background: rgba(200,160,60,0.2);
+  border: 1px solid rgba(255,220,120,0.6);
+  color: #ffeeb3;
+}
+
+/* Modal */
+.validator-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at top, rgba(0,0,0,0.65), rgba(0,0,0,0.95));
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.validator-modal {
+  width: min(640px, 96vw);
+  max-height: 90vh;
+  background: radial-gradient(circle at top left, rgba(255,214,96,0.16), transparent),
+              rgba(10,10,20,0.96);
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 24px 48px rgba(0,0,0,0.65);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.validator-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+
+.validator-modal-header h2 {
+  font-size: 1.1rem;
+  margin: 0;
+  color: var(--accent-secondary, #ffd866);
+}
+
+.validator-modal-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #a2a2b3);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.validator-modal-close:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.validator-modal-body {
+  padding: 12px 16px 14px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+}
+
+/* Modal sections */
+.validator-modal-section {
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: rgba(0,0,0,0.36);
+}
+
+.validator-modal-section h3 {
+  margin: 0 0 6px;
+  font-size: 0.98rem;
+  color: var(--accent-secondary, #ffd866);
+}
+
+.validator-modal-section p {
+  margin: 3px 0;
+}
+
+.validator-modal-section code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+/* Score row */
+.validator-score-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.validator-score-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.16);
+}
+
+.score-number {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent-primary, #ffd866);
+}
+
+.score-label {
+  font-size: 0.9rem;
+  color: var(--text-primary, #f8f8f2);
+}
+
+.validator-score-sub {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 4px 10px;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #a2a2b3);
+}
+
+.validator-help {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #a2a2b3);
+  margin-top: 4px;
+}
+
+.validator-modal-section ul {
+  margin: 4px 0 0 1.1em;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .validators-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .validator-card {
+    padding: 10px;
+  }
+
+  .validator-modal {
+    width: 94vw;
+  }
+
+  .validator-score-main {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

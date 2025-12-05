@@ -1,204 +1,307 @@
 /* =========================================
-   NAVBAR DROPDOWN FIXES
-   Making dropdown text always readable
+   NaluXrp 🌊 – Navbar (navbar.css)
    ========================================= */
 
-/* Dropdown Menu Styles - Always Readable */
-.dropdown-menu {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--card-bg);
-  border: 2px solid var(--accent-tertiary);
-  border-radius: 12px;
-  min-width: 200px;
-  padding: 10px 0;
-  opacity: 0;
-  visibility: hidden;
-  transition: all 0.3s ease;
+.navbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
+  border-bottom: 2px solid var(--accent-primary);
+  box-shadow: 0 5px 30px var(--glow-color);
   z-index: 1000;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(10px);
+  transform: translateY(0);
+  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
 }
 
-/* Show dropdown on hover */
-.nav-dropdown:hover .dropdown-menu {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
+.navbar.hide {
+  transform: translateY(-100%);
 }
 
-/* Dropdown Items - Always Readable */
-.dropdown-item {
-  display: block;
-  padding: 12px 20px;
-  color: var(--text-primary); /* Always use primary text color */
-  text-decoration: none;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-/* Dropdown Item Hover State */
-.dropdown-item:hover {
-  background: var(--accent-primary);
-  color: #000; /* Dark text on bright background */
-  padding-left: 25px;
-  font-weight: 600;
-}
-
-/* Dropdown Toggle Button - Always Readable */
-.dropdown-toggle {
+.nav-content {
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: 0 20px;
+  min-height: 75px;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 12px 20px;
-  background: transparent;
-  border: 2px solid var(--accent-tertiary);
-  color: var(--text-primary); /* Always use primary text color */
-  border-radius: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  text-decoration: none;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-/* Dropdown Toggle Hover */
-.dropdown-toggle:hover {
-  background: var(--accent-primary);
-  color: #000;
-  border-color: var(--accent-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px var(--glow-color);
-}
-
-/* Dropdown Arrow */
-.dropdown-toggle::after {
-  content: '▼';
-  font-size: 0.7em;
-  margin-left: 5px;
-  transition: transform 0.3s ease;
-}
-
-.nav-dropdown:hover .dropdown-toggle::after,
-.nav-dropdown.active .dropdown-toggle::after {
-  transform: rotate(180deg);
-}
-
-/* Logo Section - Add Slogan */
+/* Logo */
 .nav-logo {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: 2px;
+  cursor: pointer;
 }
 
-.logo-title {
-  font-size: 1.8em;
-  font-weight: bold;
+.logo-text {
+  font-size: 1.5em;
+  font-weight: 700;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  background-clip: text;
+  letter-spacing: 2px;
 }
 
 .logo-slogan {
   font-size: 0.7em;
   color: var(--text-secondary);
-  font-weight: 500;
-  font-style: italic;
-  letter-spacing: 0.5px;
 }
 
-/* Mobile Dropdown Styles */
-@media (max-width: 992px) {
-  .dropdown-menu {
-    position: static;
-    transform: none;
-    opacity: 1;
-    visibility: visible;
-    background: var(--bg-secondary);
-    border: none;
-    border-left: 3px solid var(--accent-primary);
-    margin-top: 10px;
-    margin-left: 20px;
-    box-shadow: none;
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease;
-    padding: 0;
-  }
-
-  .nav-dropdown.active .dropdown-menu {
-    max-height: 500px;
-    padding: 10px 0;
-  }
-
-  .dropdown-item {
-    color: var(--text-primary);
-    padding: 10px 15px;
-  }
-
-  .dropdown-item:hover {
-    background: var(--accent-tertiary);
-    color: var(--text-primary);
-    padding-left: 20px;
-  }
-
-  .dropdown-toggle {
-    width: 100%;
-    justify-content: space-between;
-    border: none;
-    border-bottom: 1px solid var(--accent-tertiary);
-    border-radius: 0;
-    color: var(--text-primary);
-  }
-
-  .dropdown-toggle:hover {
-    background: var(--accent-tertiary);
-    color: var(--text-primary);
-    transform: none;
-    box-shadow: none;
-  }
-
-  .logo-slogan {
-    font-size: 0.6em;
-  }
+/* Links row */
+.nav-links {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1;
 }
 
-/* Ensure text is always visible in all themes */
-.theme-gold .dropdown-item,
-.theme-cosmic .dropdown-item,
-.theme-starry .dropdown-item,
-.theme-hawaiian .dropdown-item {
-  color: var(--text-primary);
+/* Buttons */
+.nav-btn,
+.dropdown-toggle {
+  padding: 9px 14px;
+  background: linear-gradient(135deg, rgba(0,0,0,0.4), rgba(0,0,0,0.6));
+  border-radius: 10px;
+  border: 2px solid var(--accent-tertiary);
+  color: var(--accent-tertiary);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.25s ease;
 }
 
-.theme-gold .dropdown-toggle,
-.theme-cosmic .dropdown-toggle,
-.theme-starry .dropdown-toggle,
-.theme-hawaiian .dropdown-toggle {
-  color: var(--text-primary);
+.nav-btn:hover,
+.dropdown-toggle:hover {
+  border-color: var(--accent-primary);
+  background: linear-gradient(135deg, var(--glow-color), var(--glow-color-light));
+  color: var(--accent-secondary);
+  box-shadow: 0 5px 15px var(--glow-color);
+  transform: translateY(-2px);
 }
 
-/* Active dropdown state */
-.nav-dropdown.active .dropdown-toggle {
-  background: var(--accent-tertiary);
-  color: var(--text-primary);
+.nav-icon {
+  font-size: 1.1rem;
 }
 
-/* Fix for dropdown menu positioning */
+.nav-label {
+  display: inline-block;
+}
+
+/* Dropdowns */
 .nav-dropdown {
   position: relative;
+  display: inline-block;
 }
 
-/* Ensure dropdowns appear above other content */
-.nav-links {
-  z-index: 100;
+.nav-dropdown::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 18px;
+  background: transparent;
 }
 
 .dropdown-menu {
-  z-index: 101;
+  position: absolute;
+  top: calc(100% + 18px);
+  right: 0;
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  border: 2px solid var(--accent-primary);
+  min-width: 200px;
+  padding: 8px;
+  display: none;
+  flex-direction: column;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+  animation: slideDown 0.2s ease;
+  z-index: 1002;
+}
+
+.nav-dropdown:hover .dropdown-menu {
+  display: flex;
+}
+
+.dropdown-item {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: 0.2s ease;
+  text-align: left;
+  font-weight: 600;
+}
+
+.dropdown-item:hover {
+  background: var(--glow-color);
+  transform: translateX(4px);
+}
+
+/* Connection status */
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(0,0,0,0.4);
+  border-radius: 999px;
+  border: 1px solid var(--accent-tertiary);
+  font-size: 0.8rem;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffb86c;
+  box-shadow: 0 0 8px #ffb86c;
+}
+
+.status-dot.active {
+  background: #50fa7b;
+  box-shadow: 0 0 10px #50fa7b;
+}
+
+/* Desktop navbar toggle */
+.navbar-toggle {
+  margin-left: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.4);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Floating toggle button */
+.navbar-toggle-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  border-radius: 999px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-secondary);
+  background: rgba(0,0,0,0.6);
+  color: var(--accent-secondary);
+  cursor: pointer;
+  z-index: 999;
+}
+
+.toggle-icon {
+  display: inline-block;
+}
+
+/* Hamburger (hidden on desktop) */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.hamburger span {
+  width: 24px;
+  height: 3px;
+  background: var(--accent-secondary);
+  border-radius: 2px;
+  transition: all 0.25s ease;
+}
+
+.hamburger.active span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+
+.hamburger.active span:nth-child(2) {
+  opacity: 0;
+}
+
+.hamburger.active span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* =========================================
+   Mobile / small screens
+   ========================================= */
+
+@media (max-width: 992px) {
+  .nav-content {
+    padding: 0 12px;
+  }
+
+  .nav-logo .logo-slogan {
+    display: none;
+  }
+
+  .navbar-toggle {
+    display: none;
+  }
+
+  .hamburger {
+    display: flex;
+  }
+
+  .nav-links {
+    position: fixed;
+    top: 75px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-secondary);
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+    gap: 10px;
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+    overflow-y: auto;
+    z-index: 999;
+  }
+
+  .nav-links.show {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .nav-btn,
+  .dropdown-toggle {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+
+  /* dropdowns become accordion style */
+  .nav-dropdown:hover .dropdown-menu {
+    display: none;
+  }
+
+  .nav-dropdown .dropdown-menu {
+    position: static;
+    margin-top: 5px;
+    border-width: 1px;
+  }
+
+  .nav-dropdown.active .dropdown-menu {
+    display: flex;
+  }
+}
+
+/* Very small screens – show icons, optionally hide labels if needed */
+@media (max-width: 480px) {
+  .nav-label {
+    font-size: 0.85rem;
+  }
 }

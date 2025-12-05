@@ -1,0 +1,51 @@
+/* =========================================
+   NaluXrp 🌊 – Responsive Tweaks
+   (responsive.css)
+   ========================================= */
+
+/* Container padding on mid screens */
+@media (max-width: 992px) {
+  .container {
+    padding: 20px;
+  }
+}
+
+/* Phone-ish widths */
+@media (max-width: 768px) {
+  body {
+    padding-top: 70px;
+  }
+
+  .container {
+    padding: 15px;
+  }
+
+  .chart-section {
+    padding: 20px;
+  }
+
+  .chart-title {
+    font-size: 1.5em;
+  }
+
+  .tokens-controls {
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .tokens-stats {
+    flex-wrap: wrap;
+  }
+}
+
+/* Extra tiny screens */
+@media (max-width: 500px) {
+  .status-badge {
+    display: none;
+  }
+
+  .navbar-toggle-btn {
+    right: 8px;
+    bottom: 8px;
+  }
+}
