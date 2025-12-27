@@ -1,0 +1,31 @@
+/* Shared status badge & dot styles (css/components/status.css) */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.35);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffb86c;
+  box-shadow: 0 0 8px #ffb86c;
+  transition: 0.25s;
+}
+
+.status-dot.active {
+  background: #50fa7b;
+  box-shadow: 0 0 10px #50fa7b;
+}
+
+/* Utility color variants */
+.status-dot.warn { background: #ff6e6e; box-shadow: 0 0 8px #ff6e6e; }
+.status-dot.good { background: #00e676; box-shadow: 0 0 8px #00e676; }

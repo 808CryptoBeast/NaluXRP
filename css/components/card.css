@@ -1,0 +1,82 @@
+/* Consolidated card component and utilities (css/components/card.css) */
+
+/* Component tokens */
+:root {
+  --card-radius: 14px;
+  --card-padding: 16px;
+  --card-border-width: 2px;
+  --card-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+
+/* Generic card base used by widgets, metrics, validators, ledgers
+   Note: we include the legacy class names so this is non-destructive.
+   Existing HTML using .widget-card / .metric-card / .validator-card / .ledger-card
+   will continue to receive these base styles. */
+.card,
+.widget-card,
+.metric-card,
+.validator-card,
+.ledger-card {
+  background: var(--card-bg, rgba(10,10,20,0.9));
+  border-radius: var(--card-radius);
+  padding: var(--card-padding);
+  border: var(--card-border-width) solid var(--accent-tertiary);
+  box-shadow: var(--card-shadow);
+  box-sizing: border-box;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+  overflow: hidden;
+}
+
+/* Hover lift shared by most cards */
+.card:hover,
+.widget-card:hover,
+.metric-card:hover,
+.validator-card:hover,
+.ledger-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.9);
+}
+
+/* Role-specific modifiers (use alongside base classes when needed) */
+.card--ledger {
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top left, rgba(255,255,255,0.04), transparent 55%),
+    var(--bg-secondary);
+  border-radius: calc(var(--card-radius) + 4px);
+}
+
+.card--widget {
+  padding: 18px 20px;
+}
+
+.card--metric {
+  text-align: center;
+}
+
+.card--compact {
+  padding: 10px;
+}
+
+/* Card header helper */
+.card__header,
+.widget-header,
+.validator-header,
+.ledger-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* Shared title style */
+.card__title,
+.widget-title,
+.metric-label {
+  font-weight: 700;
+  color: var(--accent-secondary);
+}
+
+/* Small helpers */
+.card--no-shadow { box-shadow: none; border-color: transparent; }
