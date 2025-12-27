@@ -592,6 +592,33 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
       return;
     }
 
+    // Verify server returned the ledger we requested. Some servers may respond with a nearby ledger.
+    const fetchedIndex = Number(ledgerData.ledger_index || ledgerIndex);
+    if (fetchedIndex !== ledgerIndex) {
+      console.warn(`⚠️ Fetched ledger index mismatch: requested=${ledgerIndex}, fetched=${fetchedIndex}`);
+
+      // If server returned a future ledger, enqueue it so it will be processed in order later
+      if (fetchedIndex > window.XRPL.lastLedgerIndex) {
+        enqueueLedger(fetchedIndex, serverInfoHint);
+      }
+
+      // Re-queue the originally requested ledger for retry and stop processing this response
+      if (ledgerIndex > window.XRPL.lastLedgerIndex) {
+        if (window.XRPL.ledgerQueue.indexOf(ledgerIndex) === -1) {
+          window.XRPL.ledgerQueue.push(ledgerIndex);
+          window.XRPL.ledgerQueue.sort((a, b) => a - b);
+        }
+      }
+
+      // Surface metrics and stop processing this mismatched response
+      if (window.XRPL.queueMetrics) {
+        window.XRPL.queueMetrics.lastError = `mismatch requested=${ledgerIndex} fetched=${fetchedIndex}`;
+      }
+
+      // Throw so the caller (processLedgerQueue) can handle requeue / backoff
+      throw new Error(`Fetched unexpected ledger index (${fetchedIndex})`);
+    }
+
     console.log("📊 Ledger data structure:", {
       ledger_index: ledgerData.ledger_index,
       has_transactions: !!ledgerData.transactions,
