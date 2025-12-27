@@ -13,11 +13,17 @@
 
   <link rel="icon" href="assets/logo.png" type="image/png" />
 
+  <!-- COMPONENTS -->
+  <link rel="stylesheet" href="css/components/animations.css" />
+  <link rel="stylesheet" href="css/components/card.css" />
+  <link rel="stylesheet" href="css/components/status.css" />
+
   <!-- CSS (modular) -->
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/navbar.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
   <link rel="stylesheet" href="css/validator.css" />
+  <link rel="stylesheet" href="css/landing.css" />
   <link rel="stylesheet" href="css/responsive.css" />
 
   <!-- XRPL + Charts -->
@@ -31,13 +37,13 @@
   <nav class="navbar" id="navbar">
     <div class="nav-content">
 
-      <!-- Logo with Slogan -->
+      <!-- Logo -->
       <div class="nav-logo" onclick="switchPage('dashboard')">
         <div class="logo-text">🌊 <strong>NaluXrp</strong></div>
         <small class="logo-slogan">Riding The Ledger Waves</small>
       </div>
 
-      <!-- Hamburger (mobile only) -->
+      <!-- Hamburger (mobile) -->
       <div class="hamburger" id="hamburger">
         <span></span><span></span><span></span>
       </div>
@@ -49,7 +55,6 @@
           <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
         </button>
 
-        <!-- Network Dropdown -->
         <div class="nav-dropdown">
           <button class="nav-btn dropdown-toggle">
             <span class="nav-icon">🌐</span><span class="nav-label">Network</span>
@@ -61,7 +66,6 @@
           </div>
         </div>
 
-        <!-- DeFi Dropdown -->
         <div class="nav-dropdown">
           <button class="nav-btn dropdown-toggle">
             <span class="nav-icon">💰</span><span class="nav-label">DeFi</span>
@@ -73,7 +77,6 @@
           </div>
         </div>
 
-        <!-- Resources Dropdown -->
         <div class="nav-dropdown">
           <button class="nav-btn dropdown-toggle">
             <span class="nav-icon">📚</span><span class="nav-label">Resources</span>
@@ -88,9 +91,11 @@
         <button class="nav-btn" onclick="switchPage('profile')">
           <span class="nav-icon">👤</span><span class="nav-label">Profile</span>
         </button>
+
         <button class="nav-btn" onclick="switchPage('settings')">
           <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
         </button>
+
         <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme">
           🎨
         </button>
@@ -102,80 +107,31 @@
         <span id="connectionStatus">Connecting...</span>
       </div>
 
-      <!-- Navbar Toggle (desktop show/hide) -->
+      <!-- Navbar Toggle (desktop) -->
       <button class="navbar-toggle" id="navbarToggle" title="Toggle Navbar (N)">☰</button>
-
     </div>
   </nav>
 
-  <!-- Secondary toggle (scroll / floating) -->
+  <!-- Secondary floating toggle -->
   <button class="navbar-toggle-btn" id="navbarToggleBtn" title="Toggle Navbar (Press N)">
     <span class="toggle-icon">▲</span>
   </button>
 
-  <!-- Background Effects -->
   <div class="background-effects">
-    <div class="smoke"></div>
-    <div class="smoke"></div>
-    <div class="smoke"></div>
+    <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
     <div class="galaxy"></div>
     <div class="stars-container" id="starsContainer"></div>
   </div>
 
   <!-- =================== PAGE SECTIONS =================== -->
   <div class="container">
-
     <section id="dashboard" class="page-section active"></section>
+    <section id="validators" class="page-section"></section>
+    <section id="tokens" class="page-section"></section>
 
-    <!-- ========= VALIDATORS ========= -->
-    <section id="validators" class="page-section">
-      <div class="chart-section">
-        <div class="chart-title">🛡️ XRPL Validators</div>
-
-        <div class="chart-subtitle">
-          Live validator status from XRPL public APIs.<br />
-          <strong>Ripple UNL</strong> = recommended Unique Node List.
-          <strong>Community</strong> = independent validators.
-        </div>
-
-        <div class="validators-summary-grid">
-          <div class="validators-summary-card">
-            <div class="summary-title">UNL vs Community</div>
-            <div class="summary-body">
-              UNL validators participate in consensus.
-              Community nodes also validate but are not on the recommended list.
-            </div>
-          </div>
-
-          <div class="validators-summary-card">
-            <div class="summary-title">Uptime & Agreement</div>
-            <div class="summary-body">
-              Measures how consistently validators validate and how often they match the network majority.
-            </div>
-          </div>
-
-          <div class="validators-summary-card">
-            <div class="summary-title">Deep Dive</div>
-            <div class="summary-body">
-              Click any validator to see reliability, UNL status, amendment votes, and more.
-            </div>
-          </div>
-        </div>
-
-        <div class="input-group">
-          <input id="validatorSearch" type="text" placeholder="Search validators…" />
-        </div>
-
-        <div id="validatorsList" class="validators-grid"></div>
-      </div>
-    </section>
-
-    <!-- ========= TOKENS ========= -->
-    <section id="tokens" class="page-section">
-      <!-- your existing Tokens markup here -->
-    </section>
-
+    <!-- ✅ Make sure the AMM section exists -->
     <section id="amm" class="page-section"></section>
+
     <section id="analytics" class="page-section"></section>
     <section id="explorer" class="page-section"></section>
     <section id="nfts" class="page-section"></section>
@@ -184,18 +140,27 @@
     <section id="history" class="page-section"></section>
     <section id="settings" class="page-section"></section>
     <section id="about" class="page-section"></section>
-
   </div>
 
-  <!-- JS MODULES -->
+  <!-- JS (order matters) -->
   <script src="js/utils.js"></script>
+
+  <!-- UI (defines switchPage + landing) -->
   <script src="js/ui.js"></script>
+
+  <!-- XRPL connection (should emit events / set window.XRPL) -->
   <script src="js/xrpl-connection.js"></script>
-  <script src="js/dashboard.js"></script>
+
+  <!-- Dashboard (module) -->
+  <script type="module" src="js/dashboard.js"></script>
+
+  <!-- ✅ Modular AMM -->
+  <script type="module" src="js/amm/index.js"></script>
+
+  <!-- Other modules (keep if they exist in your project) -->
   <script src="js/validators.js"></script>
   <script src="js/tokens.js"></script>
   <script src="js/token-distribution.js"></script>
-  <script src="js/amm.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/explorer.js"></script>
   <script src="js/nfts.js"></script>
