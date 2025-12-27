@@ -1,19 +1,70 @@
 /* =========================================
-   NaluXrp 🌊 – Dashboard V2 - FIXED VERSION
+   NaluXrp 🌊 – Dashboard V2 (FORENSICS EXPANDED)
    REAL DATA ONLY - No Mock Data
+
+   ✅ Kept EXACT: Ledger Overview (metrics) + Ledger Stream cards (design/markup)
+   ✅ Kept: Network selector + connection box + patterns/dominance panel
+   ❌ Removed: old right-side widgets + all their logic (validators/amm/etc)
+   ➕ Added (real-data):
+      - Wallet Flow Breadcrumbs (repeated sender/receiver sets across ledgers)
+      - Drain-pattern detection heuristics (fan-out / routing / ping-pong)
+      - Confidence scoring (breadcrumb stability)
+      - Cluster inference (graph-based grouping, no identity)
+      - Cluster persistence scoring (how persistent a cluster is across ledgers)
+      - Flow-window sensitivity (5 / 20 / 50 ledgers)
+      - Alert thresholds (e.g., fingerprint ≥ 3)
+      - Visual trace drill-down (click breadcrumb → highlight ledgers)
+      - Ledger-to-Ledger Delta Narratives (“Payments collapsed, Offers surged”)
+      - Replay Timeline Slider (rewind within captured history)
+      - Exportable Forensic Report (JSON / CSV snapshot)
+
+   ✅ FIXES ADDED:
+      - Ledger stream ordering is canonical by ledgerIndex (dedupe + sort)
+      - Late ledgers insert correctly (no arrival-order glitches)
+      - Ledger stream DISPLAY is ASCENDING (counts up visually)
+      - Removed timestamps from ledger stream cards
+      - Smooth continuous right→left scroll via RAF (no animation reset)
+      - Continuity checks (gap detection)
+      - Notifications do NOT block navbar/dropdowns (pointer-events fix)
    ========================================= */
 
 (function () {
-  const MAX_STREAM_LEDGERS = 10;
+  const MAX_STREAM_LEDGERS = 10;          // display
+  const MAX_REPLAY_LEDGERS = 250;         // retained history for replay/forensics
+  const DEFAULT_FLOW_WINDOW = 20;         // 5 / 20 / 50
+  const DEFAULT_ALERT_FINGERPRINT_MIN = 3;
+
+  // Stream motion tuning (px/sec). “a little faster” than slow, but stable.
+  const STREAM_SCROLL_PX_PER_SEC = 52;
 
   const Dashboard = {
     charts: {},
     initialized: false,
+
+    // Display stream (kept)
     ledgerStream: [],
-    orbCanvas: null,
-    orbCtx: null,
-    txHeatmapEl: null,
-    closeTimesData: [],
+
+    // Extended history for replay/forensics (canonical store)
+    replayHistory: [], // newest-first by ledgerIndex, deduped
+
+    // Raw recent tx window (from XRPL module, if provided)
+    recentTransactions: [],
+
+    // Forensics settings
+    flowWindowSize: DEFAULT_FLOW_WINDOW,
+    alertFingerprintMin: DEFAULT_ALERT_FINGERPRINT_MIN,
+    replayIndex: null, // ledgerIndex selected for replay (null = live)
+
+    // Derived / UI state
+    lastAlerts: new Set(),
+    selectedTraceLedgers: new Set(),
+
+    // Stream animation state (RAF-based to prevent jumps)
+    _streamRAF: null,
+    _streamLastTS: 0,
+    _streamOffsetX: 0,
+    _streamLoopWidth: 0,
+    _streamNeedsMeasure: true,
 
     render() {
       const container = document.getElementById("dashboard");
@@ -37,6 +88,7 @@
                 <img src="assets/icons/xahau.png" class="net-icon" alt="Xahau" onerror="this.style.display='none'"> Xahau
               </button>
             </div>
+
             <div class="connection-box">
               <span id="connDot" class="conn-dot"></span>
               <span id="connText">Connecting to XRPL…</span>
@@ -45,34 +97,42 @@
 
           <div class="dashboard-columns">
             <div class="dashboard-col-main">
+
+              <!-- METRICS (KEPT EXACT) -->
               <section class="dashboard-metrics">
                 <div class="dashboard-metrics-title">🌊 Ledger Overview</div>
+
                 <div class="dashboard-metric-grid">
                   <article class="metric-card">
                     <div class="metric-label">Ledger Index</div>
                     <div class="metric-value" id="d2-ledger-index">—</div>
                     <div class="metric-sub" id="d2-ledger-age">Waiting…</div>
                   </article>
+
                   <article class="metric-card">
                     <div class="metric-label">TX / Second</div>
                     <div class="metric-value" id="d2-tps">—</div>
                     <div class="metric-sub" id="d2-tps-trend">Waiting…</div>
                   </article>
+
                   <article class="metric-card">
                     <div class="metric-label">Avg Fee (XRP)</div>
                     <div class="metric-value" id="d2-fee">—</div>
                     <div class="metric-sub" id="d2-fee-note">Waiting…</div>
                   </article>
+
                   <article class="metric-card">
                     <div class="metric-label">Validators</div>
                     <div class="metric-value" id="d2-validators">—</div>
                     <div class="metric-sub" id="d2-validator-health">Waiting…</div>
                   </article>
+
                   <article class="metric-card">
                     <div class="metric-label">TX / Ledger</div>
                     <div class="metric-value" id="d2-tx-per-ledger">—</div>
                     <div class="metric-sub" id="d2-tx-spread">Waiting…</div>
                   </article>
+
                   <article class="metric-card">
                     <div class="metric-label">Load Factor</div>
                     <div class="metric-value" id="d2-load">—</div>
@@ -81,53 +141,47 @@
                 </div>
               </section>
 
+              <!-- PATTERNS & DOMINANCE (KEPT) -->
               <section class="widget-card">
                 <header class="widget-header">
-                  <div class="widget-title">⏱ Ledger Rhythm Orb</div>
-                  <span class="widget-tag">Last 25 Ledgers</span>
+                  <div class="widget-title">🧠 Ledger Patterns & Dominance</div>
+                  <span class="widget-tag">Explainable Signals</span>
                 </header>
-                <div class="widget-body ledger-orb-layout">
-                  <div class="ledger-orb-wrapper">
-                    <canvas id="d2-ledger-orb" width="220" height="220"></canvas>
-                  </div>
-                  <div class="ledger-orb-stats">
-                    <div class="orb-stat-row">
-                      <span class="widget-label">Last Close</span>
-                      <span class="widget-value" id="d2-orb-last">—</span>
-                    </div>
-                    <div class="orb-stat-row">
-                      <span class="widget-label">Avg (25)</span>
-                      <span class="widget-value" id="d2-orb-avg">—</span>
-                    </div>
-                    <div class="orb-stat-row">
-                      <span class="widget-label">Min / Max</span>
-                      <span class="widget-value" id="d2-orb-minmax">—</span>
-                    </div>
-                    <div class="orb-stat-row">
-                      <span class="widget-label">Target</span>
-                      <span class="widget-value">3.8s</span>
-                    </div>
-                  </div>
-                </div>
-              </section>
 
-              <section class="widget-card">
-                <header class="widget-header">
-                  <div class="widget-title">📊 Transaction Heatmap</div>
-                  <span class="widget-tag">Per Ledger Type Mix</span>
-                </header>
                 <div class="widget-body">
-                  <div id="d2-tx-heatmap" class="tx-heatmap-grid">
-                    <div class="widget-label">Waiting for transactions…</div>
+                  <div class="widget-row">
+                    <span class="widget-label">Dominant Activity</span>
+                    <span class="widget-value" id="d2-dominant-type">—</span>
+                  </div>
+
+                  <div class="widget-row">
+                    <span class="widget-label">Dominance Strength</span>
+                    <span class="widget-value" id="d2-dominance-score">—</span>
+                  </div>
+
+                  <div class="widget-row">
+                    <span class="widget-label">Pattern Flags</span>
+                    <span class="widget-value badge-warn" id="d2-pattern-flags">None</span>
+                  </div>
+
+                  <div class="mini-bar">
+                    <div class="mini-bar-fill" id="d2-dominance-bar" style="width: 0%;"></div>
+                  </div>
+
+                  <div class="widget-row" style="margin-top: 10px;">
+                    <span class="widget-label">Interpretation</span>
+                    <span class="widget-label" id="d2-pattern-explain" style="text-align:right;">Waiting…</span>
                   </div>
                 </div>
               </section>
 
+              <!-- LEDGER STREAM (KEPT EXACT DESIGN) -->
               <section class="widget-card ledger-stream-card">
                 <header class="widget-header">
                   <div class="widget-title">⚡ Real-Time Ledger Stream</div>
                   <span class="widget-tag">Last 10 Ledgers</span>
                 </header>
+
                 <div class="widget-body">
                   <div class="ledger-stream-shell" id="ledgerStreamShell">
                     <div class="ledger-stream-track" id="ledgerStreamTrack">
@@ -137,167 +191,185 @@
                   </div>
                 </div>
               </section>
-            </div>
 
-            <div class="dashboard-col-side">
+              <!-- NEW: FORENSICS TOOLKIT -->
               <section class="widget-card">
                 <header class="widget-header">
-                  <div class="widget-title">🛡️ Validator Health</div>
-                  <span class="widget-tag" id="d2-validator-status-pill">Checking…</span>
+                  <div class="widget-title">🧭 Forensics Toolkit</div>
+                  <span class="widget-tag">Flow • Clusters • Replay</span>
                 </header>
+
                 <div class="widget-body">
-                  <div class="widget-row">
-                    <span class="widget-label">Active UNL</span>
-                    <span class="widget-value" id="d2-unl-count">—</span>
+                  <div class="widget-row" style="align-items:flex-start;">
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Flow Window</div>
+                      <div class="orderbook-row" id="d2-flow-window-buttons" style="gap:8px;">
+                        <span class="widget-pill" data-window="5">5</span>
+                        <span class="widget-pill" data-window="20">20</span>
+                        <span class="widget-pill" data-window="50">50</span>
+                        <span class="widget-pill" data-window="live">LIVE</span>
+                      </div>
+                    </div>
+
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Alert Threshold</div>
+                      <div class="widget-row" style="gap:10px;">
+                        <span class="widget-label">Fingerprint ≥</span>
+                        <input id="d2-alert-min" type="number" min="2" max="20" value="${DEFAULT_ALERT_FINGERPRINT_MIN}"
+                          style="width:90px; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.25); color:inherit;" />
+                      </div>
+                    </div>
                   </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Missed Validations</span>
-                    <span class="widget-value badge-warn" id="d2-missed-validations">—</span>
+
+                  <div class="widget-row" style="margin-top:12px; align-items:flex-start;">
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Replay Timeline</div>
+                      <input id="d2-replay-slider" type="range" min="0" max="0" value="0"
+                        style="width:100%; accent-color: currentColor;" />
+                      <div class="widget-row" style="margin-top:6px;">
+                        <span class="widget-label">Selected</span>
+                        <span class="widget-value" id="d2-replay-label">LIVE</span>
+                      </div>
+                    </div>
+
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Export</div>
+                      <div class="orderbook-row" style="gap:8px;">
+                        <span class="widget-pill" id="d2-export-json">Export JSON</span>
+                        <span class="widget-pill" id="d2-export-csv">Export CSV</span>
+                        <span class="widget-pill" id="d2-clear-trace">Clear Trace</span>
+                      </div>
+                    </div>
                   </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Diversity</span>
-                    <span class="widget-value" id="d2-geo-diversity">—</span>
-                  </div>
-                  <div class="mini-bar">
-                    <div class="mini-bar-fill" id="d2-health-bar" style="width: 0%;"></div>
+
+                  <div class="widget-row" style="margin-top:12px;">
+                    <span class="widget-label">Status</span>
+                    <span class="widget-label" id="d2-forensics-status" style="text-align:right;">Waiting for ledgers…</span>
                   </div>
                 </div>
               </section>
 
+              <!-- NEW: BREADCRUMBS -->
               <section class="widget-card">
                 <header class="widget-header">
-                  <div class="widget-title">💧 AMM & Escrow Activity</div>
-                  <span class="widget-tag">Liquidity & Locks</span>
+                  <div class="widget-title">👣 Wallet Flow Breadcrumbs</div>
+                  <span class="widget-tag">Repeated Fingerprints</span>
                 </header>
+
                 <div class="widget-body">
                   <div class="widget-row">
-                    <span class="widget-label">Active AMM Pools</span>
-                    <span class="widget-value" id="d2-amm-pools">—</span>
+                    <span class="widget-label">Top Signals</span>
+                    <span class="widget-label" id="d2-breadcrumb-meta" style="text-align:right;">—</span>
                   </div>
-                  <div class="widget-row">
-                    <span class="widget-label">24h AMM Volume</span>
-                    <span class="widget-value" id="d2-amm-volume">—</span>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Active Escrows</span>
-                    <span class="widget-value" id="d2-escrow-count">—</span>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Escrowed XRP</span>
-                    <span class="widget-value" id="d2-escrow-amount">—</span>
+                  <div id="d2-breadcrumb-list" class="gateway-list">
+                    <div class="widget-label">Waiting…</div>
                   </div>
                 </div>
               </section>
 
+              <!-- NEW: CLUSTERS -->
               <section class="widget-card">
                 <header class="widget-header">
-                  <div class="widget-title">🔗 Trustline Activity</div>
-                  <span class="widget-tag">Last 24h</span>
+                  <div class="widget-title">🕸️ Cluster Inference</div>
+                  <span class="widget-tag">Graph-Based • No Identity</span>
                 </header>
+
                 <div class="widget-body">
                   <div class="widget-row">
-                    <span class="widget-label">New Trustlines</span>
-                    <span class="widget-value" id="d2-new-tls">—</span>
+                    <span class="widget-label">Persistence</span>
+                    <span class="widget-value" id="d2-cluster-persistence">—</span>
                   </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Removed</span>
-                    <span class="widget-value badge-warn" id="d2-removed-tls">—</span>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Unique Issuers</span>
-                    <span class="widget-value" id="d2-issuer-count">—</span>
-                  </div>
-                  <div class="mini-bar">
-                    <div class="mini-bar-fill" id="d2-tl-growth-bar" style="width: 0%;"></div>
+                  <div id="d2-cluster-list" class="gateway-list">
+                    <div class="widget-label">Waiting…</div>
                   </div>
                 </div>
               </section>
 
+              <!-- NEW: DELTA NARRATIVES -->
               <section class="widget-card">
                 <header class="widget-header">
-                  <div class="widget-title">🎨 NFT Activity</div>
-                  <span class="widget-tag">XLS-20</span>
+                  <div class="widget-title">📖 Ledger-to-Ledger Delta Narratives</div>
+                  <span class="widget-tag">Explainable Changes</span>
                 </header>
+
                 <div class="widget-body">
-                  <div class="widget-row">
-                    <span class="widget-label">Minted</span>
-                    <span class="widget-value" id="d2-nft-minted">—</span>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Burned</span>
-                    <span class="widget-value badge-warn" id="d2-nft-burned">—</span>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">24h Trades</span>
-                    <span class="widget-value" id="d2-nft-trades">—</span>
+                  <div id="d2-delta-narratives" class="gateway-list">
+                    <div class="widget-label">Waiting…</div>
                   </div>
                 </div>
               </section>
 
-              <section class="widget-card">
-                <header class="widget-header">
-                  <div class="widget-title">🐋 Whale Movements</div>
-                  <span class="widget-tag">≥ 1M XRP</span>
-                </header>
-                <div class="widget-body">
-                  <div class="whale-list" id="d2-whale-list">
-                    <div class="widget-label">Monitoring…</div>
-                  </div>
-                </div>
-              </section>
-
-              <section class="widget-card">
-                <header class="widget-header">
-                  <div class="widget-title">📡 Latency Gauge</div>
-                  <span class="widget-tag">Nodes / Regions</span>
-                </header>
-                <div class="widget-body">
-                  <div class="latency-ribbon" id="d2-latency-ribbon">
-                    <div class="latency-segment fast"></div>
-                    <div class="latency-segment medium"></div>
-                    <div class="latency-segment slow"></div>
-                  </div>
-                  <div class="widget-row">
-                    <span class="widget-label">Avg Latency</span>
-                    <span class="widget-value" id="d2-latency-avg">—</span>
-                  </div>
-                </div>
-              </section>
-
-              <section class="widget-card">
-                <header class="widget-header">
-                  <div class="widget-title">📈 Orderbook Activity</div>
-                  <span class="widget-tag">Top Pairs</span>
-                </header>
-                <div class="widget-body">
-                  <div class="orderbook-row" id="d2-orderbook-pairs">
-                    <span class="widget-label">Loading…</span>
-                  </div>
-                </div>
-              </section>
-
-              <section class="widget-card">
-                <header class="widget-header">
-                  <div class="widget-title">🏦 Gateways & Issuers</div>
-                  <span class="widget-tag">IOU Hubs</span>
-                </header>
-                <div class="widget-body">
-                  <div class="gateway-list" id="d2-gateway-list">
-                    <span class="widget-label">Loading…</span>
-                  </div>
-                </div>
-              </section>
             </div>
           </div>
         </div>
       `;
 
+      this.injectFixStyles();
+      this.injectForensicsStyles();
       this.bindNetworkButtons();
-      this.initVisuals();
       this.initLedgerStreamParticles();
+      this.bindForensicsControls();
+
+      // ✅ Start smooth stream animation (prevents jump/reset)
+      this.startStreamAnimation();
 
       this.initialized = true;
       console.log("✅ Dashboard rendered - waiting for real XRPL data");
+    },
+
+    /* =========================
+       FIX STYLES:
+       - notifications not blocking navbar
+       - stream smoother (hint browser)
+       ========================= */
+    injectFixStyles() {
+      if (document.getElementById("d2-fix-style")) return;
+      const style = document.createElement("style");
+      style.id = "d2-fix-style";
+      style.textContent = `
+        /* Prevent notification overlays from blocking navbar/dropdowns */
+        #notifications,
+        .notifications,
+        .notification-container,
+        .toast-container,
+        .toast-wrapper,
+        .toasts {
+          pointer-events: none !important;
+          z-index: 9999 !important;
+        }
+        #notifications .notification,
+        .notifications .notification,
+        .notification-container .notification,
+        .toast-container .toast,
+        .toast-wrapper .toast,
+        .toasts .toast {
+          pointer-events: auto !important;
+        }
+
+        /* Stream perf */
+        #ledgerStreamTrack {
+          will-change: transform;
+        }
+      `;
+      document.head.appendChild(style);
+    },
+
+    injectForensicsStyles() {
+      if (document.getElementById("d2-forensics-style")) return;
+      const style = document.createElement("style");
+      style.id = "d2-forensics-style";
+      style.textContent = `
+        .widget-pill { cursor: pointer; user-select:none; }
+        .widget-pill.is-active { outline: 2px solid rgba(255,255,255,0.20); }
+        .ledger-card.is-trace {
+          box-shadow: 0 0 0 2px rgba(255, 204, 102, 0.65), 0 0 22px rgba(255, 204, 102, 0.15);
+          transform: translateY(-1px);
+        }
+        .d2-bc-item { cursor:pointer; }
+        .d2-bc-sub { opacity: 0.85; font-size: 12px; margin-top: 3px; }
+        .d2-bc-row { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+      `;
+      document.head.appendChild(style);
     },
 
     bindNetworkButtons() {
@@ -313,637 +385,355 @@
       });
     },
 
-    initVisuals() {
-      const orb = document.getElementById("d2-ledger-orb");
-      if (orb) {
-        const box = orb.parentElement;
-        const size = Math.min(box ? box.offsetWidth : 220, 260);
-        orb.width = size;
-        orb.height = size;
-        this.orbCanvas = orb;
-        this.orbCtx = orb.getContext("2d");
+    bindForensicsControls() {
+      const windowWrap = document.getElementById("d2-flow-window-buttons");
+      if (windowWrap) {
+        const pills = windowWrap.querySelectorAll(".widget-pill[data-window]");
+        const setActive = (val) => {
+          pills.forEach((p) => p.classList.toggle("is-active", p.getAttribute("data-window") === String(val)));
+        };
+
+        setActive(String(this.flowWindowSize));
+
+        pills.forEach((p) => {
+          p.addEventListener("click", () => {
+            const w = p.getAttribute("data-window");
+            if (w === "live") {
+              this.replayIndex = null;
+              this.updateReplayUI();
+              this.renderLiveStreamFromHistory();
+              setActive("live");
+              return;
+            }
+            const num = Number(w);
+            if (!Number.isFinite(num) || num <= 0) return;
+            this.flowWindowSize = num;
+            setActive(String(num));
+            this.runForensicsPipeline();
+          });
+        });
       }
-      this.txHeatmapEl = document.getElementById("d2-tx-heatmap");
+
+      const alertMin = document.getElementById("d2-alert-min");
+      if (alertMin) {
+        alertMin.addEventListener("change", () => {
+          const v = Number(alertMin.value);
+          if (Number.isFinite(v) && v >= 2 && v <= 20) {
+            this.alertFingerprintMin = v;
+            this.runForensicsPipeline();
+          }
+        });
+      }
+
+      const slider = document.getElementById("d2-replay-slider");
+      if (slider) {
+        slider.addEventListener("input", () => {
+          const idx = Number(slider.value);
+          const item = this.replayHistory[idx];
+          if (!item) this.replayIndex = null;
+          else this.replayIndex = item.ledgerIndex;
+
+          this.updateReplayUI();
+          this.renderReplayStream();
+          this.runForensicsPipeline();
+        });
+      }
+
+      const btnJson = document.getElementById("d2-export-json");
+      if (btnJson) btnJson.addEventListener("click", () => this.exportForensicReport("json"));
+
+      const btnCsv = document.getElementById("d2-export-csv");
+      if (btnCsv) btnCsv.addEventListener("click", () => this.exportForensicReport("csv"));
+
+      const btnClear = document.getElementById("d2-clear-trace");
+      if (btnClear) btnClear.addEventListener("click", () => this.clearTrace());
     },
 
+    /* =========================
+       Incoming state apply
+       ========================= */
     applyXRPLState(state) {
-      if (!state) {
-        console.warn("⚠️ Dashboard: No state provided");
-        return;
+      if (!state) return;
+
+      this.updateTopMetrics(state);
+
+      // Capture raw recent tx window if provided (real-data only)
+      if (Array.isArray(state.recentTransactions)) {
+        this.recentTransactions = state.recentTransactions.slice(-2000);
       }
 
-      console.log("📊 Dashboard: Applying XRPL state", {
-        ledgerIndex: state.ledgerIndex,
-        tps: state.tps,
-        txPerLedger: state.txPerLedger,
-        loadFactor: state.loadFactor,
-        txTypes: state.txTypes,
-        hasLatestLedger: !!state.latestLedger
-      });
-
-      // Update ALL dashboard sections with the state data
-      this.updateTopMetrics(state);
-      this.updateCloseTimes(state.closeTimes || []);
-      this.updateTxTypes(state.txTypes || {});
-      this.updateValidatorHealth(state.validators || {});
-      this.updateAMM(state.amm || {});
-      this.updateTrustlines(state.trustlines || {});
-      this.updateNFTs(state.nfts || {});
-      this.updateWhales(state.whales || []);
-      this.updateLatency(state.latency || {});
-      this.updateOrderbook(state.orderbook || []);
-      this.updateGateways(state.gateways || []);
-
-      // Always push latestLedger to stream if it exists, or use main state as fallback
-      if (state.latestLedger) {
-        console.log("📦 Dashboard: Pushing ledger to stream:", state.latestLedger.ledgerIndex, "with", state.latestLedger.totalTx, "transactions", state.latestLedger.txTypes);
+      // Ledger stream ingestion
+      if (state.latestLedger?.ledgerIndex) {
         this.pushLedgerToStream(state.latestLedger);
       } else if (state.ledgerIndex) {
-        // Fallback: create latestLedger from main state if not provided
-        const fallbackLedger = {
+        this.pushLedgerToStream({
           ledgerIndex: state.ledgerIndex,
-          closeTime: new Date(),
+          closeTime: state.ledgerTime || new Date(),
           totalTx: state.txPerLedger || 0,
           txTypes: state.txTypes || {},
           avgFee: state.avgFee || 0,
           successRate: 99.9,
-        };
-        console.log("📦 Dashboard: Pushing fallback ledger to stream:", fallbackLedger.ledgerIndex);
-        this.pushLedgerToStream(fallbackLedger);
+        });
+      }
+
+      this.updateReplayUI();
+      this.runForensicsPipeline();
+    },
+
+    /* =========================
+       Helpers for ORDER + TIME
+       ========================= */
+    coerceLedgerIndex(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    },
+
+    coerceCloseTime(v) {
+      if (v instanceof Date) return v;
+      if (typeof v === "number") return new Date(v * 1000);
+      if (typeof v === "string") {
+        const d = new Date(v);
+        return Number.isFinite(d.getTime()) ? d : new Date();
+      }
+      return new Date();
+    },
+
+    // Canonical upsert into replayHistory:
+    // - Dedup by ledgerIndex
+    // - Sort newest-first by ledgerIndex
+    // - Keep bounded
+    upsertReplayLedger(cardData) {
+      const li = this.coerceLedgerIndex(cardData?.ledgerIndex);
+      if (li == null) return;
+
+      const idx = this.replayHistory.findIndex((x) => x.ledgerIndex === li);
+      if (idx >= 0) this.replayHistory[idx] = cardData;
+      else this.replayHistory.push(cardData);
+
+      this.replayHistory.sort((a, b) => (b.ledgerIndex - a.ledgerIndex));
+
+      if (this.replayHistory.length > MAX_REPLAY_LEDGERS) {
+        this.replayHistory = this.replayHistory.slice(0, MAX_REPLAY_LEDGERS);
       }
     },
 
+    /* =========================
+       TxType normalization (KEPT)
+       ========================= */
+    normalizeTxTypes(txTypes) {
+      const t = txTypes || {};
+      const agg = { Payment: 0, Offer: 0, NFT: 0, TrustSet: 0, Other: 0 };
+
+      agg.Offer += Number(t.Offer || 0);
+      agg.Offer += Number(t.OfferCreate || 0);
+      agg.Offer += Number(t.OfferCancel || 0);
+
+      agg.NFT += Number(t.NFT || 0);
+      agg.NFT += Number(t.NFTMint || 0);
+      agg.NFT += Number(t.NFTBurn || 0);
+      agg.NFT += Number(t.NFTokenMint || 0);
+      agg.NFT += Number(t.NFTokenBurn || 0);
+
+      agg.Payment += Number(t.Payment || 0);
+      agg.TrustSet += Number(t.TrustSet || 0);
+
+      for (const [k, v] of Object.entries(t)) {
+        if (
+          k === "Payment" ||
+          k === "Offer" ||
+          k === "OfferCreate" ||
+          k === "OfferCancel" ||
+          k === "NFT" ||
+          k === "NFTMint" ||
+          k === "NFTBurn" ||
+          k === "NFTokenMint" ||
+          k === "NFTokenBurn" ||
+          k === "TrustSet"
+        ) continue;
+        agg.Other += Number(v || 0);
+      }
+
+      const totalAgg = agg.Payment + agg.Offer + agg.NFT + agg.TrustSet + agg.Other;
+      if (!totalAgg) {
+        if (typeof t.Payment === "number") agg.Payment = t.Payment;
+        if (typeof t.Offer === "number") agg.Offer = t.Offer;
+        if (typeof t.NFT === "number") agg.NFT = t.NFT;
+        if (typeof t.TrustSet === "number") agg.TrustSet = t.TrustSet;
+        if (typeof t.Other === "number") agg.Other = t.Other;
+      }
+
+      return agg;
+    },
+
+    /* =========================
+       Top metrics (KEPT)
+       ========================= */
     updateTopMetrics(state) {
       const $ = (id) => document.getElementById(id);
 
-      console.log("🔧 Dashboard: Updating top metrics with:", {
-        ledgerIndex: state.ledgerIndex,
-        tps: state.tps,
-        txPerLedger: state.txPerLedger,
-        loadFactor: state.loadFactor
-      });
+      if ($("d2-ledger-index")) $("d2-ledger-index").textContent = state.ledgerIndex != null ? state.ledgerIndex.toLocaleString() : "—";
+      if ($("d2-ledger-age")) $("d2-ledger-age").textContent = `Age: ${state.ledgerAge || "—"}`;
 
-      // Update all main metrics with fallbacks for missing data
-      if ($("d2-ledger-index")) {
-        $("d2-ledger-index").textContent =
-          state.ledgerIndex != null ? state.ledgerIndex.toLocaleString() : "—";
-      }
-      if ($("d2-ledger-age")) {
-        $("d2-ledger-age").textContent = `Age: ${state.ledgerAge || "—"}`;
-      }
-      
-      // TPS - handle multiple field names
       if ($("d2-tps")) {
-        const tps = state.tps != null ? state.tps : (state.txnPerSec != null ? state.txnPerSec : 0);
+        const tps = state.tps != null ? state.tps : state.txnPerSec != null ? state.txnPerSec : null;
         $("d2-tps").textContent = tps != null ? Number(tps).toFixed(1) : "—";
       }
-      if ($("d2-tps-trend")) {
-        $("d2-tps-trend").textContent = state.tpsTrend || "Trend: Collecting…";
-      }
-      
-      // Fee - handle multiple field names
+      if ($("d2-tps-trend")) $("d2-tps-trend").textContent = state.tpsTrend || "Trend: Collecting…";
+
       if ($("d2-fee")) {
-        const fee = state.avgFee != null ? state.avgFee : (state.feeAvg != null ? state.feeAvg : 0);
+        const fee = state.avgFee != null ? state.avgFee : state.feeAvg != null ? state.feeAvg : null;
         $("d2-fee").textContent = fee != null ? Number(fee).toFixed(6) : "—";
       }
       if ($("d2-fee-note")) {
-        const fee = state.avgFee != null ? state.avgFee : (state.feeAvg != null ? state.feeAvg : 0);
+        const fee = state.avgFee != null ? state.avgFee : state.feeAvg != null ? state.feeAvg : null;
         if (fee != null) {
           if (fee < 0.00001) $("d2-fee-note").textContent = "Very Low";
           else if (fee < 0.00002) $("d2-fee-note").textContent = "Stable";
           else $("d2-fee-note").textContent = "Elevated";
-        } else {
-          $("d2-fee-note").textContent = "—";
-        }
+        } else $("d2-fee-note").textContent = "—";
       }
-      
-      // Validators data with multiple format support
+
       if (state.validators) {
         const v = state.validators;
-        const total = v.total != null ? v.total : (typeof state.validators === 'number' ? state.validators : 0);
-        if ($("d2-validators")) {
-          $("d2-validators").textContent = total != null ? String(total) : "—";
-        }
+        const total = v.total != null ? v.total : typeof state.validators === "number" ? state.validators : null;
+
+        if ($("d2-validators")) $("d2-validators").textContent = total != null ? String(total) : "—";
         if ($("d2-validator-health")) {
-          const healthy = v.healthy != null ? v.healthy : (total != null ? Math.round(total * 0.95) : null);
+          const healthy = v.healthy != null ? v.healthy : total != null ? Math.round(total * 0.95) : null;
           $("d2-validator-health").textContent = healthy != null ? `Healthy: ${healthy}` : "Healthy: —";
         }
       }
-      
-      // Transactions per ledger - handle multiple field names
+
       if ($("d2-tx-per-ledger")) {
-        const tpl = state.txPerLedger != null ? state.txPerLedger : (state.txnPerLedger != null ? state.txnPerLedger : 0);
+        const tpl = state.txPerLedger != null ? state.txPerLedger : state.txnPerLedger != null ? state.txnPerLedger : null;
         $("d2-tx-per-ledger").textContent = tpl != null ? String(tpl) : "—";
       }
-      if ($("d2-tx-spread")) {
-        $("d2-tx-spread").textContent = `Spread: ${state.txSpread || "—"}`;
-      }
-      
-      // Load factor - handle multiple field names (THIS WAS THE MAIN ISSUE)
+      if ($("d2-tx-spread")) $("d2-tx-spread").textContent = `Spread: ${state.txSpread || "—"}`;
+
       if ($("d2-load")) {
-        const lf = state.loadFactor != null ? state.loadFactor : (state.loadFee != null ? state.loadFee : 1.0);
-        console.log("🔧 Load Factor raw:", state.loadFactor, "loadFee:", state.loadFee, "final:", lf);
+        const lf = state.loadFactor != null ? state.loadFactor : state.loadFee != null ? state.loadFee : null;
         $("d2-load").textContent = lf != null ? Number(lf).toFixed(2) : "—";
       }
       if ($("d2-load-note")) {
-        const lf = state.loadFactor != null ? state.loadFactor : (state.loadFee != null ? state.loadFee : 1.0);
+        const lf = state.loadFactor != null ? state.loadFactor : state.loadFee != null ? state.loadFee : 1.0;
         $("d2-load-note").textContent = state.loadNote || (lf > 1.2 ? "Elevated" : "Normal");
       }
     },
 
-    updateCloseTimes(closeTimes) {
-      this.closeTimesData = Array.isArray(closeTimes) ? closeTimes : [];
-      const data = this.closeTimesData;
-      const lastSpan = document.getElementById("d2-orb-last");
-      const avgSpan = document.getElementById("d2-orb-avg");
-      const minmaxSpan = document.getElementById("d2-orb-minmax");
-
-      if (!data.length) {
-        if (lastSpan) lastSpan.textContent = "—";
-        if (avgSpan) avgSpan.textContent = "—";
-        if (minmaxSpan) minmaxSpan.textContent = "—";
-        this.drawCloseTimeOrb([]);
-        return;
-      }
-
-      const values = data.map((d) => Number(d.value) || 0);
-      const last = values[values.length - 1];
-      const sum = values.reduce((a, b) => a + b, 0);
-      const avg = sum / values.length;
-      const min = Math.min.apply(null, values);
-      const max = Math.max.apply(null, values);
-
-      if (lastSpan) lastSpan.textContent = `${last.toFixed(2)}s`;
-      if (avgSpan) avgSpan.textContent = `${avg.toFixed(2)}s`;
-      if (minmaxSpan) minmaxSpan.textContent = `${min.toFixed(2)} – ${max.toFixed(2)}s`;
-
-      this.drawCloseTimeOrb(values);
-    },
-
-    drawCloseTimeOrb(values) {
-      if (!this.orbCanvas || !this.orbCtx) return;
-
-      const ctx = this.orbCtx;
-      const w = this.orbCanvas.width;
-      const h = this.orbCanvas.height;
-      const cx = w / 2;
-      const cy = h / 2;
-      const radius = Math.min(w, h) / 2 - 12;
-
-      ctx.clearRect(0, 0, w, h);
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      const bgGrad = ctx.createRadialGradient(cx, cy - radius * 0.4, radius * 0.1, cx, cy, radius);
-      bgGrad.addColorStop(0, "rgba(0, 212, 255, 0.45)");
-      bgGrad.addColorStop(0.5, "rgba(0, 0, 0, 0.6)");
-      bgGrad.addColorStop(1, "rgba(0, 0, 0, 1)");
-      ctx.fillStyle = bgGrad;
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(0, 212, 255, 0.9)";
-      ctx.lineWidth = 3;
-      ctx.shadowColor = "rgba(0, 212, 255, 0.8)";
-      ctx.shadowBlur = 20;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius - 4, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
-      if (!values.length) return;
-
-      const target = 3.8;
-      const maxDiff = 3.0;
-      const ringRadiusInner = radius * 0.35;
-      const ringRadiusOuter = radius * 0.9;
-
-      const count = values.length;
-      for (let i = 0; i < count; i++) {
-        const v = values[i];
-        const diff = Math.abs(v - target);
-        const norm = Math.max(0, Math.min(1, diff / maxDiff));
-        const intensity = 1 - norm;
-        const angle = -Math.PI / 2 + (i / count) * Math.PI * 2;
-
-        const rStart = ringRadiusInner;
-        const rEnd = ringRadiusInner + (ringRadiusOuter - ringRadiusInner) * (0.4 + intensity * 0.6);
-
-        const x1 = cx + Math.cos(angle) * rStart;
-        const y1 = cy + Math.sin(angle) * rStart;
-        const x2 = cx + Math.cos(angle) * rEnd;
-        const y2 = cy + Math.sin(angle) * rEnd;
-
-        const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-        if (v < target * 0.9) {
-          grad.addColorStop(0, "rgba(80, 250, 123, 0.0)");
-          grad.addColorStop(1, "rgba(80, 250, 123, 0.9)");
-        } else if (v <= target * 1.2) {
-          grad.addColorStop(0, "rgba(189, 147, 249, 0.0)");
-          grad.addColorStop(1, "rgba(189, 147, 249, 0.9)");
-        } else {
-          grad.addColorStop(0, "rgba(255, 184, 108, 0.0)");
-          grad.addColorStop(1, "rgba(255, 184, 108, 0.9)");
-        }
-
-        ctx.beginPath();
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = 2;
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-      }
-
-      ctx.save();
-      const now = Date.now() / 800;
-      const pulse = 0.85 + 0.1 * Math.sin(now);
-      ctx.beginPath();
-      ctx.arc(cx, cy, ringRadiusInner * pulse, 0, Math.PI * 2);
-      const innerGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, ringRadiusInner * pulse);
-      innerGrad.addColorStop(0, "rgba(0, 212, 255, 0.9)");
-      innerGrad.addColorStop(1, "rgba(0, 212, 255, 0.0)");
-      ctx.fillStyle = innerGrad;
-      ctx.fill();
-      ctx.restore();
-    },
-
-    updateTxTypes(txTypes) {
-      const el = this.txHeatmapEl || document.getElementById("d2-tx-heatmap");
-      if (!el) return;
-
-      console.log("🔧 Dashboard: Updating transaction types:", txTypes);
-
-      const labels = ["Payment", "Offer", "NFT", "TrustSet", "Other"];
-      const counts = labels.map((label) => {
-        if (label === "Offer") {
-          return (txTypes.Offer || 0) + (txTypes.OfferCreate || 0) + (txTypes.OfferCancel || 0);
-        }
-        if (label === "NFT") {
-          return (
-            (txTypes.NFT || 0) +
-            (txTypes.NFTMint || 0) +
-            (txTypes.NFTokenMint || 0) +
-            (txTypes.NFTokenBurn || 0)
-          );
-        }
-        return txTypes[label] || 0;
-      });
-
-      const total = counts.reduce((a, b) => a + b, 0);
-      const max = counts.reduce((a, b) => (b > a ? b : a), 0) || 1;
-
-      if (!total) {
-        el.innerHTML = `<div class="widget-label">Waiting for transactions…</div>`;
-        return;
-      }
-
-      el.innerHTML = labels
-        .map((label, idx) => {
-          const value = counts[idx];
-          const pct = (value / total) * 100;
-          const intensity = Math.max(0.15, value / max);
-          const className =
-            label === "Payment"
-              ? "heat-payment"
-              : label === "Offer"
-              ? "heat-offer"
-              : label === "NFT"
-              ? "heat-nft"
-              : label === "TrustSet"
-              ? "heat-trust"
-              : "heat-other";
-
-          return `
-            <div class="tx-heat-tile ${className}" style="--heat:${intensity.toFixed(2)}">
-              <div class="tx-heat-label">${label}</div>
-              <div class="tx-heat-value">${value}</div>
-              <div class="tx-heat-percent">${pct.toFixed(1)}%</div>
-              <div class="tx-heat-bar">
-                <div class="tx-heat-bar-fill" style="width:${pct.toFixed(1)}%"></div>
-              </div>
-            </div>
-          `;
-        })
-        .join("");
-    },
-
-    updateValidatorHealth(v) {
-      const $ = (id) => document.getElementById(id);
-      const total = v.total != null ? v.total : v;
-      const healthy = v.healthy != null ? v.healthy : (total != null ? Math.round(total * 0.95) : 0);
-      const missed = v.missed != null ? v.missed : 0;
-      const geo = v.geoDiversity || "—";
-
-      const healthyRatio = total ? healthy / total : 0;
-      const pct = Math.round(healthyRatio * 100);
-
-      if ($("d2-unl-count")) $("d2-unl-count").textContent = total ?? "—";
-      if ($("d2-missed-validations"))
-        $("d2-missed-validations").textContent = missed ?? "—";
-      if ($("d2-geo-diversity")) $("d2-geo-diversity").textContent = geo;
-
-      const pill = $("d2-validator-status-pill");
-      const bar = $("d2-health-bar");
-      if (pill) {
-        pill.textContent =
-          pct >= 95 ? "Healthy" : pct >= 85 ? "Minor Issues" : "Degraded";
-      }
-      if (bar) bar.style.width = `${pct}%`;
-    },
-
-    updateAMM(amm) {
-      const $ = (id) => document.getElementById(id);
-      if ($("d2-amm-pools"))
-        $("d2-amm-pools").textContent = amm.pools != null ? amm.pools.toString() : "—";
-      if ($("d2-amm-volume"))
-        $("d2-amm-volume").textContent = amm.volume24h != null ? `${amm.volume24h.toLocaleString()} XRP` : "—";
-      if ($("d2-escrow-count"))
-        $("d2-escrow-count").textContent = amm.escrows != null ? amm.escrows.toString() : "—";
-      if ($("d2-escrow-amount"))
-        $("d2-escrow-amount").textContent = amm.escrowXRP != null ? `${amm.escrowXRP.toLocaleString()} XRP` : "—";
-    },
-
-    updateTrustlines(tl) {
-      const $ = (id) => document.getElementById(id);
-      if ($("d2-new-tls"))
-        $("d2-new-tls").textContent = tl.new24h != null ? tl.new24h.toString() : "—";
-      if ($("d2-removed-tls"))
-        $("d2-removed-tls").textContent = tl.removed24h != null ? tl.removed24h.toString() : "—";
-      if ($("d2-issuer-count"))
-        $("d2-issuer-count").textContent = tl.issuers != null ? tl.issuers.toString() : "—";
-
-      const bar = $("d2-tl-growth-bar");
-      if (bar && tl.growthPct != null) {
-        const pct = Math.max(0, Math.min(100, tl.growthPct));
-        bar.style.width = `${pct}%`;
-      } else if (bar) {
-        bar.style.width = "0%";
-      }
-    },
-
-    updateNFTs(n) {
-      const $ = (id) => document.getElementById(id);
-      if ($("d2-nft-minted"))
-        $("d2-nft-minted").textContent = n.minted != null ? n.minted.toString() : "—";
-      if ($("d2-nft-burned"))
-        $("d2-nft-burned").textContent = n.burned != null ? n.burned.toString() : "—";
-      if ($("d2-nft-trades"))
-        $("d2-nft-trades").textContent = n.trades24h != null ? n.trades24h.toString() : "—";
-    },
-
-    updateWhales(whales) {
-      const container = document.getElementById("d2-whale-list");
-      if (!container) return;
-      
-      // Ensure we always have some content to prevent layout collapse
-      if (!Array.isArray(whales) || whales.length === 0) {
-        container.innerHTML = `
-          <div class="whale-item">
-            <div class="whale-side">
-              <strong>—</strong>
-              <span>No recent whale activity</span>
-            </div>
-            <div class="whale-side" style="text-align:right;">
-              <span class="badge-good">—</span>
-              <span class="widget-label">—</span>
-            </div>
-          </div>
-        `;
-        return;
-      }
-
-      container.innerHTML = whales
-        .map(
-          (w) => `
-        <div class="whale-item">
-          <div class="whale-side">
-            <strong>${w.amount || "—"}</strong>
-            <span>${w.details || "—"}</span>
-          </div>
-          <div class="whale-side" style="text-align:right;">
-            <span class="badge-${w.direction?.includes("To") ? "warn" : "good"}">
-              ${w.direction || "—"}
-            </span>
-            <span class="widget-label">${w.time || "—"}</span>
-          </div>
-        </div>
-      `
-        )
-        .join("");
-    },
-
-    updateLatency(lat) {
-      const $ = (id) => document.getElementById(id);
-      if ($("d2-latency-avg"))
-        $("d2-latency-avg").textContent = lat.avgMs != null ? `${Math.round(lat.avgMs)} ms` : "—";
-
-      const ribbon = document.getElementById("d2-latency-ribbon");
-      if (!ribbon) return;
-
-      const segments = ribbon.querySelectorAll(".latency-segment");
-      const shares = [
-        lat.fastShare ?? 0.7,
-        lat.mediumShare ?? 0.2,
-        lat.slowShare ?? 0.1,
-      ];
-
-      segments.forEach((seg, i) => {
-        seg.style.flex = shares[i] || 0.1;
-        seg.style.opacity = 0.4 + (shares[i] || 0.1) * 0.6;
-      });
-    },
-
-    updateOrderbook(pairs) {
-      const container = document.getElementById("d2-orderbook-pairs");
-      if (!container) return;
-      
-      // Ensure we always show some content
-      if (!Array.isArray(pairs) || pairs.length === 0) {
-        container.innerHTML = `<span class="widget-pill">XRP/USD</span><span class="widget-pill">XRP/EUR</span><span class="widget-pill">XRP/JPY</span>`;
-        return;
-      }
-
-      container.innerHTML = pairs
-        .map((p) => `<span class="widget-pill">${p}</span>`)
-        .join("");
-    },
-
-    updateGateways(gateways) {
-      const container = document.getElementById("d2-gateway-list");
-      if (!container) return;
-      
-      // Ensure we always show some content
-      if (!Array.isArray(gateways) || gateways.length === 0) {
-        container.innerHTML = `
-          <div class="gateway-item">
-            <div>
-              <strong>Bitstamp</strong>
-              <div class="widget-label">XRP, EUR, USD</div>
-            </div>
-            <div class="widget-label badge-good">OK</div>
-          </div>
-          <div class="gateway-item">
-            <div>
-              <strong>GateHub</strong>
-              <div class="widget-label">Multiple assets</div>
-            </div>
-            <div class="widget-label badge-good">OK</div>
-          </div>
-        `;
-        return;
-      }
-
-      container.innerHTML = gateways
-        .map(
-          (g) => `
-        <div class="gateway-item">
-          <div>
-            <strong>${g.name || "—"}</strong>
-            <div class="widget-label">${g.note || ""}</div>
-          </div>
-          <div class="widget-label badge-${g.risk === "warn" ? "warn" : "good"}">
-            ${g.risk === "warn" ? "Watch" : "OK"}
-          </div>
-        </div>
-      `
-        )
-        .join("");
-    },
-
+    /* =========================
+       Ledger stream (cards) — KEPT DESIGN
+       + FIX: canonical insert order
+       ========================= */
     pushLedgerToStream(summary, opts = {}) {
-      if (!summary || !summary.ledgerIndex) {
-        console.warn("⚠️ Dashboard: No ledger summary to push");
-        return;
-      }
+      const li = this.coerceLedgerIndex(summary?.ledgerIndex);
+      if (li == null) return;
 
-      let closeDate;
-      if (summary.closeTime instanceof Date) closeDate = summary.closeTime;
-      else if (typeof summary.closeTime === "number")
-        closeDate = new Date(summary.closeTime * 1000);
-      else closeDate = new Date();
+      const closeDate = this.coerceCloseTime(summary.closeTime);
+      const groupedTxTypes = this.normalizeTxTypes(summary.txTypes || {});
+      const domType = this.getDominantType(groupedTxTypes);
 
-      const txTypes = summary.txTypes || {};
-      const domType = this.getDominantType(txTypes);
-      
       const cardData = {
-        ledgerIndex: summary.ledgerIndex,
+        ledgerIndex: li,
         closeTime: closeDate,
         totalTx: summary.totalTx ?? 0,
-        txTypes,
+        txTypes: groupedTxTypes,
         avgFee: summary.avgFee ?? 0,
         successRate: summary.successRate ?? 99.9,
         dominantType: domType,
+        flowEdges: Array.isArray(summary.flowEdges) ? summary.flowEdges : null
       };
 
-      console.log("🎴 Dashboard: Creating ledger card:", cardData.ledgerIndex, "Dominant:", cardData.dominantType, "TxTypes:", txTypes);
+      // Canonical store (dedupe + sort)
+      this.upsertReplayLedger(cardData);
 
-      this.ledgerStream.unshift(cardData);
-      if (this.ledgerStream.length > MAX_STREAM_LEDGERS) {
-        this.ledgerStream = this.ledgerStream.slice(0, MAX_STREAM_LEDGERS);
+      // Update display slice depending on mode
+      if (this.replayIndex == null) {
+        this.ledgerStream = this.replayHistory.slice(0, MAX_STREAM_LEDGERS);
+      } else {
+        // keep replay viewport stable but update store
+        const pos = this.replayHistory.findIndex((x) => x.ledgerIndex === this.replayIndex);
+        this.ledgerStream = pos >= 0
+          ? this.replayHistory.slice(pos, pos + MAX_STREAM_LEDGERS)
+          : this.replayHistory.slice(0, MAX_STREAM_LEDGERS);
       }
 
-      this.renderLedgerStreamTrack(opts.skipAnimationReset !== true);
+      // ✅ No CSS animation resets; just re-render contents
+      this.renderLedgerStreamTrack();
+
+      // Continuity checks (gap detection)
+      this.checkContinuity();
+
+      // Patterns panel
+      this.analyzeLedgerPatterns();
     },
 
     getDominantType(txTypes) {
-      const entries = Object.entries(txTypes || {});
-      if (!entries.length) return "Other";
-
-      const aliases = {
-        Payment: "Payment",
-        OfferCreate: "Offer",
-        OfferCancel: "Offer",
-        Offer: "Offer",
-        NFTMint: "NFT",
-        NFTokenMint: "NFT",
-        NFTBurn: "NFT",
-        NFTokenBurn: "NFT",
-        NFT: "NFT",
-        TrustSet: "TrustSet",
-        AccountSet: "Other",
-      };
-
-      const agg = {
-        Payment: 0,
-        Offer: 0,
-        NFT: 0,
-        TrustSet: 0,
-        Other: 0,
-      };
-
-      for (const [key, value] of entries) {
-        const mapped = aliases[key] || (agg[key] !== undefined ? key : "Other");
-        agg[mapped] += value || 0;
+      const agg = { Payment: 0, Offer: 0, NFT: 0, TrustSet: 0, Other: 0 };
+      for (const [k, v] of Object.entries(txTypes || {})) {
+        if (agg[k] !== undefined) agg[k] += Number(v || 0);
+        else agg.Other += Number(v || 0);
       }
-
-      let topType = "Other";
-      let topVal = -1;
+      let topType = "Other", topVal = -1;
       for (const [type, count] of Object.entries(agg)) {
-        if (count > topVal) {
-          topVal = count;
-          topType = type;
-        }
+        if (count > topVal) { topVal = count; topType = type; }
       }
-      
-      console.log("🎯 Dashboard: Dominant type calculation:", agg, "→", topType);
       return topType;
     },
 
-    renderLedgerStreamTrack(resetAnimation) {
+    /* =========================
+       ✅ FIX: STREAM DISPLAY ORDER
+       You store newest-first, but DISPLAY ascending so it "counts up"
+       ========================= */
+    renderLedgerStreamTrack() {
       const track = document.getElementById("ledgerStreamTrack");
       if (!track) return;
 
       if (this.ledgerStream.length === 0) {
         track.innerHTML = '<div class="widget-label" style="padding: 40px;">Waiting for ledgers…</div>';
+        this._streamNeedsMeasure = true;
         return;
       }
 
-      const cardsHtml = this.ledgerStream.map((card) =>
-        this.buildLedgerCardHtml(card)
-      );
-      const combined = cardsHtml.concat(cardsHtml);
+      // Sort ASC for display so numbers go up left→right
+      const asc = [...this.ledgerStream].sort((a, b) => a.ledgerIndex - b.ledgerIndex);
 
+      const cardsHtml = asc.map((card) => this.buildLedgerCardHtml(card));
+      const combined = cardsHtml.concat(cardsHtml); // seamless loop
       track.innerHTML = combined.join("");
 
-      if (resetAnimation) {
-        track.classList.remove("ledger-stream-animate");
-        void track.offsetWidth;
-        track.classList.add("ledger-stream-animate");
-      } else {
-        track.classList.add("ledger-stream-animate");
-      }
+      this.applyTraceHighlights();
+      this._streamNeedsMeasure = true; // measure again after DOM update
     },
 
+    // IMPORTANT: card markup kept, but timestamp REMOVED
     buildLedgerCardHtml(card) {
-      const domClass = {
-        Payment: "ledger-card--payment",
-        Offer: "ledger-card--offer",
-        NFT: "ledger-card--nft",
-        TrustSet: "ledger-card--trust",
-        Other: "ledger-card--other",
-      }[card.dominantType] || "ledger-card--other";
+      const domClass =
+        {
+          Payment: "ledger-card--payment",
+          Offer: "ledger-card--offer",
+          NFT: "ledger-card--nft",
+          TrustSet: "ledger-card--trust",
+          Other: "ledger-card--other",
+        }[card.dominantType] || "ledger-card--other";
 
-      const timeStr = card.closeTime.toLocaleTimeString();
       const total = card.totalTx ?? 0;
       const t = card.txTypes || {};
 
-      // Use the already grouped transaction types
       const payment = t.Payment ?? 0;
       const offers = t.Offer ?? 0;
       const nfts = t.NFT ?? 0;
       const trust = t.TrustSet ?? 0;
       const other = t.Other ?? 0;
 
-      const pct = (value) =>
-        `${((value / Math.max(1, total)) * 100).toFixed(1)}%`;
+      const pct = (value) => `${((value / Math.max(1, total)) * 100).toFixed(1)}%`;
 
       return `
-        <article class="ledger-card ${domClass}">
+        <article class="ledger-card ${domClass}" data-ledger-index="${card.ledgerIndex}">
           <div class="ledger-card-inner">
             <header class="ledger-card-header">
               <div class="ledger-id">#${card.ledgerIndex.toLocaleString()}</div>
               <div class="ledger-meta">
-                <span class="ledger-time">${timeStr}</span>
+                <!-- ✅ removed timestamp entirely -->
                 <span class="ledger-tag">${card.dominantType}</span>
               </div>
             </header>
@@ -956,15 +746,11 @@
                 </div>
                 <div class="ledger-main-stat">
                   <span class="ledger-stat-label">Success</span>
-                  <span class="ledger-stat-value">
-                    ${card.successRate.toFixed(2)}%
-                  </span>
+                  <span class="ledger-stat-value">${Number(card.successRate).toFixed(2)}%</span>
                 </div>
                 <div class="ledger-main-stat">
                   <span class="ledger-stat-label">Avg Fee</span>
-                  <span class="ledger-stat-value">
-                    ${card.avgFee.toFixed(6)}
-                  </span>
+                  <span class="ledger-stat-value">${Number(card.avgFee).toFixed(6)}</span>
                 </div>
               </div>
 
@@ -1033,10 +819,864 @@
       }
     },
 
+    /* =========================
+       ✅ FIX: smooth stream animation (no jumps)
+       Right-to-left continuous
+       ========================= */
+    startStreamAnimation() {
+      if (this._streamRAF) return;
+
+      const step = (ts) => {
+        if (!this._streamLastTS) this._streamLastTS = ts;
+        const dt = Math.min(0.05, (ts - this._streamLastTS) / 1000); // clamp to prevent big leaps
+        this._streamLastTS = ts;
+
+        const track = document.getElementById("ledgerStreamTrack");
+        if (track) {
+          if (this._streamNeedsMeasure) {
+            // track contains duplicated content: width/2 is one loop
+            const full = track.scrollWidth || 0;
+            this._streamLoopWidth = Math.max(1, Math.floor(full / 2));
+            this._streamOffsetX = this._streamOffsetX % this._streamLoopWidth;
+            this._streamNeedsMeasure = false;
+          }
+
+          this._streamOffsetX += STREAM_SCROLL_PX_PER_SEC * dt;
+
+          if (this._streamOffsetX >= this._streamLoopWidth) {
+            this._streamOffsetX -= this._streamLoopWidth;
+          }
+
+          track.style.transform = `translateX(${-this._streamOffsetX}px)`;
+        }
+
+        this._streamRAF = requestAnimationFrame(step);
+      };
+
+      this._streamRAF = requestAnimationFrame(step);
+
+      // Re-measure on resize without resetting
+      window.addEventListener("resize", () => {
+        this._streamNeedsMeasure = true;
+      });
+    },
+
+    /* =========================
+       Continuity checks (gap detection)
+       ========================= */
+    checkContinuity() {
+      // We care about the newest chunk for user-facing continuity
+      const slice = this.replayHistory.slice(0, 25).map(x => x.ledgerIndex);
+      if (slice.length < 3) return;
+
+      // replayHistory is newest-first; check consecutive descending
+      let gap = null;
+      for (let i = 0; i < slice.length - 1; i++) {
+        const a = slice[i];
+        const b = slice[i + 1];
+        if (a - b > 1) {
+          gap = { from: a, to: b, missing: (a - b - 1) };
+          break;
+        }
+      }
+
+      const status = document.getElementById("d2-forensics-status");
+      if (gap) {
+        const msg = `Continuity gap: missing ${gap.missing} ledger(s) between #${gap.to.toLocaleString()} → #${gap.from.toLocaleString()}`;
+        if (status) status.textContent = `⚠️ ${msg}`;
+
+        // Optional: one-time toast (won’t spam)
+        const key = `gap|${gap.from}|${gap.to}`;
+        if (!this.lastAlerts.has(key)) {
+          this.lastAlerts.add(key);
+          if (typeof window.showNotification === "function") {
+            window.showNotification(`⚠️ ${msg}`, "warn", 4500);
+          }
+        }
+      }
+    },
+
+    /* =========================
+       Patterns & dominance panel (KEPT)
+       ========================= */
+    analyzeLedgerPatterns() {
+      const typeEl = document.getElementById("d2-dominant-type");
+      const scoreEl = document.getElementById("d2-dominance-score");
+      const barEl = document.getElementById("d2-dominance-bar");
+      const flagsEl = document.getElementById("d2-pattern-flags");
+      const explainEl = document.getElementById("d2-pattern-explain");
+
+      if (!typeEl || !scoreEl || !barEl || !flagsEl || !explainEl) return;
+
+      // Use newest-first for analysis (not display order)
+      const recent = this.ledgerStream.slice().sort((a, b) => b.ledgerIndex - a.ledgerIndex).slice(0, 6);
+
+      if (recent.length < 3) {
+        typeEl.textContent = "—";
+        scoreEl.textContent = "—";
+        barEl.style.width = "0%";
+        flagsEl.textContent = "None";
+        explainEl.textContent = "Waiting for ledgers…";
+        return;
+      }
+
+      const totals = { Payment: 0, Offer: 0, NFT: 0, TrustSet: 0, Other: 0 };
+      let totalTx = 0;
+
+      for (const l of recent) {
+        const t = l.txTypes || {};
+        for (const k of Object.keys(totals)) {
+          const v = Number(t[k] || 0);
+          totals[k] += v;
+          totalTx += v;
+        }
+      }
+
+      let dominant = "Other";
+      let max = 0;
+      for (const k of Object.keys(totals)) {
+        if (totals[k] > max) {
+          max = totals[k];
+          dominant = k;
+        }
+      }
+
+      const dominancePct = totalTx ? (max / totalTx) * 100 : 0;
+
+      let h = 0;
+      for (const k of Object.keys(totals)) {
+        const share = totalTx ? totals[k] / totalTx : 0;
+        h += share * share;
+      }
+      const concentration = Math.min(100, Math.max(0, h * 100));
+
+      const last = recent[0]?.txTypes || {};
+      let lastDom = "Other";
+      let lastMax = -1;
+      for (const k of Object.keys(totals)) {
+        const v = Number(last[k] || 0);
+        if (v > lastMax) {
+          lastMax = v;
+          lastDom = k;
+        }
+      }
+      const flip = lastDom !== dominant;
+
+      const flags = [];
+      if (dominancePct > 70) flags.push("High concentration");
+      if (concentration > 45) flags.push("Compressed mix");
+      if (dominant === "Offer" && dominancePct > 55) flags.push("Offer pressure (wash-like possible)");
+      if (dominant === "Payment" && dominancePct > 65) flags.push("Heavy routing / drain-style flow possible");
+      if (dominant === "TrustSet" && dominancePct > 40) flags.push("Trustline churn / issuer activity");
+      if (flip && dominancePct > 45) flags.push("Dominance flip");
+
+      typeEl.textContent = dominant;
+      scoreEl.textContent = `${dominancePct.toFixed(1)}%`;
+      barEl.style.width = `${Math.min(100, dominancePct)}%`;
+      flagsEl.textContent = flags.length ? flags.join(", ") : "None";
+
+      if (!totalTx) {
+        explainEl.textContent = "No transaction mix available yet.";
+      } else if (flags.includes("Dominance flip")) {
+        explainEl.textContent = `Mix shifted: last ledger led by ${lastDom}, but recent dominant is ${dominant}.`;
+      } else if (dominancePct > 70) {
+        explainEl.textContent = `One activity dominates (${dominant}) — watch for abnormal clustering or routing.`;
+      } else {
+        explainEl.textContent = `Mix appears ${concentration > 45 ? "compressed" : "balanced"} across recent ledgers.`;
+      }
+    },
+
+    /* =========================
+       Forensics: pipeline (KEPT)
+       ========================= */
+    runForensicsPipeline() {
+      const status = document.getElementById("d2-forensics-status");
+      if (!status) return;
+
+      const history = this.getWindowHistory();
+      if (history.length < 3) {
+        status.textContent = "Waiting for more ledgers…";
+        this.renderBreadcrumbs([]);
+        this.renderClusters([]);
+        this.renderNarratives([]);
+        return;
+      }
+
+      status.textContent = `Analyzing ${history.length} ledgers…`;
+
+      const flowByLedger = this.buildFlowByLedger(history);
+      const breadcrumbs = this.detectBreadcrumbs(flowByLedger, history);
+      const clusters = this.inferClusters(flowByLedger, history);
+      const narratives = this.buildDeltaNarratives(history);
+
+      this.renderBreadcrumbs(breadcrumbs);
+      this.renderClusters(clusters);
+      this.renderNarratives(narratives);
+
+      // Alerts can still fire, but stream will not jump because animation is RAF-based
+      this.emitAlerts(breadcrumbs);
+
+      // If continuity gap exists, checkContinuity() may override this text with warning (fine)
+      status.textContent = `Live signals: ${breadcrumbs.length} • clusters: ${clusters.length}`;
+    },
+
+    getWindowHistory() {
+      const base = this.replayHistory; // newest-first
+      const endLedgerIndex = this.replayIndex;
+
+      let startPos = 0;
+      if (endLedgerIndex != null) {
+        const pos = base.findIndex((x) => x.ledgerIndex === endLedgerIndex);
+        startPos = pos >= 0 ? pos : 0;
+      }
+
+      const windowSize = Math.max(5, Math.min(50, this.flowWindowSize));
+      return base.slice(startPos, startPos + windowSize);
+    },
+
+    buildFlowByLedger(history) {
+      const map = new Map();
+      for (const l of history) map.set(l.ledgerIndex, []);
+
+      let hasAny = false;
+      for (const l of history) {
+        if (Array.isArray(l.flowEdges) && l.flowEdges.length) {
+          map.set(l.ledgerIndex, l.flowEdges.slice());
+          hasAny = true;
+        }
+      }
+      if (hasAny) return map;
+
+      if (!Array.isArray(this.recentTransactions) || this.recentTransactions.length === 0) return map;
+
+      const ledgerSet = new Set(history.map((h) => h.ledgerIndex));
+      for (const tx of this.recentTransactions) {
+        if (!tx || tx.type !== "Payment") continue;
+        const li = Number(tx.ledgerIndex);
+        if (!ledgerSet.has(li)) continue;
+        if (!tx.account || !tx.destination) continue;
+        if (tx.account === tx.destination) continue;
+
+        const edges = map.get(li);
+        edges.push({
+          from: tx.account,
+          to: tx.destination,
+          amount: Number(tx.amountXRP || 0),
+          currency: "XRP",
+          hash: tx.hash || null,
+        });
+      }
+
+      return map;
+    },
+
+    detectBreadcrumbs(flowByLedger, history) {
+      const ledgers = history.map((h) => h.ledgerIndex);
+
+      const pairStats = new Map();
+      const fanOut = new Map();
+      const fanIn = new Map();
+
+      for (const li of ledgers) {
+        const edges = flowByLedger.get(li) || [];
+        const seenPairsThisLedger = new Set();
+
+        for (const e of edges) {
+          const from = e.from, to = e.to;
+          const amt = Number(e.amount || 0);
+
+          const k = `${from}|${to}`;
+          if (!seenPairsThisLedger.has(k)) {
+            seenPairsThisLedger.add(k);
+            if (!pairStats.has(k)) pairStats.set(k, { ledgers: new Set(), totalAmount: 0 });
+            pairStats.get(k).ledgers.add(li);
+          }
+          pairStats.get(k).totalAmount += amt;
+
+          if (!fanOut.has(from)) fanOut.set(from, { toSet: new Set(), ledgers: new Set(), totalAmount: 0 });
+          const fo = fanOut.get(from);
+          fo.toSet.add(to);
+          fo.ledgers.add(li);
+          fo.totalAmount += amt;
+
+          if (!fanIn.has(to)) fanIn.set(to, { fromSet: new Set(), ledgers: new Set(), totalAmount: 0 });
+          const fi = fanIn.get(to);
+          fi.fromSet.add(from);
+          fi.ledgers.add(li);
+          fi.totalAmount += amt;
+        }
+      }
+
+      const pingPong = [];
+      for (const [k] of pairStats.entries()) {
+        const [a, b] = k.split("|");
+        const rev = `${b}|${a}`;
+        if (!pairStats.has(rev)) continue;
+
+        const ledA = pairStats.get(k).ledgers;
+        const ledB = pairStats.get(rev).ledgers;
+
+        const union = new Set([...ledA, ...ledB]);
+        if (union.size < 2) continue;
+
+        pingPong.push({
+          kind: "PingPong Loop",
+          key: `${a} ⇄ ${b}`,
+          from: a,
+          to: b,
+          ledgers: [...union].sort((x, y) => y - x),
+          repeats: union.size,
+          confidence: this.confidenceScore({ stability: union.size, window: history.length, strength: 0.55 }),
+          details: `Bidirectional transfers observed across ${union.size} ledgers.`,
+        });
+      }
+
+      const list = [];
+
+      for (const [k, ps] of pairStats.entries()) {
+        const repeats = ps.ledgers.size;
+        if (repeats < 2) continue;
+
+        const [from, to] = k.split("|");
+        const stability = repeats;
+        const strength = Math.min(1, (ps.totalAmount / Math.max(1, repeats)) / 250000);
+        const confidence = this.confidenceScore({ stability, window: history.length, strength });
+
+        list.push({
+          kind: "Repeated Pair",
+          key: `${this.shortAddr(from)} → ${this.shortAddr(to)}`,
+          from,
+          to,
+          ledgers: [...ps.ledgers].sort((a, b) => b - a),
+          repeats,
+          confidence,
+          details: `Seen in ${repeats} ledgers • approx total ${ps.totalAmount.toFixed(2)} XRP`,
+        });
+      }
+
+      for (const [from, fo] of fanOut.entries()) {
+        const uniqueTo = fo.toSet.size;
+        const repeats = fo.ledgers.size;
+        if (uniqueTo >= 6 && repeats >= 2) {
+          const stability = repeats;
+          const strength = Math.min(1, uniqueTo / 14);
+          const confidence = this.confidenceScore({ stability, window: history.length, strength });
+
+          list.push({
+            kind: "Drain / Fan-out",
+            key: `${this.shortAddr(from)} ⇢ ${uniqueTo} wallets`,
+            from,
+            to: null,
+            ledgers: [...fo.ledgers].sort((a, b) => b - a),
+            repeats,
+            confidence,
+            details: `Fan-out to ${uniqueTo} unique receivers • total ${fo.totalAmount.toFixed(2)} XRP`,
+          });
+        }
+      }
+
+      for (const [to, fi] of fanIn.entries()) {
+        const uniqueFrom = fi.fromSet.size;
+        const repeats = fi.ledgers.size;
+        if (uniqueFrom >= 6 && repeats >= 2) {
+          const stability = repeats;
+          const strength = Math.min(1, uniqueFrom / 14);
+          const confidence = this.confidenceScore({ stability, window: history.length, strength });
+
+          list.push({
+            kind: "Aggregation / Fan-in",
+            key: `${uniqueFrom} wallets ⇢ ${this.shortAddr(to)}`,
+            from: null,
+            to,
+            ledgers: [...fi.ledgers].sort((a, b) => b - a),
+            repeats,
+            confidence,
+            details: `Collected from ${uniqueFrom} unique senders • total ${fi.totalAmount.toFixed(2)} XRP`,
+          });
+        }
+      }
+
+      for (const pp of pingPong) list.push(pp);
+
+      list.sort((a, b) => (b.confidence - a.confidence) || (b.repeats - a.repeats));
+
+      const top = list.slice(0, 10);
+
+      const meta = document.getElementById("d2-breadcrumb-meta");
+      if (meta) meta.textContent = `Window: ${Math.min(50, Math.max(5, this.flowWindowSize))} ledgers`;
+
+      return top;
+    },
+
+    confidenceScore({ stability, window, strength }) {
+      const s = Math.max(0, Math.min(1, (stability || 0) / Math.max(1, window || 1)));
+      const st = Math.max(0, Math.min(1, Number(strength || 0)));
+      const score = 0.65 * s + 0.35 * st;
+      return Math.round(score * 100);
+    },
+
+    inferClusters(flowByLedger, history) {
+      const nodes = new Map();
+      const ledgerPresence = new Map();
+
+      for (const h of history) {
+        const li = h.ledgerIndex;
+        const edges = flowByLedger.get(li) || [];
+        for (const e of edges) {
+          const a = e.from, b = e.to;
+          if (!a || !b) continue;
+          if (!nodes.has(a)) nodes.set(a, new Set());
+          if (!nodes.has(b)) nodes.set(b, new Set());
+          nodes.get(a).add(b);
+          nodes.get(b).add(a);
+
+          if (!ledgerPresence.has(a)) ledgerPresence.set(a, new Set());
+          if (!ledgerPresence.has(b)) ledgerPresence.set(b, new Set());
+          ledgerPresence.get(a).add(li);
+          ledgerPresence.get(b).add(li);
+        }
+      }
+
+      const visited = new Set();
+      const comps = [];
+
+      for (const addr of nodes.keys()) {
+        if (visited.has(addr)) continue;
+        const stack = [addr];
+        visited.add(addr);
+
+        const comp = new Set([addr]);
+        while (stack.length) {
+          const x = stack.pop();
+          const n = nodes.get(x);
+          if (!n) continue;
+          for (const y of n) {
+            if (visited.has(y)) continue;
+            visited.add(y);
+            comp.add(y);
+            stack.push(y);
+          }
+        }
+        comps.push(comp);
+      }
+
+      const windowSize = history.length;
+      const clusterRows = [];
+
+      for (const comp of comps) {
+        if (comp.size < 4) continue;
+
+        let sumStability = 0;
+        let coreCount = 0;
+
+        for (const a of comp) {
+          const pres = ledgerPresence.get(a);
+          const stability = pres ? pres.size : 0;
+          sumStability += stability / Math.max(1, windowSize);
+          if (stability >= Math.max(2, Math.floor(windowSize * 0.35))) coreCount += 1;
+        }
+
+        const meanStability = sumStability / comp.size;
+        const coreShare = coreCount / comp.size;
+        const persistenceScore = Math.round((0.6 * meanStability + 0.4 * coreShare) * 100);
+
+        clusterRows.push({
+          size: comp.size,
+          persistence: persistenceScore,
+          members: [...comp].slice(0, 8),
+          allMembers: [...comp],
+        });
+      }
+
+      clusterRows.sort((a, b) => (b.persistence - a.persistence) || (b.size - a.size));
+
+      const top = clusterRows.slice(0, 6);
+
+      const persEl = document.getElementById("d2-cluster-persistence");
+      if (persEl) {
+        const best = top[0]?.persistence;
+        persEl.textContent = best != null ? `${best}% (best cluster)` : "—";
+      }
+
+      return top;
+    },
+
+    buildDeltaNarratives(history) {
+      if (history.length < 2) return [];
+
+      const a = history[0];
+      const b = history[1];
+
+      const tA = a.txTypes || {};
+      const tB = b.txTypes || {};
+
+      const keys = ["Payment", "Offer", "NFT", "TrustSet", "Other"];
+      const deltas = keys.map((k) => ({
+        k,
+        a: Number(tA[k] || 0),
+        b: Number(tB[k] || 0),
+        d: Number(tA[k] || 0) - Number(tB[k] || 0),
+      }));
+
+      deltas.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+      const top = deltas.slice(0, 3);
+
+      const lines = [];
+      for (const x of top) {
+        if (x.d === 0) continue;
+        const verb = x.d > 0 ? "surged" : "collapsed";
+        const pct = x.b > 0 ? Math.round((Math.abs(x.d) / x.b) * 100) : null;
+
+        lines.push({
+          title: `${x.k} ${verb}`,
+          detail:
+            pct != null
+              ? `${x.k}: ${x.b} → ${x.a} (${pct}% change) between #${b.ledgerIndex} → #${a.ledgerIndex}`
+              : `${x.k}: ${x.b} → ${x.a} between #${b.ledgerIndex} → #${a.ledgerIndex}`,
+          ledgers: [a.ledgerIndex, b.ledgerIndex],
+        });
+      }
+
+      const dominantA = a.dominantType || this.getDominantType(tA);
+      const dominantB = b.dominantType || this.getDominantType(tB);
+      if (dominantA !== dominantB) {
+        lines.unshift({
+          title: "Dominance flip",
+          detail: `Dominant activity changed ${dominantB} → ${dominantA} (#${b.ledgerIndex} → #${a.ledgerIndex}).`,
+          ledgers: [a.ledgerIndex, b.ledgerIndex],
+        });
+      }
+
+      return lines.slice(0, 6);
+    },
+
+    renderBreadcrumbs(items) {
+      const list = document.getElementById("d2-breadcrumb-list");
+      if (!list) return;
+
+      if (!Array.isArray(items) || items.length === 0) {
+        list.innerHTML = `<div class="widget-label">No stable fingerprints yet.</div>`;
+        return;
+      }
+
+      list.innerHTML = items
+        .map((x, idx) => {
+          const badge =
+            x.confidence >= 80 ? "badge-good" :
+            x.confidence >= 60 ? "badge-warn" : "badge-warn";
+
+          const ledgers = (x.ledgers || []).slice(0, 6).map((n) => `#${n}`).join(", ");
+          return `
+            <div class="gateway-item d2-bc-item" data-bc-index="${idx}" title="Click to trace-highlight ledgers">
+              <div style="width:100%;">
+                <div class="d2-bc-row">
+                  <div>
+                    <strong>${x.kind}</strong>
+                    <div class="widget-label">${x.key}</div>
+                    <div class="d2-bc-sub">${x.details}</div>
+                    <div class="d2-bc-sub">Ledgers: ${ledgers}${(x.ledgers || []).length > 6 ? "…" : ""}</div>
+                  </div>
+                  <div style="text-align:right;">
+                    <div class="widget-label ${badge}" style="display:inline-block; padding:4px 8px; border-radius:999px;">
+                      ${x.confidence}% conf
+                    </div>
+                    <div class="d2-bc-sub">repeats: ${x.repeats}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const nodes = list.querySelectorAll(".d2-bc-item[data-bc-index]");
+      nodes.forEach((node) => {
+        node.addEventListener("click", () => {
+          const i = Number(node.getAttribute("data-bc-index"));
+          const x = items[i];
+          if (!x) return;
+          this.selectTraceLedgers(new Set(x.ledgers || []));
+        });
+      });
+    },
+
+    renderClusters(items) {
+      const list = document.getElementById("d2-cluster-list");
+      if (!list) return;
+
+      if (!Array.isArray(items) || items.length === 0) {
+        list.innerHTML = `<div class="widget-label">No clusters detected in this window.</div>`;
+        return;
+      }
+
+      list.innerHTML = items
+        .map((c, idx) => {
+          const badge =
+            c.persistence >= 80 ? "badge-good" :
+            c.persistence >= 60 ? "badge-warn" : "badge-warn";
+
+          const members = (c.members || []).map((m) => this.shortAddr(m)).join(", ");
+          return `
+            <div class="gateway-item d2-bc-item" data-cluster-index="${idx}" title="Click to trace-highlight ledgers involving this cluster">
+              <div style="width:100%;">
+                <div class="d2-bc-row">
+                  <div>
+                    <strong>Cluster #${idx + 1}</strong>
+                    <div class="widget-label">size: ${c.size} • members: ${members}${(c.allMembers || []).length > 8 ? "…" : ""}</div>
+                    <div class="d2-bc-sub">Persistence estimates how consistently this group appears in the selected window.</div>
+                  </div>
+                  <div style="text-align:right;">
+                    <div class="widget-label ${badge}" style="display:inline-block; padding:4px 8px; border-radius:999px;">
+                      ${c.persistence}% persist
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const nodes = list.querySelectorAll(".d2-bc-item[data-cluster-index]");
+      nodes.forEach((node) => {
+        node.addEventListener("click", () => {
+          const i = Number(node.getAttribute("data-cluster-index"));
+          const c = items[i];
+          if (!c) return;
+
+          const windowHistory = this.getWindowHistory();
+          const ledgerSet = new Set(windowHistory.map((h) => h.ledgerIndex));
+          const members = new Set(c.allMembers || []);
+
+          const hitLedgers = new Set();
+          for (const tx of this.recentTransactions || []) {
+            if (!tx) continue;
+            const li = Number(tx.ledgerIndex);
+            if (!ledgerSet.has(li)) continue;
+            if (tx.type !== "Payment") continue;
+            if (members.has(tx.account) || members.has(tx.destination)) {
+              hitLedgers.add(li);
+            }
+          }
+          this.selectTraceLedgers(hitLedgers);
+        });
+      });
+    },
+
+    renderNarratives(items) {
+      const list = document.getElementById("d2-delta-narratives");
+      if (!list) return;
+
+      if (!Array.isArray(items) || items.length === 0) {
+        list.innerHTML = `<div class="widget-label">No deltas yet.</div>`;
+        return;
+      }
+
+      list.innerHTML = items
+        .map((n) => {
+          const led = (n.ledgers || []).map((x) => `#${x}`).join(", ");
+          return `
+            <div class="gateway-item d2-bc-item" title="Click to trace-highlight ledgers">
+              <div style="width:100%;">
+                <div class="d2-bc-row">
+                  <div>
+                    <strong>${n.title}</strong>
+                    <div class="widget-label">${n.detail}</div>
+                    <div class="d2-bc-sub">Ledgers: ${led}</div>
+                  </div>
+                  <div style="text-align:right;">
+                    <span class="widget-label badge-warn" style="display:inline-block; padding:4px 8px; border-radius:999px;">Delta</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const nodes = list.querySelectorAll(".d2-bc-item");
+      nodes.forEach((node, idx) => {
+        node.addEventListener("click", () => {
+          const n = items[idx];
+          if (!n) return;
+          this.selectTraceLedgers(new Set(n.ledgers || []));
+        });
+      });
+    },
+
+    emitAlerts(breadcrumbs) {
+      if (!Array.isArray(breadcrumbs) || breadcrumbs.length === 0) return;
+
+      const min = this.alertFingerprintMin;
+      for (const b of breadcrumbs) {
+        if ((b.repeats || 0) < min) continue;
+
+        const key = `${b.kind}|${b.key}|${b.repeats}`;
+        if (this.lastAlerts.has(key)) continue;
+        this.lastAlerts.add(key);
+
+        if (this.lastAlerts.size > 80) {
+          this.lastAlerts = new Set(Array.from(this.lastAlerts).slice(-60));
+        }
+
+        const msg = `🚨 Forensics Alert: ${b.kind} (${b.key}) repeated in ${b.repeats} ledgers • ${b.confidence}% confidence`;
+        if (typeof window.showNotification === "function") {
+          // Stream won’t jump now because we aren’t toggling CSS animation
+          window.showNotification(msg, "warn", 4500);
+        } else {
+          console.warn(msg);
+        }
+      }
+    },
+
+    selectTraceLedgers(set) {
+      this.selectedTraceLedgers = set instanceof Set ? set : new Set();
+      this.applyTraceHighlights();
+    },
+
+    clearTrace() {
+      this.selectedTraceLedgers = new Set();
+      this.applyTraceHighlights();
+    },
+
+    applyTraceHighlights() {
+      const cards = document.querySelectorAll(".ledger-card[data-ledger-index]");
+      if (!cards.length) return;
+      cards.forEach((c) => {
+        const li = Number(c.getAttribute("data-ledger-index"));
+        const on = this.selectedTraceLedgers.has(li);
+        c.classList.toggle("is-trace", !!on);
+      });
+    },
+
+    updateReplayUI() {
+      const slider = document.getElementById("d2-replay-slider");
+      const label = document.getElementById("d2-replay-label");
+      if (!slider || !label) return;
+
+      const max = Math.max(0, this.replayHistory.length - 1);
+      slider.max = String(max);
+
+      if (this.replayIndex == null) {
+        slider.value = "0";
+        label.textContent = "LIVE";
+        this.renderLiveStreamFromHistory();
+        return;
+      }
+
+      const pos = this.replayHistory.findIndex((x) => x.ledgerIndex === this.replayIndex);
+      if (pos < 0) {
+        this.replayIndex = null;
+        slider.value = "0";
+        label.textContent = "LIVE";
+        this.renderLiveStreamFromHistory();
+        return;
+      }
+
+      slider.value = String(pos);
+      label.textContent = `#${this.replayIndex.toLocaleString()}`;
+    },
+
+    renderLiveStreamFromHistory() {
+      this.ledgerStream = this.replayHistory.slice(0, MAX_STREAM_LEDGERS);
+      this.renderLedgerStreamTrack();
+    },
+
+    renderReplayStream() {
+      if (this.replayIndex == null) {
+        this.renderLiveStreamFromHistory();
+        return;
+      }
+
+      const pos = this.replayHistory.findIndex((x) => x.ledgerIndex === this.replayIndex);
+      if (pos < 0) {
+        this.renderLiveStreamFromHistory();
+        return;
+      }
+
+      this.ledgerStream = this.replayHistory.slice(pos, pos + MAX_STREAM_LEDGERS);
+      this.renderLedgerStreamTrack();
+    },
+
+    exportForensicReport(format) {
+      const history = this.getWindowHistory();
+      if (!history.length) return;
+
+      const flowByLedger = this.buildFlowByLedger(history);
+      const breadcrumbs = this.detectBreadcrumbs(flowByLedger, history);
+      const clusters = this.inferClusters(flowByLedger, history);
+      const narratives = this.buildDeltaNarratives(history);
+
+      const payload = {
+        generatedAt: new Date().toISOString(),
+        mode: this.replayIndex == null ? "live" : "replay",
+        replayLedger: this.replayIndex,
+        windowSize: Math.min(50, Math.max(5, this.flowWindowSize)),
+        alertFingerprintMin: this.alertFingerprintMin,
+        ledgers: history.map((h) => ({
+          ledgerIndex: h.ledgerIndex,
+          closeTime: h.closeTime instanceof Date ? h.closeTime.toISOString() : String(h.closeTime || ""),
+          totalTx: h.totalTx,
+          avgFee: h.avgFee,
+          successRate: h.successRate,
+          txTypes: h.txTypes,
+          dominantType: h.dominantType,
+        })),
+        breadcrumbs,
+        clusters,
+        narratives,
+      };
+
+      if (format === "json") {
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        this.downloadBlob(blob, `naluxrp-forensics-${Date.now()}.json`);
+        return;
+      }
+
+      if (format === "csv") {
+        const rows = [];
+        rows.push(["kind", "key", "repeats", "confidence", "ledgers", "details"].join(","));
+        for (const b of breadcrumbs) {
+          rows.push([
+            this.csvEscape(b.kind),
+            this.csvEscape(b.key),
+            String(b.repeats || 0),
+            String(b.confidence || 0),
+            this.csvEscape((b.ledgers || []).join(" ")),
+            this.csvEscape(b.details || ""),
+          ].join(","));
+        }
+        const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+        this.downloadBlob(blob, `naluxrp-breadcrumbs-${Date.now()}.csv`);
+      }
+    },
+
+    downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+
+    csvEscape(s) {
+      const str = String(s ?? "");
+      if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+      return str;
+    },
+
+    shortAddr(addr) {
+      if (!addr || typeof addr !== "string") return "—";
+      if (addr.length <= 12) return addr;
+      return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+    },
+
     updateConnectionState(isConnected, serverInfo) {
       const dot = document.getElementById("connDot");
       const text = document.getElementById("connText");
-      
       if (!dot || !text) return;
 
       if (isConnected) {
@@ -1048,9 +1688,10 @@
         text.textContent = "Connecting...";
         text.style.color = "#ffb86c";
       }
-    }
+    },
   };
 
+  // Expose dashboard renderer + API
   window.renderDashboard = () => Dashboard.render();
   window.NaluDashboard = {
     applyXRPLState: (state) => Dashboard.applyXRPLState(state),
@@ -1058,88 +1699,11 @@
     updateConnectionState: (isConnected, serverInfo) => Dashboard.updateConnectionState(isConnected, serverInfo),
   };
 
-  // SIMPLIFIED state mapping - direct pass-through
-  function mapXRPLStateToDashboardState(s) {
-    if (!s) return null;
-
-    console.log("🔄 Dashboard: Raw XRPL state received:", {
-      ledgerIndex: s.ledgerIndex,
-      tps: s.tps,
-      txnPerSec: s.txnPerSec,
-      txPerLedger: s.txPerLedger,
-      txnPerLedger: s.txnPerLedger,
-      avgFee: s.avgFee,
-      feeAvg: s.feeAvg,
-      loadFactor: s.loadFactor,
-      loadFee: s.loadFee,
-      validators: s.validators,
-      txTypes: s.txTypes,
-      transactionTypes: s.transactionTypes
-    });
-
-    // Direct mapping with minimal transformation
-    const dashboardState = {
-      // Core metrics - direct mapping with fallbacks
-      ledgerIndex: s.ledgerIndex || 0,
-      ledgerAge: s.ledgerAge || "just now",
-      tps: s.tps != null ? s.tps : (s.txnPerSec != null ? s.txnPerSec : 0),
-      tpsTrend: s.tpsTrend || "Live",
-      avgFee: s.avgFee != null ? s.avgFee : (s.feeAvg != null ? s.feeAvg : 0.00001),
-      txPerLedger: s.txPerLedger != null ? s.txPerLedger : (s.txnPerLedger != null ? s.txnPerLedger : 0),
-      loadFactor: s.loadFactor != null ? s.loadFactor : (s.loadFee != null ? s.loadFee : 1.0),
-      
-      // Validators
-      validators: s.validators || { total: 0, healthy: 0, missed: 0, geoDiversity: "Global" },
-      
-      // Additional fields
-      txSpread: s.txSpread || "Normal",
-      loadNote: s.loadNote || "Normal",
-      closeTimes: s.closeTimes || [],
-      txTypes: s.txTypes || s.transactionTypes || {},
-      
-      // Additional sections with placeholder data
-      amm: s.amm || { pools: 0, volume24h: 0, escrows: 0, escrowXRP: 0 },
-      trustlines: s.trustlines || { new24h: 0, removed24h: 0, issuers: 0, growthPct: 0 },
-      nfts: s.nfts || { minted: 0, burned: 0, trades24h: 0 },
-      whales: s.whales || [],
-      latency: s.latency || { avgMs: 0, fastShare: 0.7, mediumShare: 0.2, slowShare: 0.1 },
-      orderbook: s.orderbook || ["XRP/USD", "XRP/EUR", "XRP/JPY"],
-      gateways: s.gateways || [],
-      
-      // Latest ledger - CRITICAL: ensure this has proper transaction data
-      latestLedger: s.latestLedger || {
-        ledgerIndex: s.ledgerIndex || 0,
-        closeTime: s.ledgerTime || new Date(),
-        totalTx: s.txPerLedger != null ? s.txPerLedger : (s.txnPerLedger != null ? s.txnPerLedger : 0),
-        txTypes: s.txTypes || s.transactionTypes || {},
-        avgFee: s.avgFee != null ? s.avgFee : (s.feeAvg != null ? s.feeAvg : 0.00001),
-        successRate: 99.9,
-      },
-    };
-
-    console.log("🔄 Dashboard: Mapped state to send:", {
-      ledgerIndex: dashboardState.ledgerIndex,
-      tps: dashboardState.tps,
-      txPerLedger: dashboardState.txPerLedger,
-      loadFactor: dashboardState.loadFactor,
-      txTypes: dashboardState.txTypes,
-      latestLedgerTxTypes: dashboardState.latestLedger.txTypes
-    });
-
-    return dashboardState;
-  }
-
-  // Event listeners
+  // Event listeners remain compatible with your connection module
   window.addEventListener("xrpl-ledger", (ev) => {
     try {
-      console.log("📨 Dashboard: Received xrpl-ledger event", ev.detail);
-      const s = ev.detail;
-      const mapped = mapXRPLStateToDashboardState(s);
-      if (mapped && window.NaluDashboard) {
-        window.NaluDashboard.applyXRPLState(mapped);
-      } else {
-        console.error("❌ Dashboard: NaluDashboard not available or no mapped state");
-      }
+      const detail = ev.detail || {};
+      if (window.NaluDashboard) window.NaluDashboard.applyXRPLState(detail);
     } catch (e) {
       console.error("❌ Dashboard: Error applying xrpl-ledger to dashboard", e);
     }
@@ -1149,7 +1713,7 @@
     const dot = document.getElementById("connDot");
     const text = document.getElementById("connText");
     if (!dot || !text) return;
-    
+
     const d = ev.detail || {};
     if (d.connected) {
       dot.classList.add("live");
@@ -1162,5 +1726,5 @@
     }
   });
 
-  console.log("📊 NaluXrp Dashboard V2 FIXED loaded");
+  console.log("📊 NaluXrp Dashboard V2 FORENSICS loaded (stream preserved, ordering fixed, time removed, smooth flow)");
 })();
