@@ -153,17 +153,9 @@
   font-size: 1.5em;
 }
 
-/* Shared widget card */
-.widget-card {
-  background: var(--card-bg);
-  border: 2px solid var(--accent-tertiary);
-  border-radius: 15px;
-  padding: 18px 20px;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.25);
-  width: 100%;
-  box-sizing: border-box;
-}
+/* Use the centralized .card/.widget-card for widget visuals; keep widget-specific layout here */
 
+/* Widget header/body */
 .widget-header {
   display: flex;
   align-items: center;
@@ -299,18 +291,13 @@
   will-change: transform;
 }
 
-/* 40s loop for slow movement */
+/* Apply animation class (keyframes are defined in components/animations.css) */
 .ledger-stream-animate {
   animation: ledgerConveyorMove 40s linear infinite;
 }
 
 .ledger-stream-shell:hover .ledger-stream-animate {
   animation-play-state: paused;
-}
-
-@keyframes ledgerConveyorMove {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
 }
 
 /* Particles underneath */
@@ -333,25 +320,9 @@
   animation: ledgerParticleDrift linear infinite;
 }
 
-@keyframes ledgerParticleDrift {
-  from { transform: translateY(0) translateX(0); opacity: 0.25; }
-  to   { transform: translateY(-40px) translateX(-40px); opacity: 0; }
-}
-
-/* Ledger cards */
+/* Ledger cards — base properties moved to components/card.css; keep ledger-specific extras below */
 .ledger-card {
   position: relative;
-  width: 420px;
-  min-width: 420px;
-  background:
-    radial-gradient(circle at top left, rgba(255,255,255,0.04), transparent 55%),
-    var(--bg-secondary);
-  border-radius: 18px;
-  padding: 1px;
-  overflow: hidden;
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.04),
-    0 10px 30px rgba(0,0,0,0.7);
   transform: translateZ(0);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
   z-index: 1;
@@ -359,10 +330,10 @@
 
 .ledger-card:hover {
   transform: translateY(-6px);
-  box-shadow: 0 18px 45px rgba(0,0,0,0.9);
   filter: saturate(1.15);
 }
 
+/* Inner content */
 .ledger-card-inner {
   background:
     radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 60%),
@@ -759,7 +730,7 @@
   }
 }
 
-/* Extra animations */
+/* Extra animations (kept small; shared ones are in components/animations.css) */
 @keyframes fadeSlideIn {
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
