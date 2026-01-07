@@ -1,10 +1,11 @@
 // =======================================================
-// navbar.js – FIXED + Mobile Friendly + Stable
-// Option A: Full-width slide-down menu with accordion dropdowns
+// navbar.js – STABLE + MOBILE FRIENDLY + OVERLAY SAFE
+// Fixes notification / forensic overlay blocking issues
 // =======================================================
 
 document.addEventListener("DOMContentLoaded", () => {
   initNavbar();
+  injectNavbarSafetyStyles();
 });
 
 /* ------------------------------------------------------
@@ -18,7 +19,7 @@ function initNavbar() {
 }
 
 /* ------------------------------------------------------
-   FIXED: Handle navigation WITHOUT overwriting dropdowns
+   PAGE NAVIGATION (SAFE)
 ------------------------------------------------------ */
 function setupNavLinks() {
   document.querySelectorAll("[data-page]").forEach(btn => {
@@ -27,6 +28,8 @@ function setupNavLinks() {
       if (!page) return;
 
       e.preventDefault();
+      e.stopPropagation();
+
       navigateToPage(page);
 
       // Close mobile menu after navigating
@@ -41,7 +44,7 @@ function navigateToPage(pageId) {
   if (typeof window.switchPage === "function") {
     window.switchPage(pageId);
   } else {
-    console.error("switchPage() not found!");
+    console.error("❌ switchPage() not found!");
   }
 }
 
@@ -55,18 +58,20 @@ function setupHamburger() {
   if (!hamburger || !navLinks) return;
 
   hamburger.addEventListener("click", e => {
+    e.preventDefault();
     e.stopPropagation();
+
     hamburger.classList.toggle("active");
     navLinks.classList.toggle("show");
     document.body.classList.toggle("mobile-menu-open");
   });
 
-  // Tap outside closes menu
+  // Tap outside closes menu (mobile only)
   document.addEventListener("click", e => {
-    if (window.innerWidth <= 992) {
-      if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
-        closeMobileMenu();
-      }
+    if (window.innerWidth > 992) return;
+
+    if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
+      closeMobileMenu();
     }
   });
 }
@@ -89,20 +94,20 @@ function setupDropdowns() {
 
   dropdownToggles.forEach(toggle => {
     toggle.addEventListener("click", e => {
-      // Desktop: allow hover default behavior
+      // Desktop: allow CSS hover
       if (window.innerWidth > 992) return;
 
       e.preventDefault();
       e.stopPropagation();
 
       const parent = toggle.closest(".nav-dropdown");
+      if (!parent) return;
 
       // Close other dropdowns
-      document.querySelectorAll(".nav-dropdown").forEach(d => {
+      document.querySelectorAll(".nav-dropdown.active").forEach(d => {
         if (d !== parent) d.classList.remove("active");
       });
 
-      // Toggle current
       parent.classList.toggle("active");
     });
   });
@@ -110,7 +115,6 @@ function setupDropdowns() {
 
 /* ------------------------------------------------------
    DESKTOP: Scroll-hide Navbar
-   (Disabled on mobile)
 ------------------------------------------------------ */
 function setupScrollHideDesktop() {
   const navbar = document.getElementById("navbar");
@@ -119,7 +123,7 @@ function setupScrollHideDesktop() {
   let lastScrollY = window.scrollY;
 
   window.addEventListener("scroll", () => {
-    if (window.innerWidth <= 992) return; // ❗ disable on mobile
+    if (window.innerWidth <= 992) return;
 
     const currentY = window.scrollY;
 
@@ -134,9 +138,53 @@ function setupScrollHideDesktop() {
 }
 
 /* ------------------------------------------------------
+   🔥 CRITICAL FIX: OVERLAY / NOTIFICATION SAFETY
+------------------------------------------------------ */
+function injectNavbarSafetyStyles() {
+  if (document.getElementById("navbar-safety-styles")) return;
+
+  const style = document.createElement("style");
+  style.id = "navbar-safety-styles";
+  style.textContent = `
+    /* Ensure navbar always remains clickable */
+    .navbar,
+    #navbar {
+      position: relative;
+      z-index: 10000;
+      pointer-events: auto;
+    }
+
+    /* Notifications must NEVER block nav interactions */
+    .notification-container,
+    .notifications,
+    .toast-container,
+    .toast-wrapper,
+    .toasts,
+    #notifications {
+      pointer-events: none !important;
+      z-index: 9000 !important;
+    }
+
+    /* Allow clicks INSIDE notification cards only */
+    .notification,
+    .toast {
+      pointer-events: auto !important;
+    }
+
+    /* Dropdown menus explicitly interactive */
+    .nav-dropdown,
+    .nav-dropdown * {
+      pointer-events: auto;
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
+/* ------------------------------------------------------
    EXPORT
 ------------------------------------------------------ */
 window.navigateToPage = navigateToPage;
 window.closeMobileMenu = closeMobileMenu;
 
-console.log("✅ Navbar module loaded (Fully Mobile Friendly)");
+console.log("✅ Navbar module loaded (overlay-safe, dropdown-safe)");
