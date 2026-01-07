@@ -128,10 +128,7 @@
     <section id="dashboard" class="page-section active"></section>
     <section id="validators" class="page-section"></section>
     <section id="tokens" class="page-section"></section>
-
-    <!-- ✅ Make sure the AMM section exists -->
     <section id="amm" class="page-section"></section>
-
     <section id="analytics" class="page-section"></section>
     <section id="explorer" class="page-section"></section>
     <section id="nfts" class="page-section"></section>
@@ -148,7 +145,7 @@
   <!-- UI (defines switchPage + landing) -->
   <script src="js/ui.js"></script>
 
-  <!-- XRPL connection (should emit events / set window.XRPL) -->
+  <!-- XRPL connection (dashboard can keep using this) -->
   <script src="js/xrpl-connection.js"></script>
 
   <!-- Dashboard (module) -->
@@ -157,7 +154,7 @@
   <!-- ✅ Modular AMM -->
   <script type="module" src="js/amm/index.js"></script>
 
-  <!-- Other modules (keep if they exist in your project) -->
+  <!-- Other modules -->
   <script src="js/validators.js"></script>
   <script src="js/tokens.js"></script>
   <script src="js/token-distribution.js"></script>
