@@ -43,7 +43,8 @@
   color: rgba(255,255,255,0.45);
 }
 
-/* Grid + cards */
+/* Grid + cards — base card visuals moved to css/components/card.css
+   Keep layout and validator-specific visual accents here. */
 .validators-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -53,18 +54,14 @@
 
 .validator-card {
   position: relative;
-  background: radial-gradient(circle at top left, rgba(255,215,128,0.12), transparent),
-              var(--card-bg, rgba(0,0,0,0.55));
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.12);
-  padding: 12px 12px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  box-shadow: 0 12px 25px rgba(0,0,0,0.35);
+  /* exclusive validator tweaks (radial highlights, backdrop) can remain here */
   backdrop-filter: blur(12px);
 }
 
+/* Hover tweaks remain specific */
 .validator-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 32px rgba(0,0,0,0.45);
