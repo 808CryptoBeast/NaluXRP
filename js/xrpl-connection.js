@@ -43,19 +43,7 @@ window.XRPL = {
   },
   mode: "connecting",
   modeReason: "Initializing",
-  network: "xrpl-mainnet",
-
-  // Queue to ensure sequential ledger processing
-  ledgerQueue: [],           // ascending list of ledger indices to process
-  ledgerProcessing: false,   // true while queue processing is active
-  serverInfoHintMap: {},     // optional map ledgerIndex -> serverInfoHint
-
-  // Queue metrics
-  queueMetrics: {
-    processedCount: 0,
-    lastError: null,
-    maxLength: 0
-  }
+  network: "xrpl-mainnet"
 };
 
 /* ---------- CONSTANTS ---------- */
@@ -273,103 +261,6 @@ function setXRPLNetwork(networkId) {
   });
 }
 
-/* ---------- LEDGER QUEUE (NEW) ---------- */
-
-/**
- * Add a ledger index to the processing queue (unique, ascending)
- */
-function enqueueLedger(ledgerIndex, serverInfoHint = null) {
-  if (!Number.isFinite(ledgerIndex)) return;
-  ledgerIndex = Number(ledgerIndex);
-  if (ledgerIndex <= window.XRPL.lastLedgerIndex) {
-    // already processed
-    return;
-  }
-  if (!Array.isArray(window.XRPL.ledgerQueue)) window.XRPL.ledgerQueue = [];
-
-  if (window.XRPL.ledgerQueue.indexOf(ledgerIndex) !== -1) {
-    // already queued
-    return;
-  }
-
-  window.XRPL.ledgerQueue.push(ledgerIndex);
-  window.XRPL.ledgerQueue.sort((a, b) => a - b);
-
-  if (serverInfoHint) {
-    window.XRPL.serverInfoHintMap = window.XRPL.serverInfoHintMap || {};
-    window.XRPL.serverInfoHintMap[ledgerIndex] = serverInfoHint;
-  }
-
-  // track max queue length metric
-  if (window.XRPL.queueMetrics) {
-    window.XRPL.queueMetrics.maxLength = Math.max(window.XRPL.queueMetrics.maxLength, window.XRPL.ledgerQueue.length);
-    window.XRPL.queueMetrics.lastError = null;
-  }
-
-  // Broadcast queue update
-  window.dispatchEvent(new CustomEvent('xrpl-queue', { detail: { length: window.XRPL.ledgerQueue.length } }));
-
-  // Start processing asynchronously
-  processLedgerQueue().catch((e) => {
-    console.warn("Ledger queue processing error:", e && e.message ? e.message : e);
-  });
-}
-
-/**
- * Process queued ledgers sequentially. Attempts to fill gaps
- * by trying lastLedgerIndex + 1 first. If fetch fails, re-queues and stops.
- */
-async function processLedgerQueue() {
-  if (window.XRPL.ledgerProcessing) return;
-  window.XRPL.ledgerProcessing = true;
-  try {
-    while (window.XRPL.ledgerQueue && window.XRPL.ledgerQueue.length) {
-      // smallest queued ledger
-      const nextQueued = window.XRPL.ledgerQueue[0];
-      // If already processed, remove and continue
-      if (nextQueued <= window.XRPL.lastLedgerIndex) {
-        window.XRPL.ledgerQueue.shift();
-        continue;
-      }
-
-      // Prefer to process lastLedgerIndex + 1 (fill gaps)
-      const toProcess = window.XRPL.lastLedgerIndex + 1 <= nextQueued
-        ? window.XRPL.lastLedgerIndex + 1
-        : nextQueued;
-
-      // remove the toProcess from queue if present
-      const idx = window.XRPL.ledgerQueue.indexOf(toProcess);
-      if (idx !== -1) window.XRPL.ledgerQueue.splice(idx, 1);
-
-      const hint = (window.XRPL.serverInfoHintMap && window.XRPL.serverInfoHintMap[toProcess]) || null;
-      try {
-        await fetchAndProcessLedger(toProcess, hint);
-        if (window.XRPL.queueMetrics) {
-          window.XRPL.queueMetrics.processedCount += 1;
-        }
-        // Broadcast queue update after processing
-        window.dispatchEvent(new CustomEvent('xrpl-queue', { detail: { length: window.XRPL.ledgerQueue.length } }));
-      } catch (e) {
-        console.warn("Processing ledger", toProcess, "failed:", e && e.message ? e.message : e);
-        if (window.XRPL.queueMetrics) {
-          window.XRPL.queueMetrics.lastError = e && e.message ? e.message : String(e);
-        }
-        // Re-queue the failed ledger for a retry later (but avoid duplicates)
-        if (toProcess > window.XRPL.lastLedgerIndex) {
-          if (window.XRPL.ledgerQueue.indexOf(toProcess) === -1) {
-            window.XRPL.ledgerQueue.push(toProcess);
-            window.XRPL.ledgerQueue.sort((a, b) => a - b);
-          }
-        }
-        // stop processing further until next round (prevents busy loop)
-        break;
-      }
-    }
-  } finally {
-    window.XRPL.ledgerProcessing = false;
-  }
-}
-
 /* ---------- MAIN CONNECTION ---------- */
 
 async function connectXRPL() {
@@ -541,8 +432,7 @@ async function checkForNewLedger() {
 
     if (currentLedger > window.XRPL.lastLedgerIndex) {
       console.log("🆕 New ledger:", "#" + currentLedger);
-      // enqueue instead of direct fetch to ensure ordered processing
-      enqueueLedger(currentLedger, info);
+      await fetchAndProcessLedger(currentLedger, info);
     } else {
       window.XRPL.lastLedgerTime = Date.now();
     }
@@ -560,15 +450,6 @@ async function checkForNewLedger() {
 /* ---------- FETCH & PROCESS LEDGER ---------- */
 
 async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
-  // Guard: avoid re-processing ledgers that were already completed.
-  if (!Number.isFinite(ledgerIndex)) return;
-  ledgerIndex = Number(ledgerIndex);
-
-  if (ledgerIndex <= window.XRPL.lastLedgerIndex) {
-    // Already processed or reserved
-    return;
-  }
-
   if (!window.XRPL.client) return;
 
   try {
@@ -588,35 +469,8 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
 
     const ledgerData = ledgerResp.result.ledger;
     if (!ledgerData) {
-      console.warn("⚠️ No ledger data in response for", ledgerIndex);
+      console.warn("⚠️ No ledger data in response");
       return;
-    }
-
-    // Verify server returned the ledger we requested. Some servers may respond with a nearby ledger.
-    const fetchedIndex = Number(ledgerData.ledger_index || ledgerIndex);
-    if (fetchedIndex !== ledgerIndex) {
-      console.warn(`⚠️ Fetched ledger index mismatch: requested=${ledgerIndex}, fetched=${fetchedIndex}`);
-
-      // If server returned a future ledger, enqueue it so it will be processed in order later
-      if (fetchedIndex > window.XRPL.lastLedgerIndex) {
-        enqueueLedger(fetchedIndex, serverInfoHint);
-      }
-
-      // Re-queue the originally requested ledger for retry and stop processing this response
-      if (ledgerIndex > window.XRPL.lastLedgerIndex) {
-        if (window.XRPL.ledgerQueue.indexOf(ledgerIndex) === -1) {
-          window.XRPL.ledgerQueue.push(ledgerIndex);
-          window.XRPL.ledgerQueue.sort((a, b) => a - b);
-        }
-      }
-
-      // Surface metrics and stop processing this mismatched response
-      if (window.XRPL.queueMetrics) {
-        window.XRPL.queueMetrics.lastError = `mismatch requested=${ledgerIndex} fetched=${fetchedIndex}`;
-      }
-
-      // Throw so the caller (processLedgerQueue) can handle requeue / backoff
-      throw new Error(`Fetched unexpected ledger index (${fetchedIndex})`);
     }
 
     console.log("📊 Ledger data structure:", {
@@ -699,29 +553,13 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
       );
     }
 
-    // ---- Deep analytics: append normalized per-transaction data (dedupe by hash) ----
+    // ---- Deep analytics: append normalized per-transaction data ----
     const normalizedBatch = txMetrics.normalized || [];
     if (!Array.isArray(s.recentTransactions)) {
       s.recentTransactions = [];
     }
     if (normalizedBatch.length) {
-      // Create a small hash set of existing recent tx hashes for dedupe
-      const existingHashes = new Set();
-      for (let i = Math.max(0, s.recentTransactions.length - RAW_TX_WINDOW_SIZE); i < s.recentTransactions.length; i++) {
-        const t = s.recentTransactions[i];
-        if (t && t.hash) existingHashes.add(t.hash);
-      }
-      for (let i = 0; i < normalizedBatch.length; i++) {
-        const t = normalizedBatch[i];
-        if (!t || !t.hash) {
-          s.recentTransactions.push(t);
-          continue;
-        }
-        if (!existingHashes.has(t.hash)) {
-          s.recentTransactions.push(t);
-          existingHashes.add(t.hash);
-        }
-      }
+      Array.prototype.push.apply(s.recentTransactions, normalizedBatch);
       if (s.recentTransactions.length > RAW_TX_WINDOW_SIZE) {
         s.recentTransactions.splice(
           0,
@@ -782,8 +620,7 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
     // ---- Push updated state to dashboard + analytics ----
     sendStateToDashboard();
   } catch (error) {
-    console.warn("Fetch ledger error:", error && error.message ? error.message : error);
-    throw error; // Let callers handle re-queuing / retry
+    console.warn("Fetch ledger error:", error.message);
   }
 }
 
@@ -1026,8 +863,7 @@ function setupConnectionListeners() {
       const idx = Number(ledger.ledger_index);
       if (!idx || idx <= window.XRPL.lastLedgerIndex) return;
       console.log("📨 ledgerClosed event:", idx);
-      // enqueue instead of direct fetch to ensure ordered sequential processing
-      enqueueLedger(idx, null);
+      fetchAndProcessLedger(idx, null);
     } catch (e) {
       console.warn("Ledger closed handler error:", e.message);
     }
@@ -1059,11 +895,12 @@ function handleDisconnection() {
   updateConnectionStatus(false, "Disconnected");
   dispatchConnectionEvent();
 
-  // Always reconnect with jittered backoff
+  // Always reconnect
   window.XRPL.reconnectAttempts += 1;
-  const base = Math.min(3000 * window.XRPL.reconnectAttempts, 10000);
-  const jitter = Math.floor(Math.random() * 1000);
-  const delay = base + jitter;
+  const delay = Math.min(
+    3000 * window.XRPL.reconnectAttempts,
+    10000
+  );
 
   console.log(
     "🔄 Reconnecting in",
@@ -1091,11 +928,10 @@ function handleConnectionFailure() {
   updateConnectionStatus(false, "Retrying...");
   setMode("connecting", "All servers failed, retrying");
 
-  // Exponential backoff with jitter
-  window.XRPL.reconnectAttempts += 1;
-  const base = Math.min(5000 * window.XRPL.reconnectAttempts, 30000);
-  const jitter = Math.floor(Math.random() * 2000);
-  const delay = base + jitter;
+  const delay = Math.min(
+    5000 * (window.XRPL.reconnectAttempts + 1),
+    30000
+  );
   console.log("🔄 Retrying all servers in", delay, "ms");
 
   if (window.XRPL.reconnectTimeout) {
@@ -1103,6 +939,7 @@ function handleConnectionFailure() {
   }
 
   window.XRPL.reconnectTimeout = setTimeout(function () {
+    window.XRPL.reconnectAttempts += 1;
     connectXRPL();
   }, delay);
 
@@ -1179,8 +1016,7 @@ function getXRPLState() {
     lastUpdate: window.XRPL.lastLedgerTime,
     mode: window.XRPL.mode,
     modeReason: window.XRPL.modeReason,
-    network: window.XRPL.network,
-    queueMetrics: window.XRPL.queueMetrics || {}
+    network: window.XRPL.network
   };
 }
 
