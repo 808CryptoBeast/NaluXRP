@@ -1,16 +1,21 @@
 /* =========================================
    NaluXrp 🌊 — Validators Deep Dive
    Live XRPL validator metrics + modal
-   (rewritten: defensive DOM + multi-endpoint fetch fallback)
+   (updated: robust fetch fallback + better candidate selection)
    ========================================= */
 
-/* ---------- CONFIG: Try multiple endpoints ---------- */
-// Try same-origin (if proxy is mounted on the site), then localhost proxy, then public XRPL API fallback
-const VALIDATORS_API_CANDIDATES = [
-  `${location.protocol}//${location.host}/validators`, // same-origin proxy (useful if proxy served at same origin)
-  "http://localhost:3000/validators",                  // local proxy (recommended for local development)
-  "https://api.xrpl.org/v2/network/validators?limit=200" // public XRPL API fallback (may be CORS/shape-limited)
-];
+/* NOTE:
+   This file preserves your original rendering, metrics and styles,
+   and changes the network fetch logic so it:
+   - avoids probing github.io hosts (which return 404),
+   - prefers same-origin /api/validators when running a local/dev server,
+   - falls back to http://localhost:3000/validators (local proxy),
+   - finally tries the public XRPL REST API as a last resort,
+   - collects per-candidate errors and shows them in the UI.
+*/
+
+/* ---------- CONFIG ---------- */
+const PUBLIC_VALIDATORS_API = "https://api.xrpl.org/v2/network/validators?limit=200";
 
 let validatorCache = [];
 let isInitialized = false;
@@ -98,7 +103,8 @@ async function initValidators() {
 }
 
 /* ----------------------------------------------------
-   FETCH HELPER: tryFetchUrl (with timeout)
+   FETCH HELPER: tryFetchUrl (returns structured result)
+   Returns: { ok: true, data } or { ok: false, error }
 ---------------------------------------------------- */
 async function tryFetchUrl(url, timeoutMs = 8000) {
   try {
@@ -114,19 +120,30 @@ async function tryFetchUrl(url, timeoutMs = 8000) {
     clearTimeout(id);
 
     if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+      const text = await resp.text().catch(() => "");
+      const msg = `HTTP ${resp.status}: ${resp.statusText}${text ? " — " + text : ""}`;
+      console.warn("fetch failed for", url, msg);
+      return { ok: false, error: msg };
     }
 
-    const json = await resp.json();
-    return json;
+    const json = await resp.json().catch(err => {
+      const t = `Failed to parse JSON: ${err && err.message ? err.message : err}`;
+      console.warn("fetch parse failed for", url, t);
+      return null;
+    });
+
+    if (json == null) return { ok: false, error: "Invalid JSON response" };
+
+    return { ok: true, data: json };
   } catch (err) {
-    console.warn('fetch failed for', url, err && err.message ? err.message : err);
-    return null;
+    const em = err && err.message ? err.message : String(err);
+    console.warn("fetch failed for", url, em);
+    return { ok: false, error: em };
   }
 }
 
 /* ----------------------------------------------------
-   FETCH LIVE VALIDATOR DATA - MULTI-ENDPOINT FALLBACK
+   FETCH LIVE VALIDATOR DATA - ENVIRONMENT-AWARE CANDIDATES
 ---------------------------------------------------- */
 async function fetchLiveValidators() {
   const container = document.getElementById("validatorsList");
@@ -139,59 +156,88 @@ async function fetchLiveValidators() {
     container.querySelector('.loading-subtext').textContent = 'Attempting proxy(s) and public API...';
   }
   
-  try {
-    let data = null;
-    let used = null;
+  // Build candidate list based on environment
+  const candidates = [];
 
-    for (const candidate of VALIDATORS_API_CANDIDATES) {
-      console.log('Attempting validator fetch from', candidate);
-      const attempt = await tryFetchUrl(candidate);
-      if (!attempt) continue;
-
-      // Normalize response shapes into { validators: [] }
-      if (Array.isArray(attempt.validators)) {
-        data = { validators: attempt.validators };
-      } else if (Array.isArray(attempt.result?.validators)) {
-        data = { validators: attempt.result.validators };
-      } else if (Array.isArray(attempt)) {
-        data = { validators: attempt };
-      } else {
-        const arr = Object.values(attempt || {}).find(v => Array.isArray(v));
-        if (arr) data = { validators: arr };
-      }
-
-      if (data && Array.isArray(data.validators) && data.validators.length) {
-        used = candidate;
-        break;
-      }
+  // If running locally, try same-origin API (if you mount a proxy) and localhost proxy.
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+    candidates.push(`${location.protocol}//${location.host}/api/validators`); // same-origin API if present
+    candidates.push("http://localhost:3000/validators"); // local proxy
+  } else {
+    // If deployed on github.io, probing same-origin will usually 404; skip it.
+    // If you host a backend proxy under the same domain in production, add it here.
+    if (!location.hostname.includes("github.io")) {
+      candidates.push(`${location.protocol}//${location.host}/api/validators`);
     }
-
-    if (!data || !data.validators || !Array.isArray(data.validators)) {
-      throw new Error('Invalid response format from any candidate');
-    }
-
-    validatorCache = data.validators;
-    console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
-    
-    // Show stats
-    const unlCount = validatorCache.filter(v => v.unl === true || v.unl === "Ripple" || v.unl === "true").length;
-    const communityCount = validatorCache.length - unlCount;
-    console.log(`📊 Live Stats: ${unlCount} UNL, ${communityCount} Community`);
-    
-    // Render
-    renderValidators(validatorCache);
-    
-    // Show success message
-    showLiveDataIndicator();
-    
-  } catch (error) {
-    console.error("❌ Error fetching live validators:", error);
-    showProxyError(error.message || String(error));
+    // Don't add the github.io root/validators candidate (it 404s)
   }
+
+  // Always attempt the public API as the last fallback
+  candidates.push(PUBLIC_VALIDATORS_API);
+
+  const attemptErrors = [];
+  let data = null;
+  let used = null;
+
+  for (const candidate of candidates) {
+    console.log('Attempting validator fetch from', candidate);
+    const result = await tryFetchUrl(candidate);
+    if (!result.ok) {
+      attemptErrors.push({ url: candidate, error: result.error });
+      continue;
+    }
+
+    // Normalize response shapes into an array of validators
+    let validatorsArr = null;
+    const payload = result.data;
+
+    if (payload && Array.isArray(payload.validators)) {
+      validatorsArr = payload.validators;
+    } else if (payload && Array.isArray(payload.result?.validators)) {
+      validatorsArr = payload.result.validators;
+    } else if (Array.isArray(payload)) {
+      validatorsArr = payload;
+    } else {
+      // try to find the first array value in the object
+      const arr = Object.values(payload || {}).find(v => Array.isArray(v));
+      if (arr) validatorsArr = arr;
+    }
+
+    if (Array.isArray(validatorsArr) && validatorsArr.length) {
+      data = { validators: validatorsArr };
+      used = candidate;
+      break;
+    } else {
+      attemptErrors.push({ url: candidate, error: "No validators array found in response" });
+    }
+  }
+
+  if (!data || !Array.isArray(data.validators)) {
+    console.error("No validator data found. Attempt errors:", attemptErrors);
+    const details = attemptErrors.map(a => `${a.url} → ${a.error}`).join("\n");
+    showProxyError(`No validator data available.\nAttempts:\n${details}`);
+    return;
+  }
+
+  // Success path
+  validatorCache = data.validators;
+  console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
+  
+  // Show stats
+  const unlCount = validatorCache.filter(v => v.unl === true || v.unl === "Ripple" || v.unl === "true").length;
+  const communityCount = validatorCache.length - unlCount;
+  console.log(`📊 Live Stats: ${unlCount} UNL, ${communityCount} Community`);
+  
+  // Render
+  renderValidators(validatorCache);
+  
+  // Show success message
+  showLiveDataIndicator();
 }
 
 /* ----------------------------------------------------
    RENDER VALIDATORS
+   (unchanged)
 ---------------------------------------------------- */
 function renderValidators(list) {
   const container = document.getElementById("validatorsList");
@@ -886,7 +932,6 @@ function addValidatorStylesOriginal() {
     .validator-modal-section { margin-bottom:18px; padding-bottom:10px; border-bottom:1px dashed rgba(255,255,255,0.04); }
     .validator-modal-section h3 { margin-bottom:10px; color:var(--accent-secondary); }
     .amendment-tag { background:var(--bg-secondary); color:var(--text-primary); padding:8px 12px; border-radius:12px; border:1px solid var(--accent-tertiary); margin-right:8px; display:inline-block; margin-bottom:8px; }
-
   `;
   document.head.appendChild(style);
 }
