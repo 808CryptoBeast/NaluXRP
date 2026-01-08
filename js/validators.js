@@ -1,13 +1,15 @@
 /* =========================================
    NaluXrp 🌊 — Validators Deep Dive
    Live XRPL validator metrics + modal
+   (rewritten: defensive DOM + multi-endpoint fetch fallback)
    ========================================= */
 
-// Use local proxy server to avoid CORS issues
+/* ---------- CONFIG: Try multiple endpoints ---------- */
+// Try same-origin (if proxy is mounted on the site), then localhost proxy, then public XRPL API fallback
 const VALIDATORS_API_CANDIDATES = [
-  `${location.protocol}//${location.host}/validators`,
-  "http://localhost:3000/validators",
-  "https://api.xrpl.org/v2/network/validators?limit=200"
+  `${location.protocol}//${location.host}/validators`, // same-origin proxy (useful if proxy served at same origin)
+  "http://localhost:3000/validators",                  // local proxy (recommended for local development)
+  "https://api.xrpl.org/v2/network/validators?limit=200" // public XRPL API fallback (may be CORS/shape-limited)
 ];
 
 let validatorCache = [];
@@ -16,13 +18,13 @@ let proxyServerAvailable = true;
 
 /* ----------------------------------------------------
    DEFENSIVE DOM CREATION
-   Ensure expected DOM nodes exist so initValidators doesn't abort
+   Ensure required DOM elements exist so initValidators won't abort
 ---------------------------------------------------- */
 (function ensureValidatorsDOM() {
-  const section = document.getElementById('validators');
+  const section = document.getElementById("validators");
   if (!section) return;
 
-  if (!document.getElementById('validatorsList')) {
+  if (!document.getElementById("validatorsList")) {
     section.innerHTML = section.innerHTML + `
       <div class="dashboard-page">
         <div class="chart-section">
@@ -77,7 +79,7 @@ async function initValidators() {
     </div>
   `;
   
-  // Add styles
+  // Add styles (this function is defined later in the file)
   addValidatorStyles();
   
   // Ensure modal exists
@@ -96,7 +98,7 @@ async function initValidators() {
 }
 
 /* ----------------------------------------------------
-   FETCH HELPER: tryFetchUrl
+   FETCH HELPER: tryFetchUrl (with timeout)
 ---------------------------------------------------- */
 async function tryFetchUrl(url, timeoutMs = 8000) {
   try {
@@ -134,7 +136,7 @@ async function fetchLiveValidators() {
   
   // Update loading message
   if (container.querySelector('.loading-subtext')) {
-    container.querySelector('.loading-subtext').textContent = 'Connecting to local proxy server...';
+    container.querySelector('.loading-subtext').textContent = 'Attempting proxy(s) and public API...';
   }
   
   try {
@@ -337,6 +339,7 @@ function calculateValidatorMetrics(v) {
 }
 
 function getLabelClass(label) {
+  if (!label) return '';
   switch(label.toLowerCase()) {
     case 'excellent': return 'label-excellent';
     case 'strong': return 'label-strong';
@@ -588,7 +591,7 @@ function showProxyError(errorMessage = '') {
           font-weight: bold;
           cursor: pointer;
           transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'>
+        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
           🔄 Retry Connection
         </button>
         
@@ -601,7 +604,7 @@ function showProxyError(errorMessage = '') {
           font-weight: bold;
           cursor: pointer;
           transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'>
+        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
           🌐 View on XRPL.org
         </button>
       </div>
@@ -645,355 +648,266 @@ function showConnectionError(errorMessage = '') {
 }
 
 /* ----------------------------------------------------
-   Remainder of file kept unchanged (styles, modal, helpers, exports)
+   ADD STYLES (original full styles restored)
+   (This preserves your original detailed styles)
 ---------------------------------------------------- */
+function addValidatorStylesOriginal() {
+  if (document.querySelector('#validator-styles')) return;
+  
+  const style = document.createElement('style');
+  style.id = 'validator-styles';
+  style.textContent = `
+    /* =========================================
+       NaluXrp 🌊 — Validators (validator.css)
+       ========================================= */
 
-/* ----------------------------------------------------
-   CALCULATE METRICS
----------------------------------------------------- */
-function calculateValidatorMetrics(v) {
-  const agreement24h = v.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const agreement1h = v.agreement_1h || { total: 0, missed: 0, score: 0 };
-  
-  const uptime1h = calculateUptime(agreement1h);
-  const uptime24h = calculateUptime(agreement24h);
-  const agreement1hScore = calculateAgreement(agreement1h);
-  const agreement24hScore = calculateAgreement(agreement24h);
-  
-  const score = calculateReliabilityScore(v);
-  
-  // Reliability label
-  let label;
-  if (score >= 95) label = "Excellent";
-  else if (score >= 85) label = "Strong";
-  else if (score >= 70) label = "Good";
-  else if (score >= 50) label = "Fair";
-  else label = "Poor";
-  
-  const isUnl = v.unl === true || v.unl === "Ripple" || v.unl === "true";
-  
-  return {
-    uptime1h,
-    uptime24h,
-    agreement1h: agreement1hScore,
-    agreement24h: agreement24hScore,
-    score: Math.round(score),
-    label,
-    isUnl
-  };
+    /* Summary cards */
+    .validators-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .validators-summary-card {
+      background: var(--card-bg, rgba(0, 0, 0, 0.36));
+      border-radius: 14px;
+      border: 1px solid var(--accent-tertiary, rgba(255, 255, 255, 0.12));
+      padding: 12px 14px;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+
+    .validators-summary-card .summary-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--accent-secondary, #ffd866);
+    }
+
+    /* Search */
+    #validatorSearch {
+      width: 100%;
+      max-width: 420px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.4);
+      color: var(--text-primary, #f8f8f2);
+      outline: none;
+      font-size: 0.92rem;
+      margin: 10px 0 16px;
+    }
+
+    #validatorSearch::placeholder {
+      color: rgba(255,255,255,0.45);
+    }
+
+    /* Grid + cards — base card visuals moved to css/components/card.css
+       Keep layout and validator-specific visual accents here. */
+    .validators-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .validator-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      /* exclusive validator tweaks (radial highlights, backdrop) can remain here */
+      backdrop-filter: blur(12px);
+    }
+
+    .validator-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 18px 32px rgba(0,0,0,0.45);
+      border-color: var(--accent-primary, #ffcc66);
+      transition: all 0.2s ease-out;
+    }
+
+    .validator-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .validator-key {
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      color: var(--text-primary, #f8f8f2);
+      overflow-wrap: anywhere;
+    }
+
+    .validator-domain {
+      font-size: 0.86rem;
+      color: var(--text-secondary, #a2a2b3);
+    }
+
+    .unl-badge {
+      font-size: 0.72rem;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.2);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .unl-full {
+      background: linear-gradient(135deg, #ffe066, #ffb347);
+      color: #201600;
+    }
+
+    .unl-partial {
+      background: linear-gradient(135deg, #ffb86c, #ff7b5a);
+      color: #201600;
+    }
+
+    .validator-stat-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .validator-pill {
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    .pill-score {
+      background: linear-gradient(135deg, var(--accent-primary, #d4af37), var(--accent-secondary, #ffd700));
+      color: #201600;
+    }
+
+    .validator-stat {
+      flex: 1;
+      background: rgba(0,0,0,0.18);
+      padding: 10px;
+      border-radius: 10px;
+      text-align: center;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .validator-details-btn {
+      margin-top: 12px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent-primary, #d4af37), var(--accent-secondary, #ffd700));
+      color: #000;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+    }
+
+    .validators-loading {
+      text-align: center;
+      padding: 60px 40px;
+      color: var(--text-secondary);
+      font-size: 16px;
+      background: var(--card-bg);
+      border-radius: 16px;
+      border: 2px solid var(--accent-tertiary);
+      margin: 20px 0;
+    }
+
+    .loading-spinner {
+      border: 4px solid rgba(var(--accent-primary-rgb, 52, 152, 219), 0.1);
+      border-radius: 50%;
+      border-top: 4px solid var(--accent-primary);
+      width: 50px;
+      height: 50px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 25px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .loading-subtext {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-top: 15px;
+      opacity: 0.8;
+      font-style: italic;
+    }
+
+    .validators-error {
+      background: var(--card-bg);
+      border: 2px solid var(--accent-primary);
+      border-radius: 20px;
+      padding: 40px;
+      text-align: center;
+      color: var(--text-primary);
+      margin: 20px 0;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.1);
+    }
+
+    .validators-empty {
+      text-align: center;
+      padding: 60px;
+      color: var(--text-secondary);
+      font-size: 18px;
+      background: var(--card-bg);
+      border-radius: 20px;
+      border: 2px dashed var(--accent-tertiary);
+      margin: 20px 0;
+    }
+
+    /* Modal */
+    .validator-modal-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    .validator-modal {
+      background: var(--bg-secondary);
+      border-radius: 18px;
+      padding: 20px;
+      width: min(900px, 95%);
+      max-height: 90vh;
+      overflow: auto;
+      border: 2px solid var(--accent-tertiary);
+    }
+
+    .validator-modal-header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .validator-modal-close { background:transparent; border:0; font-size:18px; cursor:pointer; color:var(--text-secondary); }
+
+    .validator-modal-section { margin-bottom:18px; padding-bottom:10px; border-bottom:1px dashed rgba(255,255,255,0.04); }
+    .validator-modal-section h3 { margin-bottom:10px; color:var(--accent-secondary); }
+    .amendment-tag { background:var(--bg-secondary); color:var(--text-primary); padding:8px 12px; border-radius:12px; border:1px solid var(--accent-tertiary); margin-right:8px; display:inline-block; margin-bottom:8px; }
+
+  `;
+  document.head.appendChild(style);
 }
 
-function getLabelClass(label) {
-  switch(label.toLowerCase()) {
-    case 'excellent': return 'label-excellent';
-    case 'strong': return 'label-strong';
-    case 'good': return 'label-good';
-    case 'fair': return 'label-fair';
-    case 'poor': return 'label-poor';
-    default: return '';
-  }
-}
-
-function calculateReliabilityScore(v) {
-  const agreement24h = v.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const agreement1h = v.agreement_1h || { total: 0, missed: 0, score: 0 };
-  
-  const uptime24h = calculateUptime(agreement24h) || 0;
-  const agreement24hScore = calculateAgreement(agreement24h) || 0;
-  const uptime1h = calculateUptime(agreement1h) || 0;
-  const agreement1hScore = calculateAgreement(agreement1h) || 0;
-  
-  const isUnl = v.unl === true || v.unl === "Ripple" || v.unl === "true";
-  
-  // Weighted score calculation
-  let score = (
-    0.45 * uptime24h +
-    0.35 * agreement24hScore +
-    0.10 * uptime1h +
-    0.10 * agreement1hScore
-  );
-  
-  if (isUnl) score += 5;
-  
-  return Math.max(0, Math.min(100, score));
-}
-
-function calculateUptime(agreement) {
-  if (!agreement) return null;
-  const total = Number(agreement.total) || 0;
-  const missed = Number(agreement.missed) || 0;
-  if (total <= 0) return null;
-  return ((total - missed) / total) * 100;
-}
-
-function calculateAgreement(agreement) {
-  if (!agreement || agreement.score == null) return null;
-  const score = Number(agreement.score) || 0;
-  return score * 100;
-}
-
-function formatPercent(value) {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toFixed(2) + "%";
-}
-
-/* ----------------------------------------------------
-   SEARCH FUNCTIONALITY
----------------------------------------------------- */
-function setupValidatorSearch() {
-  const input = document.getElementById("validatorSearch");
-  if (!input) return;
-  
-  input.placeholder = "Search live validators by domain or key...";
-  
-  input.addEventListener("input", function() {
-    const term = this.value.trim().toLowerCase();
-    
-    if (!term) {
-      renderValidators(validatorCache);
+/* Provide compatibility: call the original-style injection if available,
+   otherwise call the full style injector we just created. */
+function addValidatorStyles() {
+  // If a global implementation exists (older load), prefer that
+  if (typeof window.addValidatorStyles === "function" && window.addValidatorStyles !== addValidatorStyles) {
+    try {
+      window.addValidatorStyles();
       return;
+    } catch (e) {
+      console.warn("Existing addValidatorStyles failed, falling back to bundled styles", e);
     }
-    
-    const filtered = validatorCache.filter(v => {
-      const domain = (v.domain || "").toLowerCase();
-      const key = (v.validation_public_key || "").toLowerCase();
-      return domain.includes(term) || key.includes(term);
-    });
-    
-    renderValidators(filtered);
-  });
-}
-
-/* ----------------------------------------------------
-   MODAL FUNCTIONS
----------------------------------------------------- */
-function ensureValidatorModal() {
-  if (document.getElementById("validatorModalOverlay")) return;
-  
-  const overlay = document.createElement("div");
-  overlay.id = "validatorModalOverlay";
-  overlay.className = "validator-modal-overlay";
-  overlay.style.display = "none";
-  
-  overlay.innerHTML = `
-    <div class="validator-modal">
-      <div class="validator-modal-header">
-        <h2 id="validatorModalTitle">Live Validator Details</h2>
-        <button id="validatorModalClose" class="validator-modal-close">✕</button>
-      </div>
-      <div id="validatorModalBody" class="validator-modal-body"></div>
-      <div class="validator-modal-footer">
-        <small>Live data from XRPL network • Updated: ${new Date().toLocaleTimeString()}</small>
-      </div>
-    </div>
-  `;
-  
-  document.body.appendChild(overlay);
-  
-  document.getElementById("validatorModalClose").addEventListener("click", closeValidatorModal);
-  
-  overlay.addEventListener("click", function(e) {
-    if (e.target === overlay) closeValidatorModal();
-  });
-  
-  document.addEventListener("keydown", function(e) {
-    if (e.key === "Escape" && overlay.style.display === "flex") {
-      closeValidatorModal();
-    }
-  });
-}
-
-function openValidatorModal(pubkey) {
-  const overlay = document.getElementById("validatorModalOverlay");
-  const body = document.getElementById("validatorModalBody");
-  const title = document.getElementById("validatorModalTitle");
-  
-  if (!overlay || !body || !title) return;
-  
-  const validator = validatorCache.find(v => v.validation_public_key === pubkey);
-  
-  if (!validator) {
-    console.error("Validator not found:", pubkey);
-    return;
   }
-  
-  const metrics = calculateValidatorMetrics(validator);
-  const agreement24h = validator.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const total24h = agreement24h.total || 0;
-  const missed24h = agreement24h.missed || 0;
-  const validated24h = total24h - missed24h;
-  
-  title.textContent = "Live Validator Analysis";
-  
-  body.innerHTML = `
-    <div class="validator-modal-section">
-      <h3>Identity & Network Role</h3>
-      <p><strong>Public Key:</strong><br><code>${validator.validation_public_key || "—"}</code></p>
-      <p><strong>Domain:</strong> ${validator.domain || "unknown"}</p>
-      <p><strong>Role:</strong> <span class="${metrics.isUnl ? 'unl-full' : 'unl-partial'}" style="padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
-        ${metrics.isUnl ? "Ripple Recommended UNL" : "Community Validator"}
-      </span></p>
-    </div>
-    
-    <div class="validator-modal-section">
-      <h3>Live Performance Metrics</h3>
-      <div class="validator-score-row">
-        <div class="validator-score-main">
-          <div class="score-number">${metrics.score}</div>
-          <div class="score-label ${getLabelClass(metrics.label)}">${metrics.label}</div>
-        </div>
-        <div class="validator-score-sub">
-          <div><strong>Uptime 24h:</strong> ${formatPercent(metrics.uptime24h)}</div>
-          <div><strong>Agreement 24h:</strong> ${formatPercent(metrics.agreement24h)}</div>
-          <div><strong>Uptime 1h:</strong> ${formatPercent(metrics.uptime1h)}</div>
-          <div><strong>Agreement 1h:</strong> ${formatPercent(metrics.agreement1h)}</div>
-        </div>
-      </div>
-      <div class="validator-stats-row">
-        <div class="validator-stat-card">
-          <div class="stat-title">24h Validations</div>
-          <div class="stat-value">${total24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Missed</div>
-          <div class="stat-value">${missed24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Successful</div>
-          <div class="stat-value">${validated24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Success Rate</div>
-          <div class="stat-value">${total24h > 0 ? ((validated24h / total24h) * 100).toFixed(1) + '%' : '—'}</div>
-        </div>
-      </div>
-    </div>
-    
-    <div class="validator-modal-section">
-      <h3>Network Features</h3>
-      <div class="amendments-list">
-        ${(validator.amendments && validator.amendments.length > 0 ? 
-          validator.amendments.map(a => `<span class="amendment-tag">${a}</span>`).join('') : 
-          '<p>No amendment data available</p>')}
-      </div>
-    </div>
-  `;
-  
-  overlay.style.display = "flex";
-}
-
-function closeValidatorModal() {
-  const overlay = document.getElementById("validatorModalOverlay");
-  if (overlay) {
-    overlay.style.display = "none";
-  }
-}
-
-/* ----------------------------------------------------
-   ERROR HANDLING
----------------------------------------------------- */
-function showProxyError(errorMessage = '') {
-  const container = document.getElementById("validatorsList");
-  if (!container) return;
-  
-  container.innerHTML = `
-    <div class="validators-error">
-      <div style="font-size: 48px; margin-bottom: 20px;">🔄</div>
-      <h3 style="color: var(--accent-primary); margin-bottom: 15px;">Proxy Server Required</h3>
-      <p style="color: var(--text-primary); margin-bottom: 20px; line-height: 1.6;">
-        The local proxy server is not running. This is needed to fetch live XRPL validator data.
-      </p>
-      
-      <div style="background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--accent-tertiary); margin-bottom: 25px; text-align: left;">
-        <h4 style="color: var(--accent-secondary); margin-bottom: 15px;">🚀 Quick Setup:</h4>
-        <ol style="color: var(--text-primary); padding-left: 20px; margin: 0;">
-          <li style="margin-bottom: 10px;">
-            <strong>Open a new terminal</strong> in your NaluXrp folder
-          </li>
-          <li style="margin-bottom: 10px;">
-            <strong>Run this command:</strong><br>
-            <code style="display: block; background: var(--bg-secondary); padding: 10px; border-radius: 6px; margin: 10px 0; font-family: monospace;">
-              npm run proxy
-            </code>
-          </li>
-          <li style="margin-bottom: 10px;">
-            <strong>Keep the terminal open</strong> and return to this page
-          </li>
-          <li>
-            <strong>Click the Retry button below</strong>
-          </li>
-        </ol>
-      </div>
-      
-      <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
-        <button onclick="fetchLiveValidators()" style="
-          padding: 12px 24px;
-          background: var(--accent-primary);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-weight: bold;
-          cursor: pointer;
-          transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'>
-          🔄 Retry Connection
-        </button>
-        
-        <button onclick="window.open('https://xrpl.org/validators.html', '_blank')" style="
-          padding: 12px 24px;
-          background: var(--accent-secondary);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-weight: bold;
-          cursor: pointer;
-          transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'>
-          🌐 View on XRPL.org
-        </button>
-      </div>
-      
-      ${errorMessage ? `
-        <div style="margin-top: 20px; padding: 15px; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--accent-tertiary);">
-          <strong>Error Details:</strong><br>
-          <code style="color: var(--text-secondary); font-size: 12px;">${errorMessage}</code>
-        </div>
-      ` : ''}
-    </div>
-  `;
-}
-
-function showConnectionError(errorMessage = '') {
-  const container = document.getElementById("validatorsList");
-  if (!container) return;
-  
-  container.innerHTML = `
-    <div class="validators-error">
-      <div style="font-size: 48px; margin-bottom: 20px;">🌐</div>
-      <h3 style="color: var(--accent-primary); margin-bottom: 15px;">Connection Error</h3>
-      <p style="color: var(--text-primary); margin-bottom: 20px; line-height: 1.6;">
-        Unable to connect to XRPL network.
-        ${errorMessage ? `<br><br><strong>Error:</strong> ${errorMessage}` : ''}
-      </p>
-      <button onclick="fetchLiveValidators()" style="
-        padding: 12px 24px;
-        background: var(--accent-primary);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: bold;
-        cursor: pointer;
-        margin-top: 20px;
-      ">
-        🔄 Retry Connection
-      </button>
-    </div>
-  `;
+  addValidatorStylesOriginal();
 }
 
 /* ----------------------------------------------------
    EXPORT FUNCTIONS TO WINDOW
-   (keep existing exports)
 ---------------------------------------------------- */
 window.initValidators = initValidators;
 window.openValidatorModal = openValidatorModal;
