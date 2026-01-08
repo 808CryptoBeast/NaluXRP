@@ -1,25 +1,18 @@
 /* =========================================
    NaluXrp 🌊 — Validators Deep Dive
    Live XRPL validator metrics + modal
-   (updated: robust fetch fallback + better candidate selection)
+   (complete file: proxy-first fetch + full UI + styles)
    ========================================= */
 
-/* NOTE:
-   This file preserves your original rendering, metrics and styles,
-   and changes the network fetch logic so it:
-   - avoids probing github.io hosts (which return 404),
-   - prefers same-origin /api/validators when running a local/dev server,
-   - falls back to http://localhost:3000/validators (local proxy),
-   - finally tries the public XRPL REST API as a last resort,
-   - collects per-candidate errors and shows them in the UI.
-*/
-
 /* ---------- CONFIG ---------- */
+// Replace this with your deployed public proxy (Cloudflare Worker / Vercel) after you deploy it.
+// Example: "https://naluxrp-validators.workers.dev"
+const DEPLOYED_PROXY = "https://<YOUR_WORKER_SUBDOMAIN>.workers.dev"; // <-- REPLACE THIS
+
 const PUBLIC_VALIDATORS_API = "https://api.xrpl.org/v2/network/validators?limit=200";
 
 let validatorCache = [];
 let isInitialized = false;
-let proxyServerAvailable = true;
 
 /* ----------------------------------------------------
    DEFENSIVE DOM CREATION
@@ -45,7 +38,7 @@ let proxyServerAvailable = true;
           <div id="validatorsList" class="validators-grid" style="margin-top:16px;">
             <div style="color: #888; text-align:center; padding:30px;">
               <div style="font-size:1.05rem; font-weight:600">Validator list will appear here</div>
-              <div style="opacity:.85; margin-top:8px;">Start the proxy: <code>npm run proxy</code></div>
+              <div style="opacity:.85; margin-top:8px;">Start the proxy (dev): <code>npm run proxy</code></div>
             </div>
           </div>
 
@@ -80,11 +73,11 @@ async function initValidators() {
     <div class="validators-loading">
       <div class="loading-spinner"></div>
       Fetching live XRPL validator data...
-      <div class="loading-subtext">Connecting via local proxy server...</div>
+      <div class="loading-subtext">Connecting to proxy / public API...</div>
     </div>
   `;
   
-  // Add styles (this function is defined later in the file)
+  // Add styles
   addValidatorStyles();
   
   // Ensure modal exists
@@ -103,8 +96,8 @@ async function initValidators() {
 }
 
 /* ----------------------------------------------------
-   FETCH HELPER: tryFetchUrl (returns structured result)
-   Returns: { ok: true, data } or { ok: false, error }
+   FETCH HELPER (structured result)
+   returns { ok: true, data } or { ok: false, error }
 ---------------------------------------------------- */
 async function tryFetchUrl(url, timeoutMs = 8000) {
   try {
@@ -127,13 +120,11 @@ async function tryFetchUrl(url, timeoutMs = 8000) {
     }
 
     const json = await resp.json().catch(err => {
-      const t = `Failed to parse JSON: ${err && err.message ? err.message : err}`;
-      console.warn("fetch parse failed for", url, t);
+      console.warn("fetch parse failed for", url, err && err.message ? err.message : err);
       return null;
     });
 
     if (json == null) return { ok: false, error: "Invalid JSON response" };
-
     return { ok: true, data: json };
   } catch (err) {
     const em = err && err.message ? err.message : String(err);
@@ -143,36 +134,32 @@ async function tryFetchUrl(url, timeoutMs = 8000) {
 }
 
 /* ----------------------------------------------------
-   FETCH LIVE VALIDATOR DATA - ENVIRONMENT-AWARE CANDIDATES
+   FETCH LIVE VALIDATOR DATA (proxy-first, environment-aware)
 ---------------------------------------------------- */
 async function fetchLiveValidators() {
   const container = document.getElementById("validatorsList");
   if (!container) return;
   
-  console.log("🌐 Fetching live validator data via proxy (with fallbacks)...");
+  console.log("🌐 Fetching live validator data (proxy-first with fallbacks)...");
   
-  // Update loading message
   if (container.querySelector('.loading-subtext')) {
     container.querySelector('.loading-subtext').textContent = 'Attempting proxy(s) and public API...';
   }
   
-  // Build candidate list based on environment
+  // Build candidate list:
+  // 1) Deployed public proxy (Cloudflare Worker / Vercel) - if configured
+  // 2) same-origin API (e.g., /api/validators) - useful when you host backend with the site
+  // 3) local dev proxy (http://localhost:3000/validators)
+  // 4) public XRPL REST API (last resort)
   const candidates = [];
-
-  // If running locally, try same-origin API (if you mount a proxy) and localhost proxy.
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
-    candidates.push(`${location.protocol}//${location.host}/api/validators`); // same-origin API if present
-    candidates.push("http://localhost:3000/validators"); // local proxy
-  } else {
-    // If deployed on github.io, probing same-origin will usually 404; skip it.
-    // If you host a backend proxy under the same domain in production, add it here.
-    if (!location.hostname.includes("github.io")) {
-      candidates.push(`${location.protocol}//${location.host}/api/validators`);
-    }
-    // Don't add the github.io root/validators candidate (it 404s)
+  if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) {
+    candidates.push(`${DEPLOYED_PROXY}/validators`);
   }
-
-  // Always attempt the public API as the last fallback
+  // same-origin API
+  candidates.push(`${location.protocol}//${location.host}/api/validators`);
+  // local dev proxy
+  candidates.push("http://localhost:3000/validators");
+  // public fallback
   candidates.push(PUBLIC_VALIDATORS_API);
 
   const attemptErrors = [];
@@ -180,25 +167,20 @@ async function fetchLiveValidators() {
   let used = null;
 
   for (const candidate of candidates) {
-    console.log('Attempting validator fetch from', candidate);
+    console.log("Attempting validator fetch from", candidate);
     const result = await tryFetchUrl(candidate);
     if (!result.ok) {
       attemptErrors.push({ url: candidate, error: result.error });
       continue;
     }
 
-    // Normalize response shapes into an array of validators
-    let validatorsArr = null;
     const payload = result.data;
+    let validatorsArr = null;
 
-    if (payload && Array.isArray(payload.validators)) {
-      validatorsArr = payload.validators;
-    } else if (payload && Array.isArray(payload.result?.validators)) {
-      validatorsArr = payload.result.validators;
-    } else if (Array.isArray(payload)) {
-      validatorsArr = payload;
-    } else {
-      // try to find the first array value in the object
+    if (payload && Array.isArray(payload.validators)) validatorsArr = payload.validators;
+    else if (payload && Array.isArray(payload.result?.validators)) validatorsArr = payload.result.validators;
+    else if (Array.isArray(payload)) validatorsArr = payload;
+    else {
       const arr = Object.values(payload || {}).find(v => Array.isArray(v));
       if (arr) validatorsArr = arr;
     }
@@ -219,25 +201,21 @@ async function fetchLiveValidators() {
     return;
   }
 
-  // Success path
   validatorCache = data.validators;
   console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
-  
+
   // Show stats
   const unlCount = validatorCache.filter(v => v.unl === true || v.unl === "Ripple" || v.unl === "true").length;
   const communityCount = validatorCache.length - unlCount;
   console.log(`📊 Live Stats: ${unlCount} UNL, ${communityCount} Community`);
-  
-  // Render
+
+  // Render and indicator
   renderValidators(validatorCache);
-  
-  // Show success message
   showLiveDataIndicator();
 }
 
 /* ----------------------------------------------------
-   RENDER VALIDATORS
-   (unchanged)
+   RENDER VALIDATORS (full implementation)
 ---------------------------------------------------- */
 function renderValidators(list) {
   const container = document.getElementById("validatorsList");
@@ -603,11 +581,11 @@ function showProxyError(errorMessage = '') {
       <div style="font-size: 48px; margin-bottom: 20px;">🔄</div>
       <h3 style="color: var(--accent-primary); margin-bottom: 15px;">Proxy Server Required</h3>
       <p style="color: var(--text-primary); margin-bottom: 20px; line-height: 1.6;">
-        The local proxy server is not running. This is needed to fetch live XRPL validator data.
+        The proxy server is not returning validator data. This is needed to fetch live XRPL validator data.
       </p>
       
       <div style="background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--accent-tertiary); margin-bottom: 25px; text-align: left;">
-        <h4 style="color: var(--accent-secondary); margin-bottom: 15px;">🚀 Quick Setup:</h4>
+        <h4 style="color: var(--accent-secondary); margin-bottom: 15px;">🚀 Quick Setup (dev):</h4>
         <ol style="color: var(--text-primary); padding-left: 20px; margin: 0;">
           <li style="margin-bottom: 10px;">
             <strong>Open a new terminal</strong> in your NaluXrp folder
@@ -694,8 +672,52 @@ function showConnectionError(errorMessage = '') {
 }
 
 /* ----------------------------------------------------
-   ADD STYLES (original full styles restored)
-   (This preserves your original detailed styles)
+   LIVE DATA INDICATOR
+---------------------------------------------------- */
+function showLiveDataIndicator() {
+  const existing = document.querySelector('.live-data-indicator');
+  if (existing) existing.remove();
+  
+  const indicator = document.createElement('div');
+  indicator.className = 'live-data-indicator';
+  indicator.innerHTML = `
+    <div style="
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--success-color, #2ecc71);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      z-index: 9998;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      animation: fadeIn 0.3s ease;
+    ">
+      <div style="
+        width: 8px;
+        height: 8px;
+        background: white;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+      "></div>
+      Live XRPL Data • ${validatorCache.length} Validators
+    </div>
+  `;
+  
+  document.body.appendChild(indicator);
+  
+  setTimeout(() => {
+    indicator.style.animation = 'fadeOut 0.3s ease';
+    setTimeout(() => indicator.remove(), 300);
+  }, 5000);
+}
+
+/* ----------------------------------------------------
+   ADD STYLES (full original styles restored)
 ---------------------------------------------------- */
 function addValidatorStylesOriginal() {
   if (document.querySelector('#validator-styles')) return;
@@ -704,7 +726,7 @@ function addValidatorStylesOriginal() {
   style.id = 'validator-styles';
   style.textContent = `
     /* =========================================
-       NaluXrp 🌊 — Validators (validator.css)
+       NaluXrp 🌊 ��� Validators (validator.css)
        ========================================= */
 
     /* Summary cards */
@@ -748,8 +770,7 @@ function addValidatorStylesOriginal() {
       color: rgba(255,255,255,0.45);
     }
 
-    /* Grid + cards — base card visuals moved to css/components/card.css
-       Keep layout and validator-specific visual accents here. */
+    /* Grid + cards */
     .validators-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -762,12 +783,16 @@ function addValidatorStylesOriginal() {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      /* exclusive validator tweaks (radial highlights, backdrop) can remain here */
       backdrop-filter: blur(12px);
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 18px;
+      border: 2px solid var(--accent-tertiary);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.1);
     }
 
     .validator-card:hover {
-      transform: translateY(-2px);
+      transform: translateY(-4px);
       box-shadow: 0 18px 32px rgba(0,0,0,0.45);
       border-color: var(--accent-primary, #ffcc66);
       transition: all 0.2s ease-out;
@@ -790,6 +815,10 @@ function addValidatorStylesOriginal() {
     .validator-domain {
       font-size: 0.86rem;
       color: var(--text-secondary, #a2a2b3);
+      margin-bottom: 10px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--accent-tertiary);
+      padding-bottom: 8px;
     }
 
     .unl-badge {
@@ -876,6 +905,21 @@ function addValidatorStylesOriginal() {
       100% { transform: rotate(360deg); }
     }
 
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeOut {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(20px); }
+    }
+
     .loading-subtext {
       font-size: 14px;
       color: var(--text-secondary);
@@ -936,10 +980,8 @@ function addValidatorStylesOriginal() {
   document.head.appendChild(style);
 }
 
-/* Provide compatibility: call the original-style injection if available,
-   otherwise call the full style injector we just created. */
+/* Wrapper to prefer any existing global implementation, else inject original */
 function addValidatorStyles() {
-  // If a global implementation exists (older load), prefer that
   if (typeof window.addValidatorStyles === "function" && window.addValidatorStyles !== addValidatorStyles) {
     try {
       window.addValidatorStyles();
@@ -952,11 +994,11 @@ function addValidatorStyles() {
 }
 
 /* ----------------------------------------------------
-   EXPORT FUNCTIONS TO WINDOW
+   EXPORTS
 ---------------------------------------------------- */
 window.initValidators = initValidators;
 window.openValidatorModal = openValidatorModal;
 window.closeValidatorModal = closeValidatorModal;
 window.fetchLiveValidators = fetchLiveValidators;
 
-console.log("🛡️ Live Validators module loaded successfully");
+console.log("🛡️ Live Validators module loaded (proxy-first)");
