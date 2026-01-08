@@ -1,48 +1,52 @@
-const express = require('express');
-const cors = require('cors');
-const fetch = require('node-fetch');
+// proxy-server.js (COMMONJS - STABLE)
+
+const express = require("express");
+const WebSocket = require("ws");
 
 const app = express();
+const PORT = 3000;
+const RIPPLE_WSS = "wss://s1.ripple.com";
 
-// Enable CORS for all routes
-app.use(cors());
+function rippledRequest(command) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(RIPPLE_WSS);
 
-// Route to fetch validators
-app.get('/validators', async (req, res) => {
-  try {
-    console.log('📡 Proxying request to XRPL API...');
-    const response = await fetch('https://api.xrpl.org/v2/network/validators?limit=200');
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    console.log(`✅ Proxied ${data.validators?.length || 0} validators`);
-    
-    res.json(data);
-  } catch (error) {
-    console.error('❌ Proxy error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      message: 'Failed to fetch validators via proxy'
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ id: 1, command }));
     });
+
+    ws.on("message", msg => {
+      try {
+        const data = JSON.parse(msg.toString());
+        ws.close();
+        resolve(data.result || data);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    ws.on("error", err => {
+      reject(err);
+    });
+  });
+}
+
+// Validators endpoint
+app.get("/validators", async (_req, res) => {
+  try {
+    const data = await rippledRequest("validators");
+    res.json({ validators: data.validators || [] });
+  } catch (err) {
+    console.error("Validator fetch error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'XRPL Validator Proxy Server',
-    endpoints: {
-      validators: '/validators'
-    }
-  });
+// Health check
+app.get("/", (_req, res) => {
+  res.send("🛡️ Validator proxy running");
 });
 
-// Start server
-const PORT = 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Proxy server running on http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint: http://localhost:${PORT}/validators`);
+  console.log(`🛡️ Validator proxy running on http://localhost:${PORT}`);
 });
