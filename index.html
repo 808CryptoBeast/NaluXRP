@@ -126,32 +126,7 @@
   <!-- =================== PAGE SECTIONS =================== -->
   <div class="container">
     <section id="dashboard" class="page-section active"></section>
-    <!-- Replace the empty validators section with the following markup (keeps existing section id) -->
-<section id="validators" class="page-section" style="display:none;">
-  <div class="dashboard-page">
-    <div class="chart-section">
-      <div class="chart-title">🛡️ Validators</div>
-
-      <!-- Search + summary -->
-      <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px;">
-        <input id="validatorSearch" placeholder="Search validators by domain, public key, or master key..." />
-        <div id="validatorsSummary" style="margin-left:auto;"></div>
-      </div>
-
-      <!-- Summary cards -->
-      <div id="validatorsSummaryGrid" class="validators-summary-grid" style="margin-top:14px;"></div>
-
-      <!-- List -->
-      <div id="validatorsList" class="validators-grid" style="margin-top:16px;">
-        <div style="color: #888; text-align:center; padding:30px;">
-          <div style="font-size:1.1rem; font-weight:600">Validator list will appear here</div>
-          <div style="opacity:.85; margin-top:8px;">Make sure your proxy is running: <code>node js/proxy-server.js</code></div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</section>
+    <section id="validators" class="page-section"></section>
     <section id="tokens" class="page-section"></section>
     <section id="amm" class="page-section"></section>
     <section id="analytics" class="page-section"></section>
@@ -195,4 +170,3 @@
 
 </body>
 </html>
-
