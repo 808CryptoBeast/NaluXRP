@@ -1,13 +1,13 @@
 /* =========================================
    NaluXrp 🌊 — Validators Deep Dive
    Live XRPL validator metrics + modal
-   (complete file: proxy-first fetch + full UI + styles)
+   (complete file: WebSocket-first fetch + HTTP fallbacks + full UI + styles)
    ========================================= */
 
 /* ---------- CONFIG ---------- */
-// Replace this with your deployed public proxy (Cloudflare Worker / Vercel) after you deploy it.
-// Example: "https://naluxrp-validators.workers.dev"
-const DEPLOYED_PROXY = "https://<YOUR_WORKER_SUBDOMAIN>.workers.dev"; // <-- REPLACE THIS
+// If you deploy a public proxy (Cloudflare Worker / Vercel), set DEPLOYED_PROXY to its base URL.
+// Example: const DEPLOYED_PROXY = "https://naluxrp-validators.workers.dev";
+const DEPLOYED_PROXY = "https://<YOUR_WORKER_SUBDOMAIN>.workers.dev"; // <-- REPLACE THIS WHEN DEPLOYED
 
 const PUBLIC_VALIDATORS_API = "https://api.xrpl.org/v2/network/validators?limit=200";
 
@@ -134,32 +134,67 @@ async function tryFetchUrl(url, timeoutMs = 8000) {
 }
 
 /* ----------------------------------------------------
-   FETCH LIVE VALIDATOR DATA (proxy-first, environment-aware)
+   FETCH LIVE VALIDATOR DATA (WebSocket-first, then HTTP fallbacks)
 ---------------------------------------------------- */
 async function fetchLiveValidators() {
   const container = document.getElementById("validatorsList");
   if (!container) return;
   
-  console.log("🌐 Fetching live validator data (proxy-first with fallbacks)...");
+  console.log("🌐 Fetching live validator data (WebSocket-first, proxy/Public fallback)...");
   
-  if (container.querySelector('.loading-subtext')) {
-    container.querySelector('.loading-subtext').textContent = 'Attempting proxy(s) and public API...';
+  // Update loading message
+  const loadingEl = container.querySelector('.loading-subtext');
+  if (loadingEl) loadingEl.textContent = 'Connecting to XRPL WebSocket (wss://s1.ripple.com)...';
+
+  // 1) Try WebSocket via xrpl.Client (preferred — avoids CORS and proxies)
+  if (typeof window.xrpl !== "undefined" && window.xrpl.Client) {
+    try {
+      const client = new xrpl.Client("wss://s1.ripple.com");
+      await client.connect();
+      console.log("🌐 Connected to rippled via WebSocket");
+
+      // request validators
+      const res = await client.request({ command: "validators" });
+
+      try { await client.disconnect(); } catch (e) { /* no-op */ }
+
+      // Normalize response shapes
+      let validatorsArr = null;
+      if (res && Array.isArray(res.validators)) validatorsArr = res.validators;
+      else if (res && Array.isArray(res.result?.validators)) validatorsArr = res.result.validators;
+      else if (Array.isArray(res)) validatorsArr = res;
+      else {
+        const arr = Object.values(res || {}).find(v => Array.isArray(v));
+        if (arr) validatorsArr = arr;
+      }
+
+      if (Array.isArray(validatorsArr) && validatorsArr.length) {
+        validatorCache = validatorsArr;
+        console.log(`✅ Loaded ${validatorCache.length} validators via WebSocket`);
+        renderValidators(validatorCache);
+        showLiveDataIndicator();
+        return;
+      } else {
+        console.warn("WebSocket validators response had no validators array — falling back to HTTP candidates", res);
+        // fall through to HTTP fallback
+      }
+    } catch (err) {
+      console.warn("WebSocket attempt failed — falling back to HTTP candidates:", err && err.message ? err.message : err);
+      // fall through to HTTP fallback
+    }
+  } else {
+    console.log("xrpl.Client not present in window — skipping WebSocket attempt");
   }
-  
-  // Build candidate list:
-  // 1) Deployed public proxy (Cloudflare Worker / Vercel) - if configured
-  // 2) same-origin API (e.g., /api/validators) - useful when you host backend with the site
-  // 3) local dev proxy (http://localhost:3000/validators)
-  // 4) public XRPL REST API (last resort)
+
+  // 2) HTTP fallback candidates
+  if (loadingEl) loadingEl.textContent = 'Attempting proxy(s) and public API...';
+
   const candidates = [];
   if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) {
     candidates.push(`${DEPLOYED_PROXY}/validators`);
   }
-  // same-origin API
   candidates.push(`${location.protocol}//${location.host}/api/validators`);
-  // local dev proxy
   candidates.push("http://localhost:3000/validators");
-  // public fallback
   candidates.push(PUBLIC_VALIDATORS_API);
 
   const attemptErrors = [];
@@ -167,7 +202,7 @@ async function fetchLiveValidators() {
   let used = null;
 
   for (const candidate of candidates) {
-    console.log("Attempting validator fetch from", candidate);
+    console.log('Attempting validator fetch from', candidate);
     const result = await tryFetchUrl(candidate);
     if (!result.ok) {
       attemptErrors.push({ url: candidate, error: result.error });
@@ -204,18 +239,13 @@ async function fetchLiveValidators() {
   validatorCache = data.validators;
   console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
 
-  // Show stats
-  const unlCount = validatorCache.filter(v => v.unl === true || v.unl === "Ripple" || v.unl === "true").length;
-  const communityCount = validatorCache.length - unlCount;
-  console.log(`📊 Live Stats: ${unlCount} UNL, ${communityCount} Community`);
-
   // Render and indicator
   renderValidators(validatorCache);
   showLiveDataIndicator();
 }
 
 /* ----------------------------------------------------
-   RENDER VALIDATORS (full implementation)
+   RENDER VALIDATORS
 ---------------------------------------------------- */
 function renderValidators(list) {
   const container = document.getElementById("validatorsList");
@@ -726,7 +756,7 @@ function addValidatorStylesOriginal() {
   style.id = 'validator-styles';
   style.textContent = `
     /* =========================================
-       NaluXrp 🌊 ��� Validators (validator.css)
+       NaluXrp 🌊 — Validators (validator.css)
        ========================================= */
 
     /* Summary cards */
@@ -770,7 +800,8 @@ function addValidatorStylesOriginal() {
       color: rgba(255,255,255,0.45);
     }
 
-    /* Grid + cards */
+    /* Grid + cards — base card visuals moved to css/components/card.css
+       Keep layout and validator-specific visual accents here. */
     .validators-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -783,16 +814,12 @@ function addValidatorStylesOriginal() {
       display: flex;
       flex-direction: column;
       gap: 6px;
+      /* exclusive validator tweaks (radial highlights, backdrop) can remain here */
       backdrop-filter: blur(12px);
-      background: var(--card-bg);
-      border-radius: 16px;
-      padding: 18px;
-      border: 2px solid var(--accent-tertiary);
-      box-shadow: 0 8px 40px rgba(0,0,0,0.1);
     }
 
     .validator-card:hover {
-      transform: translateY(-4px);
+      transform: translateY(-2px);
       box-shadow: 0 18px 32px rgba(0,0,0,0.45);
       border-color: var(--accent-primary, #ffcc66);
       transition: all 0.2s ease-out;
@@ -815,10 +842,6 @@ function addValidatorStylesOriginal() {
     .validator-domain {
       font-size: 0.86rem;
       color: var(--text-secondary, #a2a2b3);
-      margin-bottom: 10px;
-      font-weight: 600;
-      border-bottom: 1px solid var(--accent-tertiary);
-      padding-bottom: 8px;
     }
 
     .unl-badge {
@@ -905,21 +928,6 @@ function addValidatorStylesOriginal() {
       100% { transform: rotate(360deg); }
     }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes fadeOut {
-      from { opacity: 1; transform: translateY(0); }
-      to { opacity: 0; transform: translateY(20px); }
-    }
-
     .loading-subtext {
       font-size: 14px;
       color: var(--text-secondary);
@@ -1001,4 +1009,4 @@ window.openValidatorModal = openValidatorModal;
 window.closeValidatorModal = closeValidatorModal;
 window.fetchLiveValidators = fetchLiveValidators;
 
-console.log("🛡️ Live Validators module loaded (proxy-first)");
+console.log("🛡️ Live Validators module loaded (WebSocket-first)");
