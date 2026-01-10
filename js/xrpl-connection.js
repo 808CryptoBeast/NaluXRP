@@ -1056,6 +1056,51 @@ setInterval(function () {
   }
 }, 30000); // Check every 30 seconds
 
+/* ---------- SHARED REQUEST WRAPPER (ADDED) ---------- */
+
+/**
+ * requestXrpl(payload, { timeoutMs })
+ * - Attempts to perform a one-shot request using the shared xrpl.Client (if connected),
+ *   waiting briefly for connection if necessary.
+ * - Falls through to rejection on timeout or if client unavailable.
+ */
+window.requestXrpl = async function (payload, { timeoutMs = 10000 } = {}) {
+  if (!payload) throw new Error("payload required");
+
+  // If client is present & connected, use it directly
+  if (window.XRPL && window.XRPL.client && window.XRPL.connected && typeof window.XRPL.client.request === "function") {
+    return window.XRPL.client.request(payload);
+  }
+
+  // Ensure connect attempt has been triggered
+  if (typeof window.connectXRPL === "function") {
+    try { window.connectXRPL(); } catch (e) { /* ignore */ }
+  }
+
+  const start = Date.now();
+  const intervalMs = 200;
+
+  return new Promise((resolve, reject) => {
+    const check = setInterval(() => {
+      if (window.XRPL && window.XRPL.client && window.XRPL.connected && typeof window.XRPL.client.request === "function") {
+        clearInterval(check);
+        clearTimeout(tout);
+        window.XRPL.client.request(payload).then(resolve).catch(reject);
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(check);
+        reject(new Error("Timed out waiting for shared XRPL connection"));
+      }
+    }, intervalMs);
+
+    const tout = setTimeout(() => {
+      clearInterval(check);
+      reject(new Error("Timed out waiting for shared XRPL connection"));
+    }, timeoutMs + 50);
+  });
+};
+
 /* ---------- EXPORTS ---------- */
 
 window.connectXRPL = connectXRPL;
