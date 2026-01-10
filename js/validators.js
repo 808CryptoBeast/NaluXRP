@@ -198,110 +198,120 @@ async function fetchLiveValidators() {
   const container = document.getElementById("validatorsList");
   if (!container) return;
 
-  console.log("🌐 Fetching live validator data (WebSocket-first, proxy/Public fallback)...");
-
-  // Update loading message
+  // update UI
   const loadingEl = container.querySelector('.loading-subtext');
-  if (loadingEl) loadingEl.textContent = 'Connecting to XRPL WebSocket (wss://s1.ripple.com)...';
+  if (loadingEl) loadingEl.textContent = "Querying shared XRPL connection (if available)...";
 
-  // 1) Try WebSocket via xrpl.Client (preferred — avoids CORS and proxies)
-  if (typeof window.xrpl !== "undefined" && window.xrpl.Client) {
+  // 1) Try shared XRPL connection wrapper
+  if (typeof window.requestXrpl === "function") {
     try {
-      const client = new xrpl.Client("wss://s1.ripple.com");
-      await client.connect();
-      console.log("🌐 Connected to rippled via WebSocket");
-
-      // request validators
-      const res = await client.request({ command: "validators" });
-
-      try { await client.disconnect(); } catch (e) { /* no-op */ }
-
-      // Normalize response shapes
+      const res = await window.requestXrpl({ command: "validators" }, { timeoutMs: 9000 });
       let validatorsArr = null;
       if (res && Array.isArray(res.validators)) validatorsArr = res.validators;
       else if (res && Array.isArray(res.result?.validators)) validatorsArr = res.result.validators;
       else if (Array.isArray(res)) validatorsArr = res;
       else {
-        const arr = Object.values(res || {}).find(v => Array.isArray(v));
-        if (arr) validatorsArr = arr;
+        const maybe = Object.values(res || {}).find(v => Array.isArray(v));
+        if (maybe) validatorsArr = maybe;
       }
 
       if (Array.isArray(validatorsArr) && validatorsArr.length) {
         validatorCache = validatorsArr;
-        console.log(`✅ Loaded ${validatorCache.length} validators via WebSocket`);
         renderValidators(validatorCache);
         showLiveDataIndicator();
+        console.log(`✅ Loaded ${validatorCache.length} validators via shared XRPL connection`);
         return;
       } else {
-        console.warn("WebSocket validators response had no validators array — falling back to HTTP candidates", res);
-        // fall through to HTTP fallback
+        console.warn("Shared XRPL request returned no validators — continuing to fallbacks");
       }
     } catch (err) {
-      console.warn("WebSocket attempt failed — falling back to HTTP candidates:", err && err.message ? err.message : err);
-      // fall through to HTTP fallback
+      console.warn("Shared XRPL request failed — continuing to fallbacks:", err && err.message ? err.message : err);
     }
   } else {
-    console.log("xrpl.Client not present in window — skipping WebSocket attempt");
+    console.log("Shared requestXrpl wrapper not available, continuing to fallbacks");
   }
 
-  // 2) HTTP fallback candidates
-  if (loadingEl) loadingEl.textContent = 'Attempting proxy(s) and public API...';
+  // 2) One-off raw rippled WebSocket (non-persistent) fallback
+  if (loadingEl) loadingEl.textContent = "Querying rippled via WebSocket (one-shot)...";
+  try {
+    const wsRes = await rippledWsRequest({ command: "validators" }, 9000);
+    let validatorsArr = null;
+    if (wsRes && Array.isArray(wsRes.validators)) validatorsArr = wsRes.validators;
+    else if (wsRes && Array.isArray(wsRes.validator_list)) validatorsArr = wsRes.validator_list;
+    else if (Array.isArray(wsRes)) validatorsArr = wsRes;
+    else {
+      const maybe = Object.values(wsRes || {}).find(v => Array.isArray(v));
+      if (maybe) validatorsArr = maybe;
+    }
 
+    if (Array.isArray(validatorsArr) && validatorsArr.length) {
+      validatorCache = validatorsArr;
+      renderValidators(validatorCache);
+      showLiveDataIndicator();
+      console.log(`✅ Loaded ${validatorCache.length} validators via one-off rippled WS`);
+      return;
+    } else {
+      console.warn("Raw WS returned no validators — continuing to HTTP fallbacks");
+    }
+  } catch (err) {
+    console.warn("Raw rippled WS request failed:", err && err.message ? err.message : err);
+  }
+
+  // 3) HTTP fallback chain
+  if (loadingEl) loadingEl.textContent = "Attempting proxy(s) and public API...";
   const candidates = [];
-  if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) {
-    candidates.push(`${DEPLOYED_PROXY}/validators`);
-  }
+  if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) candidates.push(`${DEPLOYED_PROXY}/validators`);
   candidates.push(`${location.protocol}//${location.host}/api/validators`);
   candidates.push("http://localhost:3000/validators");
   candidates.push(PUBLIC_VALIDATORS_API);
 
   const attemptErrors = [];
-  let data = null;
+  let found = null;
   let used = null;
 
-  for (const candidate of candidates) {
-    console.log('Attempting validator fetch from', candidate);
-    const result = await tryFetchUrl(candidate);
-    if (!result.ok) {
-      attemptErrors.push({ url: candidate, error: result.error });
-      continue;
-    }
+  for (const url of candidates) {
+    try {
+      console.log("Attempting validator fetch from", url);
+      const r = await tryFetchUrl(url, 9000);
+      if (!r.ok) {
+        attemptErrors.push({ url, error: r.error });
+        continue;
+      }
 
-    const payload = result.data;
-    let validatorsArr = null;
+      const payload = r.data;
+      let validatorsArr = null;
+      if (payload && Array.isArray(payload.validators)) validatorsArr = payload.validators;
+      else if (payload && Array.isArray(payload.result?.validators)) validatorsArr = payload.result.validators;
+      else if (Array.isArray(payload)) validatorsArr = payload;
+      else {
+        const maybe = Object.values(payload || {}).find(v => Array.isArray(v));
+        if (maybe) validatorsArr = maybe;
+      }
 
-    if (payload && Array.isArray(payload.validators)) validatorsArr = payload.validators;
-    else if (payload && Array.isArray(payload.result?.validators)) validatorsArr = payload.result.validators;
-    else if (Array.isArray(payload)) validatorsArr = payload;
-    else {
-      const arr = Object.values(payload || {}).find(v => Array.isArray(v));
-      if (arr) validatorsArr = arr;
-    }
-
-    if (Array.isArray(validatorsArr) && validatorsArr.length) {
-      data = { validators: validatorsArr };
-      used = candidate;
-      break;
-    } else {
-      attemptErrors.push({ url: candidate, error: "No validators array found in response" });
+      if (Array.isArray(validatorsArr) && validatorsArr.length) {
+        found = validatorsArr;
+        used = url;
+        break;
+      } else {
+        attemptErrors.push({ url, error: "No validators array found in response" });
+      }
+    } catch (err) {
+      attemptErrors.push({ url, error: err && err.message ? err.message : String(err) });
     }
   }
 
-  if (!data || !Array.isArray(data.validators)) {
-    console.error("No validator data found. Attempt errors:", attemptErrors);
+  if (!found) {
     const details = attemptErrors.map(a => `${a.url} → ${a.error}`).join("\n");
+    console.error("No validator data found. Attempt errors:", attemptErrors);
     showProxyError(`No validator data available.\nAttempts:\n${details}`);
     return;
   }
 
-  validatorCache = data.validators;
-  console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
-
-  // Render and indicator
+  validatorCache = found;
   renderValidators(validatorCache);
   showLiveDataIndicator();
+  console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
 }
-
 /* ----------------------------------------------------
    RENDER VALIDATORS
 ---------------------------------------------------- */
@@ -861,3 +871,4 @@ window.closeValidatorModal = closeValidatorModal;
 window.fetchLiveValidators = fetchLiveValidators;
 
 console.log("🛡️ Live Validators module loaded (WebSocket-first)");
+
