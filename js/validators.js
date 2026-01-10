@@ -1,7 +1,6 @@
 /* =========================================
    NaluXrp 🌊 — Validators Deep Dive
    Live XRPL validator metrics + modal
-   (complete file: WebSocket-first fetch + HTTP fallbacks + full UI + styles)
    ========================================= */
 
 /* ---------- CONFIG ---------- */
@@ -24,27 +23,27 @@ let isInitialized = false;
 
   if (!document.getElementById("validatorsList")) {
     section.innerHTML = section.innerHTML + `
-      <div class="dashboard-page">
-        <div class="chart-section">
-          <div class="chart-title">🛡️ Validators</div>
-
-          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px;">
-            <input id="validatorSearch" placeholder="Search validators by domain, public key, or master key..." />
-            <div id="validatorsSummary" style="margin-left:auto;"></div>
-          </div>
-
-          <div id="validatorsSummaryGrid" class="validators-summary-grid" style="margin-top:14px;"></div>
-
-          <div id="validatorsList" class="validators-grid" style="margin-top:16px;">
-            <div style="color: #888; text-align:center; padding:30px;">
-              <div style="font-size:1.05rem; font-weight:600">Validator list will appear here</div>
-              <div style="opacity:.85; margin-top:8px;">Start the proxy (dev): <code>npm run proxy</code></div>
-            </div>
-          </div>
-
-        </div>
+      <div id="validatorsList" class="validators-loading">
+        Initializing validators module…
       </div>
     `;
+  }
+
+  if (!document.getElementById("validatorModalOverlay")) {
+    const overlay = document.createElement("div");
+    overlay.id = "validatorModalOverlay";
+    overlay.className = "validator-modal-overlay";
+    overlay.style.display = "none";
+    overlay.innerHTML = `
+      <div class="validator-modal">
+        <header class="validator-modal-header">
+          <h2>Validator Details</h2>
+          <button class="validator-modal-close" onclick="closeValidatorModal()">✕</button>
+        </header>
+        <div id="validatorModalBody" class="validator-modal-body"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
   }
 })();
 
@@ -53,21 +52,21 @@ let isInitialized = false;
 ---------------------------------------------------- */
 async function initValidators() {
   console.log("🛡️ Initializing validators module...");
-  
+
   const listContainer = document.getElementById("validatorsList");
   if (!listContainer) {
     console.error("❌ validatorsList container not found");
     return;
   }
-  
+
   if (isInitialized && validatorCache.length > 0) {
     console.log("✅ Showing cached validators");
     renderValidators(validatorCache);
     return;
   }
-  
+
   isInitialized = true;
-  
+
   // Show loading state
   listContainer.innerHTML = `
     <div class="validators-loading">
@@ -76,22 +75,21 @@ async function initValidators() {
       <div class="loading-subtext">Connecting to proxy / public API...</div>
     </div>
   `;
-  
+
   // Add styles
   addValidatorStyles();
-  
+
   // Ensure modal exists
   ensureValidatorModal();
-  
+
   // Fetch and render data
   try {
     await fetchLiveValidators();
     setupValidatorSearch();
     console.log("✅ Validators module initialized successfully");
-    
-  } catch (error) {
-    console.error("❌ Failed to initialize validators:", error);
-    showConnectionError();
+  } catch (err) {
+    console.warn("Validators initialization error:", err);
+    showConnectionError(err && err.message ? err.message : "Unknown error");
   }
 }
 
@@ -104,95 +102,166 @@ async function tryFetchUrl(url, timeoutMs = 8000) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
 
-    const resp = await fetch(url, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      signal: controller.signal
-    });
-
+    const res = await fetch(url, { signal: controller.signal, credentials: "same-origin" });
     clearTimeout(id);
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      const msg = `HTTP ${resp.status}: ${resp.statusText}${text ? " — " + text : ""}`;
-      console.warn("fetch failed for", url, msg);
-      return { ok: false, error: msg };
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
     }
 
-    const json = await resp.json().catch(err => {
-      console.warn("fetch parse failed for", url, err && err.message ? err.message : err);
-      return null;
-    });
-
-    if (json == null) return { ok: false, error: "Invalid JSON response" };
-    return { ok: true, data: json };
+    // try parse json
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("application/json")) {
+      const data = await res.json();
+      return { ok: true, data };
+    } else {
+      const text = await res.text();
+      try {
+        return { ok: true, data: JSON.parse(text) };
+      } catch {
+        return { ok: false, error: "Invalid JSON response" };
+      }
+    }
   } catch (err) {
-    const em = err && err.message ? err.message : String(err);
-    console.warn("fetch failed for", url, em);
-    return { ok: false, error: em };
+    const message = err.name === "AbortError" ? "Timeout" : (err.message || String(err));
+    return { ok: false, error: message };
   }
 }
 
 /* ----------------------------------------------------
-   FETCH LIVE VALIDATOR DATA (WebSocket-first, then HTTP fallbacks)
+   RAW rippled WebSocket one-shot helper (non-persistent)
+   (used as a fallback to avoid creating another persistent xrpl.Client)
+---------------------------------------------------- */
+function rippledWsRequest(payload = { command: "validators" }, timeoutMs = 9000) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = (payload && payload.server) || "wss://s1.ripple.com";
+      const ws = new WebSocket(url);
+      let finished = false;
+      const t = setTimeout(() => {
+        if (!finished) {
+          finished = true;
+          try { ws.close(); } catch {}
+          reject(new Error("WS timeout"));
+        }
+      }, timeoutMs);
+
+      ws.addEventListener("open", () => {
+        try {
+          ws.send(JSON.stringify(payload));
+        } catch (e) { /* ignore */ }
+      });
+
+      ws.addEventListener("message", (msg) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(t);
+        try {
+          const data = JSON.parse(msg.data);
+          ws.close();
+          resolve(data);
+        } catch (e) {
+          ws.close();
+          reject(e);
+        }
+      });
+
+      ws.addEventListener("error", (err) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(t);
+        try { ws.close(); } catch {}
+        reject(err || new Error("WS error"));
+      });
+
+      ws.addEventListener("close", () => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(t);
+          reject(new Error("WS closed"));
+        }
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+/* ----------------------------------------------------
+   FETCH LIVE VALIDATOR DATA (preference order)
+   1) shared xrpl client via window.requestXrpl()
+   2) one-off rippled WebSocket (rippled)
+   3) HTTP fallback chain: deployed proxy -> same-origin /api/validators -> localhost -> public API
 ---------------------------------------------------- */
 async function fetchLiveValidators() {
   const container = document.getElementById("validatorsList");
   if (!container) return;
-  
-  console.log("🌐 Fetching live validator data (WebSocket-first, proxy/Public fallback)...");
-  
-  // Update loading message
-  const loadingEl = container.querySelector('.loading-subtext');
-  if (loadingEl) loadingEl.textContent = 'Connecting to XRPL WebSocket (wss://s1.ripple.com)...';
 
-  // 1) Try WebSocket via xrpl.Client (preferred — avoids CORS and proxies)
-  if (typeof window.xrpl !== "undefined" && window.xrpl.Client) {
+  // Show helpful subtext
+  const loadingSub = container.querySelector(".loading-subtext");
+  if (loadingSub) loadingSub.textContent = "Trying shared XRPL connection…";
+
+  // 1) Try shared XRPL connection wrapper if available
+  if (typeof window.requestXrpl === "function") {
     try {
-      const client = new xrpl.Client("wss://s1.ripple.com");
-      await client.connect();
-      console.log("🌐 Connected to rippled via WebSocket");
-
-      // request validators
-      const res = await client.request({ command: "validators" });
-
-      try { await client.disconnect(); } catch (e) { /* no-op */ }
-
-      // Normalize response shapes
+      const res = await window.requestXrpl({ command: "validators" }, { timeoutMs: 9000 });
+      // normalize a few variant shapes
       let validatorsArr = null;
       if (res && Array.isArray(res.validators)) validatorsArr = res.validators;
       else if (res && Array.isArray(res.result?.validators)) validatorsArr = res.result.validators;
       else if (Array.isArray(res)) validatorsArr = res;
       else {
-        const arr = Object.values(res || {}).find(v => Array.isArray(v));
-        if (arr) validatorsArr = arr;
+        // attempt to discover any array in result
+        const maybe = Object.values(res || {}).find(v => Array.isArray(v));
+        if (maybe) validatorsArr = maybe;
       }
 
       if (Array.isArray(validatorsArr) && validatorsArr.length) {
         validatorCache = validatorsArr;
-        console.log(`✅ Loaded ${validatorCache.length} validators via WebSocket`);
         renderValidators(validatorCache);
         showLiveDataIndicator();
+        console.log(`✅ Loaded ${validatorCache.length} validators via shared XRPL connection`);
         return;
       } else {
-        console.warn("WebSocket validators response had no validators array — falling back to HTTP candidates", res);
-        // fall through to HTTP fallback
+        console.warn("Shared XRPL request returned no validators — falling back");
       }
     } catch (err) {
-      console.warn("WebSocket attempt failed — falling back to HTTP candidates:", err && err.message ? err.message : err);
-      // fall through to HTTP fallback
+      console.warn("Shared XRPL request failed — falling back:", err && err.message ? err.message : err);
     }
-  } else {
-    console.log("xrpl.Client not present in window — skipping WebSocket attempt");
   }
 
-  // 2) HTTP fallback candidates
-  if (loadingEl) loadingEl.textContent = 'Attempting proxy(s) and public API...';
+  // 2) Try one-off rippled WebSocket
+  if (loadingSub) loadingSub.textContent = "Querying rippled via WebSocket…";
+  try {
+    const wsRes = await rippledWsRequest({ command: "validators" }, 9000);
+    let validatorsArr = null;
+    if (wsRes && Array.isArray(wsRes.validators)) validatorsArr = wsRes.validators;
+    else if (wsRes && Array.isArray(wsRes.validator_list)) validatorsArr = wsRes.validator_list;
+    else if (Array.isArray(wsRes)) validatorsArr = wsRes;
+    else {
+      const maybe = Object.values(wsRes || {}).find(v => Array.isArray(v));
+      if (maybe) validatorsArr = maybe;
+    }
+
+    if (Array.isArray(validatorsArr) && validatorsArr.length) {
+      validatorCache = validatorsArr;
+      renderValidators(validatorCache);
+      showLiveDataIndicator();
+      console.log(`✅ Loaded ${validatorCache.length} validators via one-off rippled WS`);
+      return;
+    } else {
+      console.warn("Raw WS returned no validators, continuing to HTTP fallbacks", wsRes);
+    }
+  } catch (err) {
+    console.warn("Raw rippled WS request failed:", err && err.message ? err.message : err);
+  }
+
+  // 3) HTTP fallback chain
+  if (loadingSub) loadingSub.textContent = "Attempting proxy(s) and public API...";
 
   const candidates = [];
-  if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) {
-    candidates.push(`${DEPLOYED_PROXY}/validators`);
-  }
+  if (DEPLOYED_PROXY && !DEPLOYED_PROXY.includes("<YOUR_WORKER_SUBDOMAIN>")) candidates.push(`${DEPLOYED_PROXY}/validators`);
   candidates.push(`${location.protocol}//${location.host}/api/validators`);
   candidates.push("http://localhost:3000/validators");
   candidates.push(PUBLIC_VALIDATORS_API);
@@ -202,46 +271,46 @@ async function fetchLiveValidators() {
   let used = null;
 
   for (const candidate of candidates) {
-    console.log('Attempting validator fetch from', candidate);
-    const result = await tryFetchUrl(candidate);
-    if (!result.ok) {
-      attemptErrors.push({ url: candidate, error: result.error });
-      continue;
-    }
+    try {
+      console.log("Attempting validator fetch from", candidate);
+      const r = await tryFetchUrl(candidate, 9000);
+      if (!r.ok) {
+        attemptErrors.push({ url: candidate, error: r.error });
+        continue;
+      }
 
-    const payload = result.data;
-    let validatorsArr = null;
+      const payload = r.data;
+      let validatorsArr = null;
+      if (payload && Array.isArray(payload.validators)) validatorsArr = payload.validators;
+      else if (payload && Array.isArray(payload.result?.validators)) validatorsArr = payload.result.validators;
+      else if (Array.isArray(payload)) validatorsArr = payload;
+      else {
+        const maybe = Object.values(payload || {}).find(v => Array.isArray(v));
+        if (maybe) validatorsArr = maybe;
+      }
 
-    if (payload && Array.isArray(payload.validators)) validatorsArr = payload.validators;
-    else if (payload && Array.isArray(payload.result?.validators)) validatorsArr = payload.result.validators;
-    else if (Array.isArray(payload)) validatorsArr = payload;
-    else {
-      const arr = Object.values(payload || {}).find(v => Array.isArray(v));
-      if (arr) validatorsArr = arr;
-    }
-
-    if (Array.isArray(validatorsArr) && validatorsArr.length) {
-      data = { validators: validatorsArr };
-      used = candidate;
-      break;
-    } else {
-      attemptErrors.push({ url: candidate, error: "No validators array found in response" });
+      if (Array.isArray(validatorsArr) && validatorsArr.length) {
+        data = { validators: validatorsArr };
+        used = candidate;
+        break;
+      } else {
+        attemptErrors.push({ url: candidate, error: "No validators array found in response" });
+      }
+    } catch (err) {
+      attemptErrors.push({ url: candidate, error: err && err.message ? err.message : String(err) });
     }
   }
 
   if (!data || !Array.isArray(data.validators)) {
-    console.error("No validator data found. Attempt errors:", attemptErrors);
     const details = attemptErrors.map(a => `${a.url} → ${a.error}`).join("\n");
-    showProxyError(`No validator data available.\nAttempts:\n${details}`);
+    showProxyError(`No validator data available. Attempts:\n${details}`);
     return;
   }
 
   validatorCache = data.validators;
-  console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
-
-  // Render and indicator
   renderValidators(validatorCache);
   showLiveDataIndicator();
+  console.log(`✅ Loaded ${validatorCache.length} live validators via ${used}`);
 }
 
 /* ----------------------------------------------------
@@ -250,110 +319,89 @@ async function fetchLiveValidators() {
 function renderValidators(list) {
   const container = document.getElementById("validatorsList");
   if (!container) return;
-  
+
   if (!list || !list.length) {
     container.innerHTML = '<div class="validators-empty">No live validator data available.</div>';
     return;
   }
-  
+
   console.log(`📊 Rendering ${list.length} live validators...`);
-  
+
   // Calculate statistics
   const unlCount = list.filter(v => v.unl === true || v.unl === "Ripple" || v.unl === "true").length;
   const communityCount = list.length - unlCount;
-  
-  // Sort: UNL first, then by reliability score
+
+  // Sort: UNL first, then by agreement/score (if available)
   const sorted = [...list].sort((a, b) => {
     const aUnl = a.unl === true || a.unl === "Ripple" || a.unl === "true";
     const bUnl = b.unl === true || b.unl === "Ripple" || b.unl === "true";
-    
-    // UNL validators first
-    if (aUnl && !bUnl) return -1;
-    if (!aUnl && bUnl) return 1;
-    
-    // Then by reliability score
+    if (aUnl !== bUnl) return aUnl ? -1 : 1;
+
     const aScore = calculateReliabilityScore(a);
     const bScore = calculateReliabilityScore(b);
-    
     return bScore - aScore;
   });
-  
-  // Create stats header
-  const statsHTML = `
-    <div class="validators-stats">
-      <div class="stats-card">
-        <div class="stats-title">Total Validators</div>
-        <div class="stats-value">${list.length}</div>
-        <div class="stats-subtitle">Live Count</div>
-      </div>
-      <div class="stats-card">
-        <div class="stats-title">Ripple UNL</div>
-        <div class="stats-value">${unlCount}</div>
-        <div class="stats-subtitle">Consensus Nodes</div>
-      </div>
-      <div class="stats-card">
-        <div class="stats-title">Community</div>
-        <div class="stats-value">${communityCount}</div>
-        <div class="stats-subtitle">Independent Nodes</div>
-      </div>
-      <div class="stats-card">
-        <div class="stats-title">Status</div>
-        <div class="stats-value">🟢</div>
-        <div class="stats-subtitle">Live Data</div>
-      </div>
-    </div>
-  `;
-  
-  // Render all validators
-  const validatorsHTML = sorted.map((validator, index) => {
-    const metrics = calculateValidatorMetrics(validator);
-    const key = validator.validation_public_key || `unknown-${index}`;
-    const shortKey = key.length > 14 ? key.slice(0, 10) + "…" + key.slice(-4) : key || "—";
-    const domain = validator.domain || "unknown";
-    
-    // Use available data or provide defaults
-    const agreement24h = validator.agreement_24h || { total: 0, missed: 0, score: 0 };
-    const total = agreement24h.total || 0;
-    const missed = agreement24h.missed || 0;
-    
+
+  // Build cards
+  const validatorsHTML = sorted.map(v => {
+    const key = v.validation_public_key || v.public_key || "—";
+    const shortKey = key.length > 16 ? key.slice(0, 8) + "…" + key.slice(-6) : key;
+    const domain = v.domain || v.domain_name || "unknown";
+    const metrics = calculateValidatorMetrics(v);
+    const unl = v.unl === true || v.unl === "Ripple" || v.unl === "true";
+
     return `
-      <div class="validator-card ${metrics.isUnl ? 'unl-validator' : 'community-validator'}">
+      <div class="validator-card ${unl ? "unl-validator" : "community-validator"}">
         <div class="validator-header">
           <div class="validator-key" title="${key}">${shortKey}</div>
-          <div class="unl-badge ${metrics.isUnl ? 'unl-full' : 'unl-partial'}">
-            ${metrics.isUnl ? 'Ripple UNL' : 'Community'}
-          </div>
+          <span class="unl-badge ${unl ? "unl-full" : "unl-partial"}">
+            ${unl ? "Ripple UNL" : "Community"}
+          </span>
         </div>
+
         <div class="validator-domain">${domain}</div>
+
         <div class="validator-stat-row">
-          <div class="validator-pill pill-score">Score ${metrics.score}/100</div>
-          <div class="validator-pill pill-label ${getLabelClass(metrics.label)}">${metrics.label}</div>
+          <span class="validator-pill pill-score">Score ${metrics.score}</span>
+          <span class="validator-pill pill-label ${getLabelClass(metrics.label)}">${metrics.label}</span>
         </div>
-        <div class="validator-stat-row">
-          <div class="validator-stat">
-            <span>Uptime 24h</span><strong>${formatPercent(metrics.uptime24h)}</strong>
-          </div>
-          <div class="validator-stat">
-            <span>Agreement 24h</span><strong>${formatPercent(metrics.agreement24h)}</strong>
-          </div>
-        </div>
+
         <div class="validator-stat-row">
           <div class="validator-stat">
-            <span>Total Validations</span><strong>${total}</strong>
+            <span>Agreement 24h</span>
+            <strong>${formatPercent(metrics.agreement24)}</strong>
           </div>
           <div class="validator-stat">
-            <span>Missed</span><strong>${missed}</strong>
+            <span>Uptime 24h</span>
+            <strong>${formatPercent(metrics.uptime24)}</strong>
           </div>
         </div>
-        <button class="validator-details-btn" onclick="openValidatorModal('${key}')">
-          View Live Details
-        </button>
+
+        <button class="validator-details-btn" onclick="openValidatorModal('${key.replace(/'/g, "\\'")}')">View Details</button>
       </div>
     `;
   }).join("");
-  
+
+  // summary
+  const statsHTML = `
+    <div class="validators-summary-grid">
+      <div class="validators-summary-card">
+        <div class="summary-title">Total Validators</div>
+        <div class="summary-value">${list.length}</div>
+      </div>
+      <div class="validators-summary-card">
+        <div class="summary-title">Ripple UNL</div>
+        <div class="summary-value">${unlCount}</div>
+      </div>
+      <div class="validators-summary-card">
+        <div class="summary-title">Community</div>
+        <div class="summary-value">${communityCount}</div>
+      </div>
+    </div>
+  `;
+
   container.innerHTML = statsHTML + '<div class="validators-grid">' + validatorsHTML + '</div>';
-  
+
   console.log(`✅ Rendered ${sorted.length} live validators`);
 }
 
@@ -361,85 +409,50 @@ function renderValidators(list) {
    CALCULATE METRICS
 ---------------------------------------------------- */
 function calculateValidatorMetrics(v) {
-  const agreement24h = v.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const agreement1h = v.agreement_1h || { total: 0, missed: 0, score: 0 };
-  
-  const uptime1h = calculateUptime(agreement1h);
-  const uptime24h = calculateUptime(agreement24h);
-  const agreement1hScore = calculateAgreement(agreement1h);
-  const agreement24hScore = calculateAgreement(agreement24h);
-  
-  const score = calculateReliabilityScore(v);
-  
-  // Reliability label
-  let label;
+  const a24 = calculateAgreement(v.agreement_24h);
+  const a1 = calculateAgreement(v.agreement_1h);
+  const uptime24 = calculateUptime(v.agreement_24h);
+  const score = Math.round(( (a24 * 0.7) + (a1 * 0.3) ) * 100);
+  let label = "Poor";
   if (score >= 95) label = "Excellent";
   else if (score >= 85) label = "Strong";
   else if (score >= 70) label = "Good";
   else if (score >= 50) label = "Fair";
-  else label = "Poor";
-  
-  const isUnl = v.unl === true || v.unl === "Ripple" || v.unl === "true";
-  
+
   return {
-    uptime1h,
-    uptime24h,
-    agreement1h: agreement1hScore,
-    agreement24h: agreement24hScore,
-    score: Math.round(score),
+    score,
     label,
-    isUnl
+    agreement24: a24 * 100,
+    uptime24: uptime24 != null ? uptime24 * 100 : null
   };
 }
 
 function getLabelClass(label) {
-  if (!label) return '';
-  switch(label.toLowerCase()) {
-    case 'excellent': return 'label-excellent';
-    case 'strong': return 'label-strong';
-    case 'good': return 'label-good';
-    case 'fair': return 'label-fair';
-    case 'poor': return 'label-poor';
-    default: return '';
-  }
+  if (!label) return "";
+  if (label === "Excellent") return "label-excellent";
+  if (label === "Strong") return "label-strong";
+  if (label === "Good") return "label-good";
+  if (label === "Fair") return "label-fair";
+  return "label-poor";
 }
 
 function calculateReliabilityScore(v) {
-  const agreement24h = v.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const agreement1h = v.agreement_1h || { total: 0, missed: 0, score: 0 };
-  
-  const uptime24h = calculateUptime(agreement24h) || 0;
-  const agreement24hScore = calculateAgreement(agreement24h) || 0;
-  const uptime1h = calculateUptime(agreement1h) || 0;
-  const agreement1hScore = calculateAgreement(agreement1h) || 0;
-  
-  const isUnl = v.unl === true || v.unl === "Ripple" || v.unl === "true";
-  
-  // Weighted score calculation
-  let score = (
-    0.45 * uptime24h +
-    0.35 * agreement24hScore +
-    0.10 * uptime1h +
-    0.10 * agreement1hScore
-  );
-  
-  if (isUnl) score += 5;
-  
-  return Math.max(0, Math.min(100, score));
+  // fallback simple numeric score for sorting when agreement data missing
+  const a24 = v.agreement_24h?.score || 0;
+  const a1 = v.agreement_1h?.score || 0;
+  return Math.round((a24 * 0.7 + a1 * 0.3) * 100);
 }
 
 function calculateUptime(agreement) {
-  if (!agreement) return null;
-  const total = Number(agreement.total) || 0;
-  const missed = Number(agreement.missed) || 0;
-  if (total <= 0) return null;
-  return ((total - missed) / total) * 100;
+  if (!agreement || !agreement.total) return null;
+  const total = agreement.total || 0;
+  const missed = agreement.missed || 0;
+  return total > 0 ? ((total - missed) / total) : null;
 }
 
 function calculateAgreement(agreement) {
-  if (!agreement || agreement.score == null) return null;
-  const score = Number(agreement.score) || 0;
-  return score * 100;
+  if (!agreement || !agreement.score) return 0;
+  return Number(agreement.score) || 0;
 }
 
 function formatPercent(value) {
@@ -448,565 +461,178 @@ function formatPercent(value) {
 }
 
 /* ----------------------------------------------------
-   SEARCH FUNCTIONALITY
+   SEARCH
 ---------------------------------------------------- */
 function setupValidatorSearch() {
-  const input = document.getElementById("validatorSearch");
+  const input = document.getElementById("validatorSearch") || document.querySelector("#validators input");
   if (!input) return;
-  
-  input.placeholder = "Search live validators by domain or key...";
-  
-  input.addEventListener("input", function() {
-    const term = this.value.trim().toLowerCase();
-    
-    if (!term) {
-      renderValidators(validatorCache);
-      return;
-    }
-    
-    const filtered = validatorCache.filter(v => {
-      const domain = (v.domain || "").toLowerCase();
-      const key = (v.validation_public_key || "").toLowerCase();
-      return domain.includes(term) || key.includes(term);
+
+  input.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase();
+    const filtered = validatorCache.filter((v) => {
+      return (v.domain || "").toLowerCase().includes(q) ||
+             (v.validation_public_key || v.public_key || "").toLowerCase().includes(q);
     });
-    
     renderValidators(filtered);
   });
 }
 
 /* ----------------------------------------------------
-   MODAL FUNCTIONS
+   MODAL
 ---------------------------------------------------- */
 function ensureValidatorModal() {
   if (document.getElementById("validatorModalOverlay")) return;
-  
+
   const overlay = document.createElement("div");
   overlay.id = "validatorModalOverlay";
   overlay.className = "validator-modal-overlay";
   overlay.style.display = "none";
-  
+
   overlay.innerHTML = `
     <div class="validator-modal">
-      <div class="validator-modal-header">
-        <h2 id="validatorModalTitle">Live Validator Details</h2>
-        <button id="validatorModalClose" class="validator-modal-close">✕</button>
-      </div>
+      <header class="validator-modal-header">
+        <h2>Validator Details</h2>
+        <button class="validator-modal-close" onclick="closeValidatorModal()">✕</button>
+      </header>
       <div id="validatorModalBody" class="validator-modal-body"></div>
-      <div class="validator-modal-footer">
-        <small>Live data from XRPL network • Updated: ${new Date().toLocaleTimeString()}</small>
-      </div>
     </div>
   `;
-  
+
   document.body.appendChild(overlay);
-  
-  document.getElementById("validatorModalClose").addEventListener("click", closeValidatorModal);
-  
-  overlay.addEventListener("click", function(e) {
-    if (e.target === overlay) closeValidatorModal();
-  });
-  
-  document.addEventListener("keydown", function(e) {
-    if (e.key === "Escape" && overlay.style.display === "flex") {
-      closeValidatorModal();
-    }
-  });
 }
 
 function openValidatorModal(pubkey) {
-  const overlay = document.getElementById("validatorModalOverlay");
+  const v = validatorCache.find(x => (x.validation_public_key || x.public_key) === pubkey);
+  if (!v) return;
+
   const body = document.getElementById("validatorModalBody");
-  const title = document.getElementById("validatorModalTitle");
-  
-  if (!overlay || !body || !title) return;
-  
-  const validator = validatorCache.find(v => v.validation_public_key === pubkey);
-  
-  if (!validator) {
-    console.error("Validator not found:", pubkey);
-    return;
-  }
-  
-  const metrics = calculateValidatorMetrics(validator);
-  const agreement24h = validator.agreement_24h || { total: 0, missed: 0, score: 0 };
-  const total24h = agreement24h.total || 0;
-  const missed24h = agreement24h.missed || 0;
-  const validated24h = total24h - missed24h;
-  
-  title.textContent = "Live Validator Analysis";
-  
+  if (!body) return;
+
+  const metrics = calculateValidatorMetrics(v);
+
   body.innerHTML = `
     <div class="validator-modal-section">
-      <h3>Identity & Network Role</h3>
-      <p><strong>Public Key:</strong><br><code>${validator.validation_public_key || "—"}</code></p>
-      <p><strong>Domain:</strong> ${validator.domain || "unknown"}</p>
-      <p><strong>Role:</strong> <span class="${metrics.isUnl ? 'unl-full' : 'unl-partial'}" style="padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
-        ${metrics.isUnl ? "Ripple Recommended UNL" : "Community Validator"}
-      </span></p>
+      <h3>Public Key</h3>
+      <code>${v.validation_public_key || v.public_key || "—"}</code>
+      <p><strong>Domain:</strong> ${v.domain || v.domain_name || "—"}</p>
+      <p><strong>Score:</strong> ${metrics.score} — ${metrics.label}</p>
     </div>
-    
+
     <div class="validator-modal-section">
-      <h3>Live Performance Metrics</h3>
-      <div class="validator-score-row">
-        <div class="validator-score-main">
-          <div class="score-number">${metrics.score}</div>
-          <div class="score-label ${getLabelClass(metrics.label)}">${metrics.label}</div>
-        </div>
-        <div class="validator-score-sub">
-          <div><strong>Uptime 24h:</strong> ${formatPercent(metrics.uptime24h)}</div>
-          <div><strong>Agreement 24h:</strong> ${formatPercent(metrics.agreement24h)}</div>
-          <div><strong>Uptime 1h:</strong> ${formatPercent(metrics.uptime1h)}</div>
-          <div><strong>Agreement 1h:</strong> ${formatPercent(metrics.agreement1h)}</div>
-        </div>
-      </div>
-      <div class="validator-stats-row">
-        <div class="validator-stat-card">
-          <div class="stat-title">24h Validations</div>
-          <div class="stat-value">${total24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Missed</div>
-          <div class="stat-value">${missed24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Successful</div>
-          <div class="stat-value">${validated24h}</div>
-        </div>
-        <div class="validator-stat-card">
-          <div class="stat-title">Success Rate</div>
-          <div class="stat-value">${total24h > 0 ? ((validated24h / total24h) * 100).toFixed(1) + '%' : '—'}</div>
-        </div>
-      </div>
+      <h3>Agreement & Uptime</h3>
+      <p>Agreement (24h): ${formatPercent(metrics.agreement24)}</p>
+      <p>Uptime (24h): ${formatPercent(metrics.uptime24)}</p>
     </div>
-    
+
     <div class="validator-modal-section">
-      <h3>Network Features</h3>
-      <div class="amendments-list">
-        ${(validator.amendments && validator.amendments.length > 0 ? 
-          validator.amendments.map(a => `<span class="amendment-tag">${a}</span>`).join('') : 
-          '<p>No amendment data available</p>')}
-      </div>
+      <h3>Raw</h3>
+      <pre style="white-space:pre-wrap;max-height:280px;overflow:auto">${escapeHtml(JSON.stringify(v, null, 2))}</pre>
     </div>
   `;
-  
-  overlay.style.display = "flex";
+
+  document.getElementById("validatorModalOverlay").style.display = "flex";
 }
 
 function closeValidatorModal() {
-  const overlay = document.getElementById("validatorModalOverlay");
-  if (overlay) {
-    overlay.style.display = "none";
-  }
+  const o = document.getElementById("validatorModalOverlay");
+  if (o) o.style.display = "none";
 }
 
 /* ----------------------------------------------------
-   ERROR HANDLING
+   ERRORS / UI HINTS
 ---------------------------------------------------- */
 function showProxyError(errorMessage = '') {
-  const container = document.getElementById("validatorsList");
-  if (!container) return;
-  
-  container.innerHTML = `
+  const list = document.getElementById("validatorsList");
+  if (!list) return;
+  list.innerHTML = `
     <div class="validators-error">
-      <div style="font-size: 48px; margin-bottom: 20px;">🔄</div>
-      <h3 style="color: var(--accent-primary); margin-bottom: 15px;">Proxy Server Required</h3>
-      <p style="color: var(--text-primary); margin-bottom: 20px; line-height: 1.6;">
-        The proxy server is not returning validator data. This is needed to fetch live XRPL validator data.
-      </p>
-      
-      <div style="background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--accent-tertiary); margin-bottom: 25px; text-align: left;">
-        <h4 style="color: var(--accent-secondary); margin-bottom: 15px;">🚀 Quick Setup (dev):</h4>
-        <ol style="color: var(--text-primary); padding-left: 20px; margin: 0;">
-          <li style="margin-bottom: 10px;">
-            <strong>Open a new terminal</strong> in your NaluXrp folder
-          </li>
-          <li style="margin-bottom: 10px;">
-            <strong>Run this command:</strong><br>
-            <code style="display: block; background: var(--bg-secondary); padding: 10px; border-radius: 6px; margin: 10px 0; font-family: monospace;">
-              npm run proxy
-            </code>
-          </li>
-          <li style="margin-bottom: 10px;">
-            <strong>Keep the terminal open</strong> and return to this page
-          </li>
-          <li>
-            <strong>Click the Retry button below</strong>
-          </li>
-        </ol>
-      </div>
-      
-      <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
-        <button onclick="fetchLiveValidators()" style="
-          padding: 12px 24px;
-          background: var(--accent-primary);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-weight: bold;
-          cursor: pointer;
-          transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-          🔄 Retry Connection
-        </button>
-        
-        <button onclick="window.open('https://xrpl.org/validators.html', '_blank')" style="
-          padding: 12px 24px;
-          background: var(--accent-secondary);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-weight: bold;
-          cursor: pointer;
-          transition: all 0.3s;
-        " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-          🌐 View on XRPL.org
-        </button>
-      </div>
-      
-      ${errorMessage ? `
-        <div style="margin-top: 20px; padding: 15px; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--accent-tertiary);">
-          <strong>Error Details:</strong><br>
-          <code style="color: var(--text-secondary); font-size: 12px;">${errorMessage}</code>
-        </div>
-      ` : ''}
+      <h3>⚠️ Validator Data Unavailable</h3>
+      <p>${escapeHtml(errorMessage || "Unable to fetch validator data from proxies or public API.")}</p>
     </div>
   `;
 }
 
 function showConnectionError(errorMessage = '') {
-  const container = document.getElementById("validatorsList");
-  if (!container) return;
-  
-  container.innerHTML = `
+  const list = document.getElementById("validatorsList");
+  if (!list) return;
+  list.innerHTML = `
     <div class="validators-error">
-      <div style="font-size: 48px; margin-bottom: 20px;">🌐</div>
-      <h3 style="color: var(--accent-primary); margin-bottom: 15px;">Connection Error</h3>
-      <p style="color: var(--text-primary); margin-bottom: 20px; line-height: 1.6;">
-        Unable to connect to XRPL network.
-        ${errorMessage ? `<br><br><strong>Error:</strong> ${errorMessage}` : ''}
-      </p>
-      <button onclick="fetchLiveValidators()" style="
-        padding: 12px 24px;
-        background: var(--accent-primary);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: bold;
-        cursor: pointer;
-        margin-top: 20px;
-      ">
-        🔄 Retry Connection
-      </button>
+      <h3>🔌 Connection Error</h3>
+      <p>${escapeHtml(errorMessage || "Network or XRPL connection error.")}</p>
     </div>
   `;
 }
 
-/* ----------------------------------------------------
-   LIVE DATA INDICATOR
----------------------------------------------------- */
 function showLiveDataIndicator() {
-  const existing = document.querySelector('.live-data-indicator');
-  if (existing) existing.remove();
-  
-  const indicator = document.createElement('div');
-  indicator.className = 'live-data-indicator';
-  indicator.innerHTML = `
-    <div style="
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: var(--success-color, #2ecc71);
-      color: white;
-      padding: 10px 20px;
-      border-radius: 20px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-      z-index: 9998;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 14px;
-      animation: fadeIn 0.3s ease;
-    ">
-      <div style="
-        width: 8px;
-        height: 8px;
-        background: white;
-        border-radius: 50%;
-        animation: pulse 2s infinite;
-      "></div>
-      Live XRPL Data • ${validatorCache.length} Validators
-    </div>
-  `;
-  
-  document.body.appendChild(indicator);
-  
-  setTimeout(() => {
-    indicator.style.animation = 'fadeOut 0.3s ease';
-    setTimeout(() => indicator.remove(), 300);
-  }, 5000);
+  const list = document.getElementById("validatorsList");
+  if (!list) return;
+  const badge = document.createElement("div");
+  badge.className = "validators-warning";
+  badge.textContent = "Live data — fetched from network";
+  list.prepend(badge);
 }
 
 /* ----------------------------------------------------
-   ADD STYLES (full original styles restored)
+   STYLES (inject original styles if navbar doesn't load them)
 ---------------------------------------------------- */
 function addValidatorStylesOriginal() {
   if (document.querySelector('#validator-styles')) return;
-  
+
   const style = document.createElement('style');
   style.id = 'validator-styles';
   style.textContent = `
-    /* =========================================
-       NaluXrp 🌊 — Validators (validator.css)
-       ========================================= */
-
-    /* Summary cards */
-    .validators-summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-      gap: 16px;
-      margin-bottom: 18px;
-    }
-
-    .validators-summary-card {
-      background: var(--card-bg, rgba(0, 0, 0, 0.36));
-      border-radius: 14px;
-      border: 1px solid var(--accent-tertiary, rgba(255, 255, 255, 0.12));
-      padding: 12px 14px;
-      font-size: 0.9rem;
-      line-height: 1.4;
-    }
-
-    .validators-summary-card .summary-title {
-      font-weight: 600;
-      margin-bottom: 4px;
-      color: var(--accent-secondary, #ffd866);
-    }
-
-    /* Search */
-    #validatorSearch {
-      width: 100%;
-      max-width: 420px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(0,0,0,0.4);
-      color: var(--text-primary, #f8f8f2);
-      outline: none;
-      font-size: 0.92rem;
-      margin: 10px 0 16px;
-    }
-
-    #validatorSearch::placeholder {
-      color: rgba(255,255,255,0.45);
-    }
-
-    /* Grid + cards — base card visuals moved to css/components/card.css
-       Keep layout and validator-specific visual accents here. */
-    .validators-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-      gap: 14px;
-      align-items: stretch;
-    }
-
-    .validator-card {
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      /* exclusive validator tweaks (radial highlights, backdrop) can remain here */
-      backdrop-filter: blur(12px);
-    }
-
-    .validator-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 18px 32px rgba(0,0,0,0.45);
-      border-color: var(--accent-primary, #ffcc66);
-      transition: all 0.2s ease-out;
-    }
-
-    .validator-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .validator-key {
-      font-family: "SF Mono", Menlo, Consolas, monospace;
-      font-size: 0.82rem;
-      color: var(--text-primary, #f8f8f2);
-      overflow-wrap: anywhere;
-    }
-
-    .validator-domain {
-      font-size: 0.86rem;
-      color: var(--text-secondary, #a2a2b3);
-    }
-
-    .unl-badge {
-      font-size: 0.72rem;
-      padding: 4px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.2);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      white-space: nowrap;
-    }
-
-    .unl-full {
-      background: linear-gradient(135deg, #ffe066, #ffb347);
-      color: #201600;
-    }
-
-    .unl-partial {
-      background: linear-gradient(135deg, #ffb86c, #ff7b5a);
-      color: #201600;
-    }
-
-    .validator-stat-row {
-      display: flex;
-      gap: 12px;
-      margin-top: 6px;
-    }
-
-    .validator-pill {
-      padding: 8px 12px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 0.85rem;
-    }
-
-    .pill-score {
-      background: linear-gradient(135deg, var(--accent-primary, #d4af37), var(--accent-secondary, #ffd700));
-      color: #201600;
-    }
-
-    .validator-stat {
-      flex: 1;
-      background: rgba(0,0,0,0.18);
-      padding: 10px;
-      border-radius: 10px;
-      text-align: center;
-      border: 1px solid rgba(255,255,255,0.06);
-    }
-
-    .validator-details-btn {
-      margin-top: 12px;
-      padding: 10px 14px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, var(--accent-primary, #d4af37), var(--accent-secondary, #ffd700));
-      color: #000;
-      font-weight: 700;
-      border: none;
-      cursor: pointer;
-    }
-
-    .validators-loading {
-      text-align: center;
-      padding: 60px 40px;
-      color: var(--text-secondary);
-      font-size: 16px;
-      background: var(--card-bg);
-      border-radius: 16px;
-      border: 2px solid var(--accent-tertiary);
-      margin: 20px 0;
-    }
-
-    .loading-spinner {
-      border: 4px solid rgba(var(--accent-primary-rgb, 52, 152, 219), 0.1);
-      border-radius: 50%;
-      border-top: 4px solid var(--accent-primary);
-      width: 50px;
-      height: 50px;
-      animation: spin 1s linear infinite;
-      margin: 0 auto 25px;
-    }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
-    .loading-subtext {
-      font-size: 14px;
-      color: var(--text-secondary);
-      margin-top: 15px;
-      opacity: 0.8;
-      font-style: italic;
-    }
-
-    .validators-error {
-      background: var(--card-bg);
-      border: 2px solid var(--accent-primary);
-      border-radius: 20px;
-      padding: 40px;
-      text-align: center;
-      color: var(--text-primary);
-      margin: 20px 0;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.1);
-    }
-
-    .validators-empty {
-      text-align: center;
-      padding: 60px;
-      color: var(--text-secondary);
-      font-size: 18px;
-      background: var(--card-bg);
-      border-radius: 20px;
-      border: 2px dashed var(--accent-tertiary);
-      margin: 20px 0;
-    }
-
-    /* Modal */
-    .validator-modal-overlay {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-    }
-
-    .validator-modal {
-      background: var(--bg-secondary);
-      border-radius: 18px;
-      padding: 20px;
-      width: min(900px, 95%);
-      max-height: 90vh;
-      overflow: auto;
-      border: 2px solid var(--accent-tertiary);
-    }
-
-    .validator-modal-header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-    .validator-modal-close { background:transparent; border:0; font-size:18px; cursor:pointer; color:var(--text-secondary); }
-
-    .validator-modal-section { margin-bottom:18px; padding-bottom:10px; border-bottom:1px dashed rgba(255,255,255,0.04); }
-    .validator-modal-section h3 { margin-bottom:10px; color:var(--accent-secondary); }
-    .amendment-tag { background:var(--bg-secondary); color:var(--text-primary); padding:8px 12px; border-radius:12px; border:1px solid var(--accent-tertiary); margin-right:8px; display:inline-block; margin-bottom:8px; }
+    /* Compact copy of validator.css to ensure layout regardless of bundling */
+    .validators-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;margin-bottom:18px}
+    .validators-summary-card{background:var(--card-bg,rgba(0,0,0,.36));border-radius:14px;border:1px solid var(--accent-tertiary,rgba(255,255,255,.12));padding:12px 14px;font-size:.9rem}
+    #validatorSearch{width:100%;max-width:420px;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.4);color:var(--text-primary)}
+    .validators-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+    .validator-card{position:relative;display:flex;flex-direction:column;gap:6px;backdrop-filter:blur(12px);padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.04);background:var(--card-bg)}
+    .validator-header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .validator-key{font-family:SFMono,Menlo,Consolas,monospace;font-size:.82rem;color:var(--text-primary)}
+    .validator-domain{font-size:.86rem;color:var(--text-secondary)}
+    .unl-badge{font-size:.72rem;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.2);text-transform:uppercase}
+    .unl-full{background:linear-gradient(135deg,#ffe066,#ffb347);color:#201600;box-shadow:0 0 12px rgba(255,225,120,.6)}
+    .unl-partial{background:rgba(0,0,0,.45);color:var(--text-secondary)}
+    .validator-stat-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px;flex-wrap:wrap}
+    .validator-pill{font-size:.78rem;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.16);display:inline-flex;align-items:center;gap:4px}
+    .pill-score{background:rgba(0,0,0,.55);color:var(--accent-primary)}
+    .pill-label{background:rgba(255,255,255,.06);color:var(--text-primary)}
+    .validator-details-btn{margin-top:6px;align-self:flex-end;padding:6px 10px;border-radius:9px;border:1px solid var(--accent-primary);background:transparent;color:var(--accent-primary);cursor:pointer}
+    .validator-modal-overlay{position:fixed;inset:0;background:radial-gradient(circle at top,rgba(0,0,0,.65),rgba(0,0,0,.95));display:none;align-items:center;justify-content:center;z-index:9999}
+    .validator-modal{width:min(640px,96vw);max-height:90vh;background:radial-gradient(circle at top left, rgba(255,214,96,.16),transparent),rgba(10,10,20,.96);border-radius:18px;border:1px solid rgba(255,255,255,.18);box-shadow:0 24px 48px rgba(0,0,0,.65);display:flex;flex-direction:column;overflow:hidden}
+    .validator-modal-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.12)}
+    .validator-modal-body{padding:12px 16px 14px;overflow-y:auto;font-size:.9rem}
+    .validators-loading{padding:30px 10px;color:var(--accent-secondary);font-size:1.1em;animation:pulse 1.5s infinite}
+    .validators-error{padding:20px;color:#ff5555;font-size:.95em;text-align:center}
   `;
   document.head.appendChild(style);
 }
 
-/* Wrapper to prefer any existing global implementation, else inject original */
 function addValidatorStyles() {
+  // prefer an existing global style injection if present elsewhere; fallback to original
   if (typeof window.addValidatorStyles === "function" && window.addValidatorStyles !== addValidatorStyles) {
-    try {
-      window.addValidatorStyles();
-      return;
-    } catch (e) {
-      console.warn("Existing addValidatorStyles failed, falling back to bundled styles", e);
-    }
+    try { window.addValidatorStyles(); return; } catch (e) { /* ignore */ }
   }
   addValidatorStylesOriginal();
 }
 
 /* ----------------------------------------------------
-   EXPORTS
+   HELPERS
+---------------------------------------------------- */
+function escapeHtml(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/* ----------------------------------------------------
+   BIND TO WINDOW (for inline onclick usage)
 ---------------------------------------------------- */
 window.initValidators = initValidators;
 window.openValidatorModal = openValidatorModal;
 window.closeValidatorModal = closeValidatorModal;
-window.fetchLiveValidators = fetchLiveValidators;
 
-console.log("🛡️ Live Validators module loaded (WebSocket-first)");
+console.log("🛡️ validators.js loaded (UI + fetch fallbacks)");
+```
