@@ -1,11 +1,26 @@
 // =======================================================
 // navbar.js – STABLE + MOBILE FRIENDLY + OVERLAY SAFE
 // Fixes notification / forensic overlay blocking issues
+// Adds robust Account Inspector loader, keyboard shortcut,
+// accessibility improvements, and persistence for inspector state.
 // =======================================================
 
 document.addEventListener("DOMContentLoaded", () => {
   initNavbar();
   injectNavbarSafetyStyles();
+
+  // Restore inspector open state if user left it open
+  try {
+    const shouldOpen = localStorage.getItem("nalu:inspectorOpen") === "true";
+    if (shouldOpen) {
+      // Defer slightly to allow DOM ready
+      setTimeout(() => {
+        openAccountInspector();
+      }, 600);
+    }
+  } catch (e) {
+    /* ignore localStorage errors */
+  }
 });
 
 /* ------------------------------------------------------
@@ -19,6 +34,15 @@ function initNavbar() {
 
   // Add Account Inspector toggle/button into the navbar
   setupInspectorButton();
+
+  // Keyboard shortcut: Ctrl/Cmd+I toggles inspector
+  window.addEventListener("keydown", (e) => {
+    const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+    if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "i") {
+      e.preventDefault();
+      openAccountInspector();
+    }
+  });
 }
 
 /* ------------------------------------------------------
@@ -26,7 +50,7 @@ function initNavbar() {
 ------------------------------------------------------ */
 function setupNavLinks() {
   document.querySelectorAll("[data-page]").forEach(btn => {
-    btn.addEventListener("click", e => {
+    btn.addEventListener("click", (e) => {
       const page = btn.dataset.page;
       if (!page) return;
 
@@ -60,7 +84,7 @@ function setupHamburger() {
 
   if (!hamburger || !navLinks) return;
 
-  hamburger.addEventListener("click", e => {
+  hamburger.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -70,7 +94,7 @@ function setupHamburger() {
   });
 
   // Tap outside closes menu (mobile only)
-  document.addEventListener("click", e => {
+  document.addEventListener("click", (e) => {
     if (window.innerWidth > 992) return;
 
     if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
@@ -96,7 +120,7 @@ function setupDropdowns() {
   const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
 
   dropdownToggles.forEach(toggle => {
-    toggle.addEventListener("click", e => {
+    toggle.addEventListener("click", (e) => {
       // Desktop: allow CSS hover
       if (window.innerWidth > 992) return;
 
@@ -179,6 +203,12 @@ function injectNavbarSafetyStyles() {
     .nav-dropdown * {
       pointer-events: auto;
     }
+
+    /* Small style for inspector badge when loaded */
+    #navAccountInspectorBtn.loaded {
+      background: linear-gradient(135deg, rgba(80,250,123,0.12), rgba(80,250,123,0.06));
+      border-color: rgba(80,250,123,0.25);
+    }
   `;
 
   document.head.appendChild(style);
@@ -187,7 +217,8 @@ function injectNavbarSafetyStyles() {
 /* ------------------------------------------------------
    ACCOUNT INSPECTOR BUTTON (inject into navbar)
    - Adds a small icon/button to open/toggle the Account Inspector
-   - If account-inspector.js is not loaded, will lazy-load it
+   - Lazy-loads js/account-inspector.js with robust path handling
+   - Keyboard shortcut and persistence integrated
 ------------------------------------------------------ */
 function setupInspectorButton() {
   const navbar = document.getElementById("navbar");
@@ -204,53 +235,63 @@ function setupInspectorButton() {
   btn.id = "navAccountInspectorBtn";
   btn.className = "nav-btn nav-account-inspector";
   btn.type = "button";
-  btn.title = "Account Inspector (Merkle snapshots)";
+  btn.title = "Account Inspector (Merkle snapshots) — Ctrl/Cmd+I";
+  btn.setAttribute("aria-label", "Open Account Inspector");
   btn.style.cssText = "margin-left:10px;padding:6px 10px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer";
   btn.innerHTML = `🔎 Inspector`;
+
+  // state
+  let isLoading = false;
+  let lastClick = 0;
 
   btn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (Date.now() - lastClick < 600) return; // debounce rapid clicks
+    lastClick = Date.now();
+
     // close mobile menu if open
     if (window.innerWidth <= 992) closeMobileMenu();
 
-    // If the inspector module is already present, show panel and focus input
-    if (typeof window.AccountInspector !== "undefined" && typeof window.AccountInspector.getSnapshot === "function") {
-      // ensure panel element exists and focus input
-      const ensure = document.getElementById("accountInspector");
-      if (ensure) {
-        // show if hidden (panel is fixed, ensure visible)
-        // We expect account-inspector.js to manage its own UI; we simply focus input
-        const addrInput = document.getElementById("aiAddress");
-        if (addrInput) {
-          addrInput.focus();
-        }
-      } else {
-        // fallback: call init function if exposed
-        try { if (typeof window.initAccountInspector === "function") window.initAccountInspector(); } catch (e) {}
-      }
+    // If inspector already loaded, focus its input
+    if (typeof window.AccountInspector !== "undefined") {
+      focusInspectorInput();
+      toggleInspectorVisibility(true);
       return;
     }
 
-    // Lazy-load the inspector script (relative path)
-    const scriptUrl = "/js/account-inspector.js";
+    if (isLoading) {
+      flashTemporaryMessage("Inspector is loading…");
+      return;
+    }
+
+    // Lazy-load the inspector script using a robust loader
+    const scriptUrl = "js/account-inspector.js"; // relative path: works on GitHub Pages under repo subpath
+    isLoading = true;
+    btn.classList.add("loading");
     try {
       await loadScriptOnce(scriptUrl);
-      // after load, focus input if available
+      // mark loaded visually
+      btn.classList.add("loaded");
+      flashTemporaryMessage("Account Inspector loaded", 1500);
+      // persist open state
+      try { localStorage.setItem("nalu:inspectorOpen", "true"); } catch (e) {}
+      // small delay to let script initialize its UI
       setTimeout(() => {
-        const ai = document.getElementById("aiAddress");
-        if (ai) ai.focus();
-      }, 200);
+        focusInspectorInput();
+        toggleInspectorVisibility(true);
+      }, 180);
     } catch (err) {
       console.error("Failed to load Account Inspector:", err);
-      // provide user feedback via small temporary toast
-      flashTemporaryMessage("Failed to load Account Inspector");
+      flashTemporaryMessage("Failed to load Inspector");
+    } finally {
+      isLoading = false;
+      btn.classList.remove("loading");
     }
   });
 
   // Insert button into navLinks or navbar end
   if (navLinks) {
-    // try to append to end of links container
     navLinks.appendChild(btn);
   } else if (navbar) {
     navbar.appendChild(btn);
@@ -259,36 +300,78 @@ function setupInspectorButton() {
   }
 }
 
-// Load a script exactly once and return a Promise that resolves when loaded
+/* ------------------------------------------------------
+   Robust script loader: tries multiple candidate URLs
+   - relative path
+   - root-absolute
+   - origin-prefixed
+   - raw.githubusercontent fallback (for quick testing)
+------------------------------------------------------ */
 function loadScriptOnce(src) {
+  const cleaned = src.replace(/^\.\//, "").replace(/^\/+/, "");
+  const candidates = [
+    // prefer relative to current document (handles repo subpath)
+    cleaned, // "js/account-inspector.js"
+    '/' + cleaned, // "/js/account-inspector.js"
+    window.location.origin + '/' + cleaned, // "https://host/js/..."
+    // raw github content (last resort; may not set correct headers but usually works for simple scripts)
+    `https://raw.githubusercontent.com/808CryptoBeast/NaluXRP/main/${cleaned}`
+  ];
+
   return new Promise((resolve, reject) => {
-    // if already present, resolve immediately
-    const existing = Array.from(document.scripts).find(s => s.src && s.src.indexOf(src) !== -1);
-    if (existing) {
-      if (existing.getAttribute("data-loaded") === "true") return resolve();
-      // else wait for it
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", (e) => reject(e));
-      return;
+    const tried = new Set();
+    function tryNext() {
+      if (!candidates.length) return reject(new Error("All script candidates failed"));
+      const next = candidates.shift();
+      if (tried.has(next)) return tryNext();
+      tried.add(next);
+
+      // If script already exists and loaded, resolve immediately
+      const existing = Array.from(document.scripts).find(s => s.src && s.src.indexOf(next) !== -1);
+      if (existing) {
+        if (existing.getAttribute("data-loaded") === "true") return resolve();
+        existing.addEventListener("load", () => resolve());
+        existing.addEventListener("error", () => tryNext());
+        return;
+      }
+
+      const s = document.createElement("script");
+      s.src = next;
+      s.async = true;
+      s.setAttribute("data-loaded", "false");
+      s.onload = () => { s.setAttribute("data-loaded", "true"); resolve(); };
+      s.onerror = () => { s.remove(); tryNext(); };
+      document.head.appendChild(s);
     }
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true;
-    s.setAttribute("data-loaded", "false");
-    s.onload = () => { s.setAttribute("data-loaded", "true"); resolve(); };
-    s.onerror = (e) => { reject(new Error("Failed to load " + src)); };
-    document.head.appendChild(s);
+    tryNext();
   });
 }
 
-// small user feedback helper
+/* ------------------------------------------------------
+   Small helpers for inspector control & feedback
+------------------------------------------------------ */
+function focusInspectorInput() {
+  const el = document.getElementById("aiAddress") || document.querySelector("#accountInspector input");
+  if (el) {
+    try { el.focus(); el.select(); } catch (e) {}
+  }
+}
+
+function toggleInspectorVisibility(show) {
+  const panel = document.getElementById("accountInspector");
+  if (!panel) return;
+  panel.style.display = show ? "block" : "none";
+  try { localStorage.setItem("nalu:inspectorOpen", show ? "true" : "false"); } catch (e) {}
+}
+
+// convenience method — exposed globally at end of file
 function flashTemporaryMessage(msg, timeout = 3000) {
   const id = "nav-temp-msg";
   let el = document.getElementById(id);
   if (!el) {
     el = document.createElement("div");
     el.id = id;
-    el.style.cssText = "position:fixed;right:16px;top:64px;padding:8px 12px;background:rgba(0,0,0,0.8);color:#fff;border-radius:8px;z-index:12000;font-size:13px";
+    el.style.cssText = "position:fixed;right:16px;top:64px;padding:8px 12px;background:rgba(0,0,0,0.85);color:#fff;border-radius:8px;z-index:12000;font-size:13px";
     document.body.appendChild(el);
   }
   el.textContent = msg;
@@ -296,19 +379,35 @@ function flashTemporaryMessage(msg, timeout = 3000) {
   setTimeout(() => {
     el.style.transition = "opacity 0.4s";
     el.style.opacity = "0";
-    setTimeout(() => { try { el.remove(); } catch(e){} }, 450);
+    setTimeout(() => { try { el.remove(); } catch (e) {} }, 450);
   }, timeout);
 }
 
 /* ------------------------------------------------------
-   EXPORT
+   Programmatic API / Exports
 ------------------------------------------------------ */
 window.navigateToPage = navigateToPage;
 window.closeMobileMenu = closeMobileMenu;
-window.openAccountInspector = function() {
-  // convenience: programmatically open the inspector as if clicking the nav button
+window.openAccountInspector = function () {
+  // simulate clicking the nav button
   const btn = document.getElementById("navAccountInspectorBtn");
-  if (btn) btn.click();
+  if (btn) { btn.click(); return; }
+
+  // If button not present, try to lazy-load the script directly
+  const scriptUrl = "js/account-inspector.js";
+  loadScriptOnce(scriptUrl).then(() => {
+    focusInspectorInput();
+    toggleInspectorVisibility(true);
+  }).catch((e) => {
+    flashTemporaryMessage("Failed to open inspector");
+    console.error(e);
+  });
+};
+window.closeAccountInspector = function () {
+  toggleInspectorVisibility(false);
 };
 
+/* ------------------------------------------------------
+   Debug/log
+------------------------------------------------------ */
 console.log("✅ Navbar module loaded (overlay-safe, dropdown-safe, inspector-ready)");
