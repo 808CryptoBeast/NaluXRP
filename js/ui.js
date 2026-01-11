@@ -21,6 +21,7 @@
   /* -----------------------------
      PAGE INIT MAP
      (Single source of truth)
+     NOTE: 'inspector' handler added — loads/initializes the full-page inspector
   ----------------------------- */
   const PAGE_INIT_MAP = {
     dashboard: () => {
@@ -70,6 +71,81 @@
 
     about: () =>
       window.initAbout ? window.initAbout() : showDefaultPage("about"),
+
+    // Inspector page: full-page account inspector
+    inspector: () => {
+      // If inspector module already loaded, initialize it
+      if (typeof window.initInspector === "function") {
+        try {
+          window.initInspector();
+          return;
+        } catch (e) {
+          console.error("Inspector init failed:", e);
+          showDefaultPage("inspector");
+          return;
+        }
+      }
+
+      // Ensure an inspector container exists in the DOM
+      let el = document.getElementById("inspector");
+      if (!el) {
+        el = document.createElement("section");
+        el.id = "inspector";
+        el.className = "page-section";
+        // insert into main container if present, else append to body
+        const main = document.getElementById("main") || document.getElementById("dashboard")?.parentElement || document.body;
+        main.appendChild(el);
+      }
+
+      // Show a loading placeholder while we fetch the module
+      el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Loading module…</p></div>`;
+
+      // Lazy-load the inspector script (relative path works with GitHub Pages repo subpaths)
+      const scriptSrcCandidates = [
+        "js/account-inspector.js",
+        "/js/account-inspector.js",
+        `${window.location.origin}/js/account-inspector.js`,
+        `https://raw.githubusercontent.com/808CryptoBeast/NaluXRP/main/js/account-inspector.js`
+      ];
+
+      // attempt to load candidates in order until one succeeds
+      (async function tryLoadInspector() {
+        for (const src of scriptSrcCandidates) {
+          try {
+            await loadScriptOnce(src);
+            // give the module a moment to register its init function
+            if (typeof window.initInspector === "function") {
+              try {
+                window.initInspector();
+                return;
+              } catch (err) {
+                console.error("Inspector init after load failed:", err);
+                break;
+              }
+            } else {
+              // small pause to allow script to run
+              await new Promise((r) => setTimeout(r, 120));
+              if (typeof window.initInspector === "function") {
+                try {
+                  window.initInspector();
+                  return;
+                } catch (err) {
+                  console.error("Inspector init after load failed:", err);
+                  break;
+                }
+              }
+            }
+          } catch (e) {
+            // try next candidate
+            console.warn("Failed to load inspector script from", src, e && e.message ? e.message : e);
+            continue;
+          }
+        }
+        // if we reach here, loading failed
+        console.error("Failed to load account-inspector.js from any candidate");
+        el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Failed to load module. Please ensure <code>js/account-inspector.js</code> is deployed.</p></div>`;
+      })();
+    }
   };
 
   /* -----------------------------
