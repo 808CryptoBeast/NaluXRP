@@ -2,7 +2,7 @@
    NaluXrp — Account Inspector + Merkle Snapshot
    - Paste an XRP (r...) address and pick a date/ledger range
    - Fetch transactions (shared XRPL client preferred, public API fallback)
-   - Build Merkle tree over ordered txs (deterministic canonical JSON -> SHA-256)
+   - Build Merkle tree over ordered txs (canonical JSON -> SHA-256)
    - Export snapshot and inclusion proofs; verify proofs
    ========================================= */
 
@@ -12,7 +12,12 @@
   const MAX_FETCH_PAGES = 200; // safety cap
   const PAGE_LIMIT = 100; // per-request page size for API
 
-  // UI: inject minimal panel
+  // Module-scoped state (single declaration)
+  let currentSnapshot = null;
+
+  /* -------------------------
+     UI: inject minimal panel
+  ------------------------- */
   function ensurePanel() {
     if (document.getElementById("accountInspector")) return;
     const container = document.createElement("div");
@@ -21,11 +26,11 @@
     container.innerHTML = `
       <h3 style="margin:0 0 8px 0">Account Inspector</h3>
       <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input id="aiAddress" placeholder="r... address" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+        <input id="aiAddress" placeholder="r... address" aria-label="Account address" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input id="aiStart" type="date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
-        <input id="aiEnd" type="date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+        <input id="aiStart" type="date" aria-label="Start date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+        <input id="aiEnd" type="date" aria-label="End date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:8px;">
         <button id="aiFetch" style="flex:1;padding:8px;border-radius:8px;border:none;background:#2ecc71;color:#000;font-weight:700;cursor:pointer">Build Snapshot</button>
@@ -43,16 +48,28 @@
     document.getElementById("aiFetch").addEventListener("click", onBuild);
     document.getElementById("aiClear").addEventListener("click", clearPanel);
     document.getElementById("aiExport").addEventListener("click", exportSnapshot);
+
+    // allow Enter on address to trigger build
+    const addrInput = document.getElementById("aiAddress");
+    if (addrInput) {
+      addrInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") onBuild();
+      });
+    }
   }
 
-  // Small helpers
+  /* -------------------------
+     UI helpers
+  ------------------------- */
   function setStatus(msg) { const el = document.getElementById("aiStatus"); if (el) el.textContent = msg; }
   function setDetails(msg) { const el = document.getElementById("aiDetails"); if (el) el.textContent = msg; }
   function setSummary(html) { const el = document.getElementById("aiSummary"); if (el) el.innerHTML = html; }
   function showExportButton(show) { const b = document.getElementById("aiExport"); if (b) b.style.display = show ? "block" : "none"; }
-  function clearPanel() { setStatus("Ready"); setSummary(""); setDetails(""); snapshot = null; showExportButton(false); }
+  function clearPanel() { setStatus("Ready"); setSummary(""); setDetails(""); currentSnapshot = null; showExportButton(false); }
 
-  // Canonical JSON: stable key ordering for deterministic hashing
+  /* -------------------------
+     Canonicalization + Hashing
+  ------------------------- */
   function canonicalize(obj) {
     if (obj === null || typeof obj !== "object") return obj;
     if (Array.isArray(obj)) return obj.map(canonicalize);
@@ -62,7 +79,6 @@
     return out;
   }
 
-  // Hash a UTF-8 string -> hex (SHA-256)
   async function hashUtf8Hex(input) {
     const enc = new TextEncoder();
     const data = enc.encode(input);
@@ -75,34 +91,13 @@
     return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
   }
 
-  // Merkle tree builder (binary tree using pairing; if odd, duplicate last)
-  function buildMerkleTreeFromLeaves(leafHexes) {
-    if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
-    const layers = [];
-    layers.push(leafHexes.slice());
-    while (layers[0].length > 1) {
-      const curr = layers[0];
-      const next = [];
-      for (let i = 0; i < curr.length; i += 2) {
-        const left = curr[i];
-        const right = (i + 1 < curr.length) ? curr[i + 1] : curr[i]; // duplicate last if odd
-        // concat bytes: left||right as hex -> hash
-        const combined = left + right;
-        // We'll compute hash lazily async; but tree building for indexes can remain synchronous if we want hex hashed values.
-        // However, to keep consistent, assume layers contain already-hashed hex values.
-        // Here we will call a sync combine placeholder; actual hashing must be async.
-        next.push(combineHex(left, right));
-      }
-      layers.unshift(next); // prepend to keep root at layers[0]
-    }
-    return { root: layers[0][0], layers };
-  }
-
-  // Because combine needs SHA-256, provide an async builder
+  /* -------------------------
+     Merkle tree (async)
+  ------------------------- */
   async function buildMerkleTreeAsync(leafHexes) {
     if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
     let layer = leafHexes.slice();
-    const layers = [layer.slice()];
+    const layers = [layer.slice()]; // leaves at last index
     while (layer.length > 1) {
       const next = [];
       for (let i = 0; i < layer.length; i += 2) {
@@ -112,89 +107,93 @@
         next.push(combinedHex);
       }
       layer = next;
-      layers.unshift(layer.slice());
+      layers.unshift(layer.slice()); // prepend, so root at layers[0]
     }
     return { root: layers[0][0], layers };
   }
 
-  // Build proof for leaf index from layers (layers[0] root)
   function getMerkleProof(layers, leafIndex) {
-    // layers with root at 0 and leaves at last layer
     const proof = [];
     let index = leafIndex;
     for (let li = layers.length - 1; li > 0; li--) {
       const layer = layers[li];
       const isRight = (index % 2) === 1;
       const pairIndex = isRight ? index - 1 : index + 1;
-      const sibling = pairIndex < layer.length ? layer[pairIndex] : layer[index]; // duplicate if missing
-      proof.push({ sibling, position: isRight ? "left" : "right" }); // sibling position relative to node
+      const sibling = pairIndex < layer.length ? layer[pairIndex] : layer[index];
+      proof.push({ sibling, position: isRight ? "left" : "right" });
       index = Math.floor(index / 2);
     }
     return proof;
   }
 
-  // Verify proof (leafHex, proof array, rootHex) -> bool
   async function verifyMerkleProof(leafHex, proof, rootHex) {
     let hash = leafHex;
     for (const step of proof) {
       if (step.position === "left") {
-        // sibling || hash
         hash = await hashUtf8Hex(step.sibling + hash);
       } else {
-        // hash || sibling
         hash = await hashUtf8Hex(hash + step.sibling);
       }
     }
     return hash === rootHex;
   }
 
-  // combineHex placeholder (not used in async mode)
-  function combineHex(left, right) { return left + right; }
-
-  // Transaction hashing: canonicalize tx object and hash JSON
   async function txToLeafHashHex(tx) {
-    // choose the fields that matter for canonical snapshot (tx hash + ledger index + date/time)
-    // but to remain robust, canonicalize the whole tx object (sorted keys)
     const canon = canonicalize(tx);
     const json = JSON.stringify(canon);
     return await hashUtf8Hex(json);
   }
 
-  // Fetch transactions for an account in the date window.
-  // Strategy:
-  // 1) Try window.requestXrpl (shared client) if available -> account_tx with ledger/time filters (if supported).
-  // 2) Fallback: public API (xrpl.org /v2/accounts/{addr}/transactions) with pagination.
+  /* -------------------------
+     Account transaction fetching
+     (shared client preferred, then public API)
+  ------------------------- */
+  async function tryFetchUrl(url, timeoutMs = 8000) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+
+      const resp = await fetch(url, { method: "GET", headers: { Accept: "application/json" }, signal: controller.signal });
+      clearTimeout(id);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const json = await resp.json();
+      return json;
+    } catch (err) {
+      console.warn("tryFetchUrl failed:", err && err.message ? err.message : err);
+      return null;
+    }
+  }
+
   async function fetchAccountTxsInRange(address, startIso, endIso) {
     setStatus("Fetching transactions...");
     setDetails("");
 
-    const txs = [];
+    const allTxs = [];
 
-    // Helper: try shared client using requestXrpl or XRPL.client (account_tx)
+    // (A) Try shared client first
     async function fetchViaSharedClient() {
       try {
+        // prefer requestXrpl wrapper if present
         if (typeof window.requestXrpl === "function") {
-          // account_tx expects ledger ranges; we'll request and filter by date client-side
           let marker = undefined;
           let pages = 0;
           while (pages++ < MAX_FETCH_PAGES) {
             const payload = { command: "account_tx", account: address, ledger_index_min: -1, ledger_index_max: -1, limit: PAGE_LIMIT };
             if (marker) payload.marker = marker;
             const res = await window.requestXrpl(payload, { timeoutMs: 10000 });
-            const entries = res.transactions || res.results || res; // shape variance
+            const entries = res.transactions || res.results || res;
             if (Array.isArray(entries)) {
-              for (const e of entries) {
-                // normalize shape to an object with tx and date/ledger info
-                txs.push(e);
-              }
+              allTxs.push(...entries);
             } else if (Array.isArray(res)) {
-              txs.push(...res);
+              allTxs.push(...res);
             }
             if (!res.marker) break;
             marker = res.marker;
           }
-          return txs;
-        } else if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === "function") {
+          return allTxs;
+        }
+
+        if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === "function") {
           let marker = undefined;
           let pages = 0;
           while (pages++ < MAX_FETCH_PAGES) {
@@ -203,13 +202,11 @@
             const resp = await window.XRPL.client.request(payload);
             const res = resp.result || resp;
             const entries = res.transactions || res;
-            if (Array.isArray(entries)) {
-              for (const e of entries) txs.push(e);
-            }
+            if (Array.isArray(entries)) allTxs.push(...entries);
             if (!res.marker) break;
             marker = res.marker;
           }
-          return txs;
+          return allTxs;
         }
       } catch (e) {
         console.warn("Shared client fetch failed:", e && e.message ? e.message : e);
@@ -218,50 +215,44 @@
       return null;
     }
 
-    // Fallback to public API (xrpl.org v2)
+    // (B) Public API fallback (xrpl.org)
     async function fetchViaPublicApi() {
       try {
+        let nextUrl = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
+        if (startIso) nextUrl += `&start=${encodeURIComponent(startIso)}`;
+        if (endIso) nextUrl += `&end=${encodeURIComponent(endIso)}`;
+
         let page = 0;
-        let url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
-        if (startIso) url += `&start=${encodeURIComponent(startIso)}`;
-        if (endIso) url += `&end=${encodeURIComponent(endIso)}`;
         while (page++ < MAX_FETCH_PAGES) {
           setStatus(`Fetching page ${page}...`);
-          const r = await fetch(url, { headers: { Accept: "application/json" } });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const j = await r.json();
-          const arr = j.result || j.transactions || j.data || j; // adapt
-          if (Array.isArray(arr)) {
-            txs.push(...arr);
-          } else if (Array.isArray(j.transactions)) {
-            txs.push(...j.transactions);
-          } else if (Array.isArray(j.result?.transactions)) {
-            txs.push(...j.result.transactions);
-          }
-          // xrpl.org uses "marker" for pagination guidelines: check j.result?.marker or j.marker or j.next
+          const j = await tryFetchUrl(nextUrl, 10000);
+          if (!j) break;
+          const arr = j.result || j.transactions || j.data || j;
+          if (Array.isArray(arr)) allTxs.push(...arr);
+          else if (Array.isArray(j.transactions)) allTxs.push(...j.transactions);
+          else if (Array.isArray(j.result?.transactions)) allTxs.push(...j.result.transactions);
+
+          // paging markers
           if (j.marker) {
-            url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.marker)}&limit=${PAGE_LIMIT}`;
+            nextUrl = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.marker)}&limit=${PAGE_LIMIT}`;
           } else if (j.result?.marker) {
-            url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.result.marker)}&limit=${PAGE_LIMIT}`;
+            nextUrl = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.result.marker)}&limit=${PAGE_LIMIT}`;
           } else {
             break;
           }
         }
-        return txs;
+        return allTxs;
       } catch (e) {
         console.warn("Public API fetch failed:", e && e.message ? e.message : e);
         return null;
       }
     }
 
-    // (A) Try shared client first
     const shared = await fetchViaSharedClient();
     if (shared && shared.length) {
       setStatus(`Fetched ${shared.length} txs via shared client`);
       return shared;
     }
-
-    // (B) Try public API
     const pub = await fetchViaPublicApi();
     if (pub && pub.length) {
       setStatus(`Fetched ${pub.length} txs via public API`);
@@ -271,8 +262,9 @@
     throw new Error("No transaction sources available (shared client and public API failed)");
   }
 
-  // Build snapshot: fetch txs, filter by date, canonicalize and hash leaves, build merkle tree
-  let snapshot = null;
+  /* -------------------------
+     Snapshot builder
+  ------------------------- */
   async function buildSnapshot(address, startIso, endIso) {
     setStatus("Gathering transactions...");
     const rawTxs = await fetchAccountTxsInRange(address, startIso, endIso);
@@ -283,48 +275,45 @@
       return null;
     }
 
-    // Normalize each tx to deterministic JSON object we use for snapshot
-    // For public API shapes we might need to unwrap envelope -> transaction fields
-    const normalizedTxs = rawTxs.map((r) => {
-      // attempt to extract tx object if wrapped
+    // Normalize tx objects (unwrap common envelope shapes)
+    const normalized = rawTxs.map((r) => {
       if (r.tx) return r.tx;
       if (r.transaction) return r.transaction;
-      // sometimes entire object is the tx
       return r;
     });
 
-    setStatus(`Hashing ${normalizedTxs.length} transactions...`);
-    // leaf hashes
-    const leafHashes = [];
-    for (let i = 0; i < normalizedTxs.length; i++) {
-      const t = canonicalize(normalizedTxs[i]);
+    setStatus(`Hashing ${normalized.length} transactions...`);
+    const leaves = [];
+    for (let i = 0; i < normalized.length; i++) {
+      const t = canonicalize(normalized[i]);
       const json = JSON.stringify(t);
       const h = await hashUtf8Hex(json);
-      leafHashes.push(h);
-      if (i % 50 === 0) setStatus(`Hashed ${i}/${normalizedTxs.length} txs...`);
+      leaves.push(h);
+      if (i % 50 === 0) setStatus(`Hashed ${i}/${normalized.length}`);
     }
 
-    // build Merkle tree (async)
     setStatus("Building Merkle tree...");
-    const tree = await buildMerkleTreeAsync(leafHashes);
+    const tree = await buildMerkleTreeAsync(leaves);
 
-    snapshot = {
+    currentSnapshot = {
       address,
       startIso,
       endIso,
       createdAt: new Date().toISOString(),
-      txCount: normalizedTxs.length,
+      txCount: normalized.length,
       root: tree.root,
       layers: tree.layers,
-      leaves: leafHashes,
-      txs: normalizedTxs
+      leaves,
+      txs: normalized
     };
 
-    setStatus(`Snapshot built • root: ${snapshot.root}`);
-    return snapshot;
+    setStatus(`Snapshot built • root: ${currentSnapshot.root}`);
+    return currentSnapshot;
   }
 
-  // UI handler for Build Snapshot
+  /* -------------------------
+     UI handlers
+  ------------------------- */
   async function onBuild() {
     ensurePanel();
     const addr = (document.getElementById("aiAddress") || {}).value?.trim();
@@ -341,7 +330,7 @@
       const snap = await buildSnapshot(addr, s, e);
       if (!snap) return;
       setSummary(`<strong>Address:</strong> ${escapeHtml(addr)}<br><strong>Txs:</strong> ${snap.txCount}<br><strong>Root:</strong> ${snap.root}`);
-      setDetails("Top tx types / snippet:\n" + summarizeTxs(snap.txs));
+      setDetails(summarizeTxs(snap.txs));
       showExportButton(true);
     } catch (err) {
       setStatus("Error: " + (err && err.message ? err.message : String(err)));
@@ -349,7 +338,6 @@
     }
   }
 
-  // Simple tx summary: count types and top counterparties
   function summarizeTxs(txs) {
     const byType = {};
     const counter = {};
@@ -361,34 +349,33 @@
     }
     const types = Object.entries(byType).map(([k, v]) => `${k}: ${v}`).join(", ");
     const topParties = Object.entries(counter).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}(${v})`).join(", ");
-    return `${types}\nTop counterparts: ${topParties}`;
+    return `Types: ${types}\nTop counterparts: ${topParties}`;
   }
 
-  // Export snapshot JSON (including per-leaf proofs)
   async function exportSnapshot() {
-    if (!snapshot) {
+    if (!currentSnapshot) {
       setStatus("No snapshot to export");
       return;
     }
-    // build proofs for each leaf (could be large)
     setStatus("Building proofs...");
     const proofs = [];
-    for (let i = 0; i < snapshot.leaves.length; i++) {
-      const p = getMerkleProof(snapshot.layers, i);
-      proofs.push(p);
+    for (let i = 0; i < currentSnapshot.leaves.length; i++) {
+      proofs.push(getMerkleProof(currentSnapshot.layers, i));
     }
+
     const exportObj = {
-      meta: { address: snapshot.address, startIso: snapshot.startIso, endIso: snapshot.endIso, createdAt: snapshot.createdAt, txCount: snapshot.txCount },
-      root: snapshot.root,
-      leaves: snapshot.leaves,
+      meta: { address: currentSnapshot.address, startIso: currentSnapshot.startIso, endIso: currentSnapshot.endIso, createdAt: currentSnapshot.createdAt, txCount: currentSnapshot.txCount },
+      root: currentSnapshot.root,
+      leaves: currentSnapshot.leaves,
       proofs,
-      txs: snapshot.txs // include actual tx objects
+      txs: currentSnapshot.txs
     };
+
     const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `snapshot-${snapshot.address}-${(new Date()).toISOString()}.json`;
+    a.download = `snapshot-${currentSnapshot.address}-${(new Date()).toISOString()}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -396,35 +383,25 @@
     setStatus("Snapshot exported");
   }
 
-  // Expose verification tool: for a single tx index
-  async function verifyExample(index) {
-    if (!snapshot) return false;
-    setStatus(`Verifying tx #${index}...`);
-    const leaf = snapshot.leaves[index];
-    const proof = getMerkleProof(snapshot.layers, index);
-    const ok = await verifyMerkleProof(leaf, proof, snapshot.root);
-    setStatus(ok ? "Proof verified OK" : "Proof FAILED");
-    return ok;
-  }
+  /* -------------------------
+     Utility helpers
+  ------------------------- */
+  function escapeHtml(str) { if (str == null) return ""; return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-  // Storage of last snapshot
-  let snapshot = null;
-
-  // Initialize UI
+  /* -------------------------
+     Public API exposure
+  ------------------------- */
   ensurePanel();
 
-  // expose some functions for debugging
   window.AccountInspector = {
     buildSnapshot: async (addr, startIso, endIso) => {
       ensurePanel();
-      snapshot = await (async () => {
-        setStatus("Building snapshot (manual)...");
-        return await (await buildSnapshot(addr, startIso, endIso));
-      })();
-      return snapshot;
+      return await buildSnapshot(addr, startIso, endIso);
     },
-    verify: verifyExample,
-    getSnapshot: () => snapshot
+    getSnapshot: () => currentSnapshot,
+    verifyProof: verifyMerkleProof,
+    focus: () => { const el = document.getElementById("aiAddress"); if (el) { el.focus(); el.select(); } }
   };
 
-})(); // end module
+  console.log("🛡️ Account Inspector module loaded");
+})(); 
