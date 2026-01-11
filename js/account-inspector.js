@@ -1,0 +1,430 @@
+/* =========================================
+   NaluXrp — Account Inspector + Merkle Snapshot
+   - Paste an XRP (r...) address and pick a date/ledger range
+   - Fetch transactions (shared XRPL client preferred, public API fallback)
+   - Build Merkle tree over ordered txs (deterministic canonical JSON -> SHA-256)
+   - Export snapshot and inclusion proofs; verify proofs
+   ========================================= */
+
+(function () {
+  // CONFIG
+  const PUBLIC_TX_API = "https://api.xrpl.org/v2/accounts"; // /{address}/transactions?limit=...
+  const MAX_FETCH_PAGES = 200; // safety cap
+  const PAGE_LIMIT = 100; // per-request page size for API
+
+  // UI: inject minimal panel
+  function ensurePanel() {
+    if (document.getElementById("accountInspector")) return;
+    const container = document.createElement("div");
+    container.id = "accountInspector";
+    container.style.cssText = "position:fixed;right:12px;top:80px;width:360px;max-height:80vh;overflow:auto;z-index:9999;background:rgba(0,0,0,0.8);color:#fff;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);font-family:system-ui;font-size:13px";
+    container.innerHTML = `
+      <h3 style="margin:0 0 8px 0">Account Inspector</h3>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input id="aiAddress" placeholder="r... address" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input id="aiStart" type="date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+        <input id="aiEnd" type="date" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#fff"/>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button id="aiFetch" style="flex:1;padding:8px;border-radius:8px;border:none;background:#2ecc71;color:#000;font-weight:700;cursor:pointer">Build Snapshot</button>
+        <button id="aiClear" style="padding:8px;border-radius:8px;border:none;background:#ffb86c;color:#000;cursor:pointer">Clear</button>
+      </div>
+      <div id="aiStatus" style="font-size:12px;opacity:0.9;margin-bottom:8px;">Ready</div>
+      <div id="aiSummary" style="font-size:13px"></div>
+      <div id="aiActions" style="margin-top:10px;display:flex;gap:8px;">
+        <button id="aiExport" style="flex:1;padding:8px;border-radius:8px;border:none;background:#50fa7b;color:#000;cursor:pointer;display:none">Export Snapshot</button>
+      </div>
+      <div id="aiDetails" style="margin-top:10px;font-size:12px;opacity:0.95;white-space:pre-wrap;"></div>
+    `;
+    document.body.appendChild(container);
+
+    document.getElementById("aiFetch").addEventListener("click", onBuild);
+    document.getElementById("aiClear").addEventListener("click", clearPanel);
+    document.getElementById("aiExport").addEventListener("click", exportSnapshot);
+  }
+
+  // Small helpers
+  function setStatus(msg) { const el = document.getElementById("aiStatus"); if (el) el.textContent = msg; }
+  function setDetails(msg) { const el = document.getElementById("aiDetails"); if (el) el.textContent = msg; }
+  function setSummary(html) { const el = document.getElementById("aiSummary"); if (el) el.innerHTML = html; }
+  function showExportButton(show) { const b = document.getElementById("aiExport"); if (b) b.style.display = show ? "block" : "none"; }
+  function clearPanel() { setStatus("Ready"); setSummary(""); setDetails(""); snapshot = null; showExportButton(false); }
+
+  // Canonical JSON: stable key ordering for deterministic hashing
+  function canonicalize(obj) {
+    if (obj === null || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(canonicalize);
+    const keys = Object.keys(obj).sort();
+    const out = {};
+    for (const k of keys) out[k] = canonicalize(obj[k]);
+    return out;
+  }
+
+  // Hash a UTF-8 string -> hex (SHA-256)
+  async function hashUtf8Hex(input) {
+    const enc = new TextEncoder();
+    const data = enc.encode(input);
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return bufferToHex(hash);
+  }
+
+  function bufferToHex(buf) {
+    const b = new Uint8Array(buf);
+    return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  // Merkle tree builder (binary tree using pairing; if odd, duplicate last)
+  function buildMerkleTreeFromLeaves(leafHexes) {
+    if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
+    const layers = [];
+    layers.push(leafHexes.slice());
+    while (layers[0].length > 1) {
+      const curr = layers[0];
+      const next = [];
+      for (let i = 0; i < curr.length; i += 2) {
+        const left = curr[i];
+        const right = (i + 1 < curr.length) ? curr[i + 1] : curr[i]; // duplicate last if odd
+        // concat bytes: left||right as hex -> hash
+        const combined = left + right;
+        // We'll compute hash lazily async; but tree building for indexes can remain synchronous if we want hex hashed values.
+        // However, to keep consistent, assume layers contain already-hashed hex values.
+        // Here we will call a sync combine placeholder; actual hashing must be async.
+        next.push(combineHex(left, right));
+      }
+      layers.unshift(next); // prepend to keep root at layers[0]
+    }
+    return { root: layers[0][0], layers };
+  }
+
+  // Because combine needs SHA-256, provide an async builder
+  async function buildMerkleTreeAsync(leafHexes) {
+    if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
+    let layer = leafHexes.slice();
+    const layers = [layer.slice()];
+    while (layer.length > 1) {
+      const next = [];
+      for (let i = 0; i < layer.length; i += 2) {
+        const left = layer[i];
+        const right = (i + 1 < layer.length) ? layer[i + 1] : layer[i];
+        const combinedHex = await hashUtf8Hex(left + right);
+        next.push(combinedHex);
+      }
+      layer = next;
+      layers.unshift(layer.slice());
+    }
+    return { root: layers[0][0], layers };
+  }
+
+  // Build proof for leaf index from layers (layers[0] root)
+  function getMerkleProof(layers, leafIndex) {
+    // layers with root at 0 and leaves at last layer
+    const proof = [];
+    let index = leafIndex;
+    for (let li = layers.length - 1; li > 0; li--) {
+      const layer = layers[li];
+      const isRight = (index % 2) === 1;
+      const pairIndex = isRight ? index - 1 : index + 1;
+      const sibling = pairIndex < layer.length ? layer[pairIndex] : layer[index]; // duplicate if missing
+      proof.push({ sibling, position: isRight ? "left" : "right" }); // sibling position relative to node
+      index = Math.floor(index / 2);
+    }
+    return proof;
+  }
+
+  // Verify proof (leafHex, proof array, rootHex) -> bool
+  async function verifyMerkleProof(leafHex, proof, rootHex) {
+    let hash = leafHex;
+    for (const step of proof) {
+      if (step.position === "left") {
+        // sibling || hash
+        hash = await hashUtf8Hex(step.sibling + hash);
+      } else {
+        // hash || sibling
+        hash = await hashUtf8Hex(hash + step.sibling);
+      }
+    }
+    return hash === rootHex;
+  }
+
+  // combineHex placeholder (not used in async mode)
+  function combineHex(left, right) { return left + right; }
+
+  // Transaction hashing: canonicalize tx object and hash JSON
+  async function txToLeafHashHex(tx) {
+    // choose the fields that matter for canonical snapshot (tx hash + ledger index + date/time)
+    // but to remain robust, canonicalize the whole tx object (sorted keys)
+    const canon = canonicalize(tx);
+    const json = JSON.stringify(canon);
+    return await hashUtf8Hex(json);
+  }
+
+  // Fetch transactions for an account in the date window.
+  // Strategy:
+  // 1) Try window.requestXrpl (shared client) if available -> account_tx with ledger/time filters (if supported).
+  // 2) Fallback: public API (xrpl.org /v2/accounts/{addr}/transactions) with pagination.
+  async function fetchAccountTxsInRange(address, startIso, endIso) {
+    setStatus("Fetching transactions...");
+    setDetails("");
+
+    const txs = [];
+
+    // Helper: try shared client using requestXrpl or XRPL.client (account_tx)
+    async function fetchViaSharedClient() {
+      try {
+        if (typeof window.requestXrpl === "function") {
+          // account_tx expects ledger ranges; we'll request and filter by date client-side
+          let marker = undefined;
+          let pages = 0;
+          while (pages++ < MAX_FETCH_PAGES) {
+            const payload = { command: "account_tx", account: address, ledger_index_min: -1, ledger_index_max: -1, limit: PAGE_LIMIT };
+            if (marker) payload.marker = marker;
+            const res = await window.requestXrpl(payload, { timeoutMs: 10000 });
+            const entries = res.transactions || res.results || res; // shape variance
+            if (Array.isArray(entries)) {
+              for (const e of entries) {
+                // normalize shape to an object with tx and date/ledger info
+                txs.push(e);
+              }
+            } else if (Array.isArray(res)) {
+              txs.push(...res);
+            }
+            if (!res.marker) break;
+            marker = res.marker;
+          }
+          return txs;
+        } else if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === "function") {
+          let marker = undefined;
+          let pages = 0;
+          while (pages++ < MAX_FETCH_PAGES) {
+            const payload = { command: "account_tx", account: address, ledger_index_min: -1, ledger_index_max: -1, limit: PAGE_LIMIT };
+            if (marker) payload.marker = marker;
+            const resp = await window.XRPL.client.request(payload);
+            const res = resp.result || resp;
+            const entries = res.transactions || res;
+            if (Array.isArray(entries)) {
+              for (const e of entries) txs.push(e);
+            }
+            if (!res.marker) break;
+            marker = res.marker;
+          }
+          return txs;
+        }
+      } catch (e) {
+        console.warn("Shared client fetch failed:", e && e.message ? e.message : e);
+        return null;
+      }
+      return null;
+    }
+
+    // Fallback to public API (xrpl.org v2)
+    async function fetchViaPublicApi() {
+      try {
+        let page = 0;
+        let url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
+        if (startIso) url += `&start=${encodeURIComponent(startIso)}`;
+        if (endIso) url += `&end=${encodeURIComponent(endIso)}`;
+        while (page++ < MAX_FETCH_PAGES) {
+          setStatus(`Fetching page ${page}...`);
+          const r = await fetch(url, { headers: { Accept: "application/json" } });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j = await r.json();
+          const arr = j.result || j.transactions || j.data || j; // adapt
+          if (Array.isArray(arr)) {
+            txs.push(...arr);
+          } else if (Array.isArray(j.transactions)) {
+            txs.push(...j.transactions);
+          } else if (Array.isArray(j.result?.transactions)) {
+            txs.push(...j.result.transactions);
+          }
+          // xrpl.org uses "marker" for pagination guidelines: check j.result?.marker or j.marker or j.next
+          if (j.marker) {
+            url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.marker)}&limit=${PAGE_LIMIT}`;
+          } else if (j.result?.marker) {
+            url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?marker=${encodeURIComponent(j.result.marker)}&limit=${PAGE_LIMIT}`;
+          } else {
+            break;
+          }
+        }
+        return txs;
+      } catch (e) {
+        console.warn("Public API fetch failed:", e && e.message ? e.message : e);
+        return null;
+      }
+    }
+
+    // (A) Try shared client first
+    const shared = await fetchViaSharedClient();
+    if (shared && shared.length) {
+      setStatus(`Fetched ${shared.length} txs via shared client`);
+      return shared;
+    }
+
+    // (B) Try public API
+    const pub = await fetchViaPublicApi();
+    if (pub && pub.length) {
+      setStatus(`Fetched ${pub.length} txs via public API`);
+      return pub;
+    }
+
+    throw new Error("No transaction sources available (shared client and public API failed)");
+  }
+
+  // Build snapshot: fetch txs, filter by date, canonicalize and hash leaves, build merkle tree
+  let snapshot = null;
+  async function buildSnapshot(address, startIso, endIso) {
+    setStatus("Gathering transactions...");
+    const rawTxs = await fetchAccountTxsInRange(address, startIso, endIso);
+    if (!rawTxs || !rawTxs.length) {
+      setStatus("No transactions found for that range");
+      setDetails("");
+      showExportButton(false);
+      return null;
+    }
+
+    // Normalize each tx to deterministic JSON object we use for snapshot
+    // For public API shapes we might need to unwrap envelope -> transaction fields
+    const normalizedTxs = rawTxs.map((r) => {
+      // attempt to extract tx object if wrapped
+      if (r.tx) return r.tx;
+      if (r.transaction) return r.transaction;
+      // sometimes entire object is the tx
+      return r;
+    });
+
+    setStatus(`Hashing ${normalizedTxs.length} transactions...`);
+    // leaf hashes
+    const leafHashes = [];
+    for (let i = 0; i < normalizedTxs.length; i++) {
+      const t = canonicalize(normalizedTxs[i]);
+      const json = JSON.stringify(t);
+      const h = await hashUtf8Hex(json);
+      leafHashes.push(h);
+      if (i % 50 === 0) setStatus(`Hashed ${i}/${normalizedTxs.length} txs...`);
+    }
+
+    // build Merkle tree (async)
+    setStatus("Building Merkle tree...");
+    const tree = await buildMerkleTreeAsync(leafHashes);
+
+    snapshot = {
+      address,
+      startIso,
+      endIso,
+      createdAt: new Date().toISOString(),
+      txCount: normalizedTxs.length,
+      root: tree.root,
+      layers: tree.layers,
+      leaves: leafHashes,
+      txs: normalizedTxs
+    };
+
+    setStatus(`Snapshot built • root: ${snapshot.root}`);
+    return snapshot;
+  }
+
+  // UI handler for Build Snapshot
+  async function onBuild() {
+    ensurePanel();
+    const addr = (document.getElementById("aiAddress") || {}).value?.trim();
+    const start = (document.getElementById("aiStart") || {}).value || null;
+    const end = (document.getElementById("aiEnd") || {}).value || null;
+    if (!addr || !/^r[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(addr)) {
+      setStatus("Enter a valid XRP address (r... )");
+      return;
+    }
+    setStatus("Starting snapshot...");
+    try {
+      const s = start ? new Date(start).toISOString() : null;
+      const e = end ? new Date(end).toISOString() : null;
+      const snap = await buildSnapshot(addr, s, e);
+      if (!snap) return;
+      setSummary(`<strong>Address:</strong> ${escapeHtml(addr)}<br><strong>Txs:</strong> ${snap.txCount}<br><strong>Root:</strong> ${snap.root}`);
+      setDetails("Top tx types / snippet:\n" + summarizeTxs(snap.txs));
+      showExportButton(true);
+    } catch (err) {
+      setStatus("Error: " + (err && err.message ? err.message : String(err)));
+      console.error(err);
+    }
+  }
+
+  // Simple tx summary: count types and top counterparties
+  function summarizeTxs(txs) {
+    const byType = {};
+    const counter = {};
+    for (const t of txs) {
+      const type = t.TransactionType || t.type || "Unknown";
+      byType[type] = (byType[type] || 0) + 1;
+      const other = t.Destination || t.Account || t.destination || t.account;
+      if (other) counter[other] = (counter[other] || 0) + 1;
+    }
+    const types = Object.entries(byType).map(([k, v]) => `${k}: ${v}`).join(", ");
+    const topParties = Object.entries(counter).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}(${v})`).join(", ");
+    return `${types}\nTop counterparts: ${topParties}`;
+  }
+
+  // Export snapshot JSON (including per-leaf proofs)
+  async function exportSnapshot() {
+    if (!snapshot) {
+      setStatus("No snapshot to export");
+      return;
+    }
+    // build proofs for each leaf (could be large)
+    setStatus("Building proofs...");
+    const proofs = [];
+    for (let i = 0; i < snapshot.leaves.length; i++) {
+      const p = getMerkleProof(snapshot.layers, i);
+      proofs.push(p);
+    }
+    const exportObj = {
+      meta: { address: snapshot.address, startIso: snapshot.startIso, endIso: snapshot.endIso, createdAt: snapshot.createdAt, txCount: snapshot.txCount },
+      root: snapshot.root,
+      leaves: snapshot.leaves,
+      proofs,
+      txs: snapshot.txs // include actual tx objects
+    };
+    const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `snapshot-${snapshot.address}-${(new Date()).toISOString()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus("Snapshot exported");
+  }
+
+  // Expose verification tool: for a single tx index
+  async function verifyExample(index) {
+    if (!snapshot) return false;
+    setStatus(`Verifying tx #${index}...`);
+    const leaf = snapshot.leaves[index];
+    const proof = getMerkleProof(snapshot.layers, index);
+    const ok = await verifyMerkleProof(leaf, proof, snapshot.root);
+    setStatus(ok ? "Proof verified OK" : "Proof FAILED");
+    return ok;
+  }
+
+  // Storage of last snapshot
+  let snapshot = null;
+
+  // Initialize UI
+  ensurePanel();
+
+  // expose some functions for debugging
+  window.AccountInspector = {
+    buildSnapshot: async (addr, startIso, endIso) => {
+      ensurePanel();
+      snapshot = await (async () => {
+        setStatus("Building snapshot (manual)...");
+        return await (await buildSnapshot(addr, startIso, endIso));
+      })();
+      return snapshot;
+    },
+    verify: verifyExample,
+    getSnapshot: () => snapshot
+  };
+
+})(); // end module
