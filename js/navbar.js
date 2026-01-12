@@ -1,8 +1,8 @@
 // =======================================================
-// navbar.js – STABLE + MOBILE FRIENDLY + OVERLAY SAFE
-// Updated: Inspector is a full-page feature now.
-// The navbar will navigate to the "inspector" page (data-page="inspector")
-// instead of lazy-loading a floating panel.
+// navbar.js – NAVBAR + NETWORK DROPDOWN INTEGRATION
+// - Adds "Account Inspector" entry into the Network dropdown (or nav links fallback)
+// - Mobile-friendly hamburger, dropdown accordion, scroll-hide behavior
+// - Ensures notification overlays don't block navbar interactions
 // =======================================================
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -14,42 +14,56 @@ document.addEventListener("DOMContentLoaded", () => {
    INIT NAVBAR
 ------------------------------------------------------ */
 function initNavbar() {
-  setupNavLinks();
-  setupHamburger();
-  setupDropdowns();
-  setupScrollHideDesktop();
-
-  // Add Account Inspector navigation button into the navbar
-  setupInspectorNavButton();
+  setupNavLinks();            // attach SPA navigation handlers for data-page links
+  setupHamburger();          // mobile hamburger
+  setupDropdowns();          // mobile dropdown accordion behavior
+  setupScrollHideDesktop();  // hide navbar on scroll (desktop)
+  insertInspectorInNetworkDropdown(); // add Inspector entry to network dropdown (preferred)
 }
 
 /* ------------------------------------------------------
    PAGE NAVIGATION (SAFE)
+   - Buttons / links with data-page="<id>" will call window.switchPage(id)
 ------------------------------------------------------ */
 function setupNavLinks() {
-  document.querySelectorAll("[data-page]").forEach(btn => {
-    btn.addEventListener("click", e => {
-      const page = btn.dataset.page;
-      if (!page) return;
+  // Use event delegation: listen on document for clicks on elements with data-page
+  document.addEventListener("click", function (e) {
+    const el = e.target.closest("[data-page]");
+    if (!el) return;
 
-      e.preventDefault();
-      e.stopPropagation();
+    const page = el.dataset.page;
+    if (!page) return;
 
-      navigateToPage(page);
+    e.preventDefault();
+    e.stopPropagation();
 
-      // Close mobile menu after navigating
-      if (window.innerWidth <= 992) {
-        closeMobileMenu();
-      }
-    });
+    navigateToPage(page);
+
+    // Close mobile menu after navigating
+    if (window.innerWidth <= 992) {
+      closeMobileMenu();
+    }
   });
 }
 
 function navigateToPage(pageId) {
+  // Prefer SPA switchPage exported by ui.js
   if (typeof window.switchPage === "function") {
-    window.switchPage(pageId);
-  } else {
-    console.error("❌ switchPage() not found!");
+    try {
+      window.switchPage(pageId);
+    } catch (err) {
+      console.error("switchPage() threw:", err);
+      // fallback: set location hash
+      location.hash = "#" + pageId;
+    }
+    return;
+  }
+
+  // Fallback: if switchPage not present, use simple hash navigation
+  try {
+    location.hash = "#" + pageId;
+  } catch (e) {
+    console.error("navigateToPage fallback failed:", e);
   }
 }
 
@@ -62,7 +76,7 @@ function setupHamburger() {
 
   if (!hamburger || !navLinks) return;
 
-  hamburger.addEventListener("click", e => {
+  hamburger.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -72,7 +86,7 @@ function setupHamburger() {
   });
 
   // Tap outside closes menu (mobile only)
-  document.addEventListener("click", e => {
+  document.addEventListener("click", (e) => {
     if (window.innerWidth > 992) return;
 
     if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
@@ -97,8 +111,8 @@ function closeMobileMenu() {
 function setupDropdowns() {
   const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
 
-  dropdownToggles.forEach(toggle => {
-    toggle.addEventListener("click", e => {
+  dropdownToggles.forEach((toggle) => {
+    toggle.addEventListener("click", (e) => {
       // Desktop: allow CSS hover
       if (window.innerWidth > 992) return;
 
@@ -109,7 +123,7 @@ function setupDropdowns() {
       if (!parent) return;
 
       // Close other dropdowns
-      document.querySelectorAll(".nav-dropdown.active").forEach(d => {
+      document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
         if (d !== parent) d.classList.remove("active");
       });
 
@@ -143,7 +157,8 @@ function setupScrollHideDesktop() {
 }
 
 /* ------------------------------------------------------
-   🔥 CRITICAL FIX: OVERLAY / NOTIFICATION SAFETY
+   NAVBAR SAFETY STYLES
+   Prevent overlays / toasts from blocking the navbar
 ------------------------------------------------------ */
 function injectNavbarSafetyStyles() {
   if (document.getElementById("navbar-safety-styles")) return;
@@ -151,74 +166,121 @@ function injectNavbarSafetyStyles() {
   const style = document.createElement("style");
   style.id = "navbar-safety-styles";
   style.textContent = `
-    /* Ensure navbar always remains clickable */
-    .navbar,
-    #navbar {
-      position: relative;
-      z-index: 10000;
-      pointer-events: auto;
-    }
-
-    /* Notifications must NEVER block nav interactions */
-    .notification-container,
-    .notifications,
-    .toast-container,
-    .toast-wrapper,
-    .toasts,
-    #notifications {
+    .navbar, #navbar { position: relative; z-index: 10000; pointer-events: auto; }
+    .notification-container, .notifications, .toast-container, .toast-wrapper, .toasts, #notifications {
       pointer-events: none !important;
       z-index: 9000 !important;
     }
-
-    /* Allow clicks INSIDE notification cards only */
-    .notification,
-    .toast {
-      pointer-events: auto !important;
-    }
-
-    /* Dropdown menus explicitly interactive */
-    .nav-dropdown,
-    .nav-dropdown * {
-      pointer-events: auto;
-    }
+    .notification, .toast { pointer-events: auto !important; }
+    .nav-dropdown, .nav-dropdown * { pointer-events: auto; }
+    /* small visual for injected inspector menu entry */
+    .nav-dropdown .inspector-entry, .nav-links .inspector-entry { font-weight:600; }
   `;
-
   document.head.appendChild(style);
 }
 
 /* ------------------------------------------------------
-   NAV: Inspector PAGE BUTTON
-   - Adds a link/button with data-page="inspector"
-   - When clicked it uses the existing SPA nav system
+   Insert "Account Inspector" into Network dropdown
+   - Tries several selectors to find the network dropdown/menu
+   - If found, adds an anchor with data-page="inspector"
+   - If not found, appends a button to the main navLinks container
 ------------------------------------------------------ */
-function setupInspectorNavButton() {
-  const navbar = document.getElementById("navbar");
-  const navLinks = document.getElementById("navLinks");
+function insertInspectorInNetworkDropdown() {
+  try {
+    // Candidate container selectors (try to be resilient to different html structures)
+    const candidateSelectors = [
+      ".network-dropdown",      // common
+      "#networkDropdown",       // id
+      "#network-menu",          // alternate id
+      ".network-selector",      // small selector block
+      "[data-network-dropdown]",// attribute hook
+      "#navLinks .nav-section-network", // compound
+    ];
 
-  const insertTarget = navLinks || navbar || document.body;
-  if (!insertTarget) return;
+    let container = null;
+    let menuList = null;
 
-  // Avoid duplication
-  if (document.querySelector('[data-page="inspector"]')) return;
+    for (const sel of candidateSelectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
 
-  const btn = document.createElement("button");
-  btn.className = "nav-btn";
-  btn.dataset.page = "inspector";
-  btn.type = "button";
-  btn.title = "Account Inspector";
-  btn.style.cssText = "margin-left:10px;padding:6px 10px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer";
-  btn.innerHTML = `🔎 Inspector`;
+      // If the element itself is a dropdown wrapper that contains a .dropdown-menu
+      const dm = el.querySelector(".dropdown-menu") || el.querySelector(".menu") || el.querySelector("ul");
+      if (dm) {
+        container = el;
+        menuList = dm;
+        break;
+      }
 
-  // Insert at the end of navLinks if available, else append to navbar
-  if (navLinks) navLinks.appendChild(btn);
-  else if (navbar) navbar.appendChild(btn);
-  else document.body.appendChild(btn);
+      // if element looks like a button + menu sibling structure
+      container = el;
+      break;
+    }
+
+    // If we found a dropdown menu area, append an <a> entry
+    if (menuList) {
+      // create anchor
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "dropdown-item inspector-entry";
+      a.dataset.page = "inspector";
+      a.textContent = "🔎 Account Inspector";
+      a.style.cursor = "pointer";
+      // insert at the top or bottom as preferred
+      menuList.appendChild(a);
+      return;
+    }
+
+    // If container found but no menuList, try to create one
+    if (container && !menuList) {
+      const list = document.createElement("div");
+      list.className = "dropdown-menu";
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "dropdown-item inspector-entry";
+      a.dataset.page = "inspector";
+      a.textContent = "🔎 Account Inspector";
+      list.appendChild(a);
+      container.appendChild(list);
+      return;
+    }
+
+    // Fallback: append to navLinks area
+    const navLinks = document.getElementById("navLinks") || document.querySelector(".nav-links") || document.querySelector(".navbar");
+    if (navLinks) {
+      // avoid duplication
+      if (navLinks.querySelector(".inspector-entry")) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "nav-btn inspector-entry";
+      btn.dataset.page = "inspector";
+      btn.textContent = "🔎 Inspector";
+      btn.style.marginLeft = "8px";
+      navLinks.appendChild(btn);
+      return;
+    }
+
+    // Last resort: append to navbar itself
+    const navbar = document.getElementById("navbar") || document.querySelector(".navbar") || document.body;
+    if (navbar && !navbar.querySelector(".inspector-entry")) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "nav-btn inspector-entry";
+      btn.dataset.page = "inspector";
+      btn.textContent = "🔎 Inspector";
+      btn.style.marginLeft = "8px";
+      navbar.appendChild(btn);
+    }
+  } catch (e) {
+    console.warn("insertInspectorInNetworkDropdown failed:", e && e.message ? e.message : e);
+  }
 }
 
 /* ------------------------------------------------------
-   Programmatic API / Exports
+   EXPORTS (helpers other modules might use)
 ------------------------------------------------------ */
-window.navigateToPage = navigateToPage;
 window.closeMobileMenu = closeMobileMenu;
+window.navigateToPage = navigateToPage;
 
-console.log("✅ Navbar module loaded (overlay-safe, dropdown-safe)");
+console.log("✅ Navbar module loaded (network-inspector integrated)");
