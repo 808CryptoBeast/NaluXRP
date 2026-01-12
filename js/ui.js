@@ -152,6 +152,16 @@
      NAVIGATION
   ----------------------------- */
   function switchPage(pageId) {
+    // If the section doesn't exist, create a stub so handler can attach
+    if (!document.getElementById(pageId)) {
+      const stub = document.createElement("section");
+      stub.id = pageId;
+      stub.className = "page-section";
+      // try to insert into main container if present, before footer
+      const main = document.getElementById("main") || document.getElementById("dashboard")?.parentElement || document.body;
+      main.appendChild(stub);
+    }
+
     document.querySelectorAll(".page-section").forEach((sec) => {
       sec.style.display = "none";
       sec.classList.remove("active");
@@ -159,7 +169,7 @@
 
     const target = document.getElementById(pageId);
     if (!target) {
-      console.error("Page not found:", pageId);
+      console.error("Page not found after stub creation:", pageId);
       return;
     }
 
@@ -398,6 +408,30 @@
   function setTheme(theme) {
     window.UI.currentTheme = theme;
     document.body.className = `theme-${theme}`;
+  }
+
+  /* -----------------------------
+     SCRIPT LOADER (used by PAGE_INIT_MAP inspector)
+     Attempts to load a script once (resolves when loaded)
+  ----------------------------- */
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      // already present?
+      const already = Array.from(document.scripts).find(s => s.src && (s.src.indexOf(src) !== -1 || s.getAttribute('data-src') === src));
+      if (already) {
+        if (already.getAttribute('data-loaded') === 'true') return resolve();
+        already.addEventListener('load', () => resolve());
+        already.addEventListener('error', (e) => reject(e));
+        return;
+      }
+      const s = document.createElement('script');
+      s.setAttribute('data-src', src);
+      s.src = src;
+      s.async = true;
+      s.onload = () => { s.setAttribute('data-loaded', 'true'); resolve(); };
+      s.onerror = (e) => { s.remove(); reject(new Error('Failed to load ' + src)); };
+      document.head.appendChild(s);
+    });
   }
 
   /* -----------------------------
