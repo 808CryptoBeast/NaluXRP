@@ -5,6 +5,8 @@
    - Ledger-only defaults: first N outgoing Payments per node (chronological)
    - Tree view (top->bottom), per-node modal includes activated_by + first outgoing list
    - Pattern scan: bursts + split clusters + reconsolidation hubs + dominance + small cycles
+   - Transport badge + auto-retry when WS drops
+   - Strict first-N proof mode: persist page/marker chain + selected tx hashes per node
    - Transport: prefers shared WS (window.requestXrpl / window.XRPL.client), falls back to CORS HTTP JSON-RPC
    ========================================================= */
 
@@ -15,10 +17,7 @@
   const DEPLOYED_PROXY =
     typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? String(window.NALU_DEPLOYED_PROXY) : "";
 
-  const RPC_HTTP_ENDPOINTS = [
-    "https://xrplcluster.com/",
-    "https://xrpl.ws/"
-  ];
+  const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
 
   const RPC_HTTP_OVERRIDE =
     typeof window !== "undefined" && window.NALU_RPC_HTTP ? String(window.NALU_RPC_HTTP) : "";
@@ -51,6 +50,9 @@
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
 
+  // auto-retry
+  const SHARED_RETRY_COOLDOWN_MS = 10_000;
+
   // ---------------- STATE ----------------
   let buildingTree = false;
   let activeIssuer = null;
@@ -58,6 +60,13 @@
   const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
+
+  const transportState = {
+    sharedConnected: false,
+    lastSource: "—",
+    lastError: null,
+    lastSharedReconnectAttemptAt: 0
+  };
 
   // ---------------- DOM ----------------
   const $ = (id) => document.getElementById(id);
@@ -203,11 +212,43 @@
     return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
-  // ---------------- TRANSPORT ----------------
-  function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
+  // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
+  function computeSharedConnected() {
+    if (typeof window.requestXrpl === "function") return true;
+    if (window.XRPL?.connected) return true;
+    if (window.XRPL?.client && window.XRPL?.client?.isConnected?.()) return true;
+    return false;
+  }
+
+  function setTransportLastSource(src) {
+    transportState.lastSource = src || "—";
+    updateConnBadge();
+  }
+
+  function updateConnBadge() {
+    const badge = $("uiConnBadge");
+    const text = $("uiConnText");
+    if (!badge || !text) return;
+
+    transportState.sharedConnected = computeSharedConnected();
+
+    if (transportState.sharedConnected) {
+      badge.style.background = "linear-gradient(135deg,#50fa7b,#2ecc71)";
+      badge.style.color = "#000";
+      text.textContent = `WS connected • last: ${transportState.lastSource}`;
+    } else {
+      badge.style.background = "rgba(255,255,255,0.10)";
+      badge.style.color = "var(--text-primary)";
+      const err = transportState.lastError ? ` • ${transportState.lastError}` : "";
+      text.textContent = `WS offline • last: ${transportState.lastSource}${err}`;
+    }
+  }
+
+  async function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
     return new Promise((resolve) => {
       try {
-        if ((window.XRPL && window.XRPL.connected) || typeof window.requestXrpl === "function") return resolve(true);
+        if (computeSharedConnected()) return resolve(true);
+
         const onConn = (ev) => {
           const d = ev && ev.detail;
           if (d && d.connected) {
@@ -217,6 +258,7 @@
           }
         };
         window.addEventListener("xrpl-connection", onConn);
+
         const t = setTimeout(() => {
           window.removeEventListener("xrpl-connection", onConn);
           resolve(false);
@@ -227,6 +269,29 @@
     });
   }
 
+  function attemptSharedReconnect(reason) {
+    const now = Date.now();
+    if (now - transportState.lastSharedReconnectAttemptAt < SHARED_RETRY_COOLDOWN_MS) return;
+    transportState.lastSharedReconnectAttemptAt = now;
+
+    try {
+      if (typeof window.XRPL?.connect === "function") {
+        window.XRPL.connect();
+        transportState.lastError = reason || "reconnect requested";
+      } else if (typeof window.initXrplConnection === "function") {
+        window.initXrplConnection();
+        transportState.lastError = reason || "reconnect requested";
+      } else {
+        transportState.lastError = reason || "ws unavailable";
+      }
+    } catch (e) {
+      transportState.lastError = e?.message ? e.message : String(e);
+    }
+
+    updateConnBadge();
+  }
+
+  // ---------------- HTTP JSON-RPC ----------------
   async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}) {
     try {
       const controller = new AbortController();
@@ -248,6 +313,8 @@
       return await resp.json();
     } catch (err) {
       console.warn("tryFetchJson failed", url, err && err.message ? err.message : err);
+      transportState.lastError = err && err.message ? err.message : String(err);
+      updateConnBadge();
       return null;
     }
   }
@@ -258,7 +325,6 @@
 
   async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
     const endpoints = [];
-
     if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) endpoints.push(DEPLOYED_PROXY);
     if (RPC_HTTP_OVERRIDE && RPC_HTTP_OVERRIDE.startsWith("http")) endpoints.push(RPC_HTTP_OVERRIDE);
     endpoints.push(...RPC_HTTP_ENDPOINTS);
@@ -283,6 +349,7 @@
     return null;
   }
 
+  // ---------------- TX NORMALIZATION ----------------
   function normalizeTxEntry(entry) {
     const t0 = entry?.tx || entry?.transaction || entry;
     if (!t0) return null;
@@ -326,7 +393,7 @@
   }
 
   async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
-    // Prefer shared WS when available (more reliable for deep history)
+    // Prefer shared WS
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
@@ -350,24 +417,40 @@
         const rr = res?.result || res;
         const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
         const nextMarker = rr?.marker || null;
-        return { txs, marker: nextMarker, source: "shared" };
+
+        setTransportLastSource("shared_ws");
+        transportState.lastError = null;
+        updateConnBadge();
+
+        return { txs, marker: nextMarker, source: "shared_ws" };
       }
+
+      attemptSharedReconnect("ws offline");
     } catch (e) {
       console.warn("shared account_tx failed", e && e.message ? e.message : e);
+      transportState.lastError = e && e.message ? e.message : String(e);
+      updateConnBadge();
+      attemptSharedReconnect("ws error");
     }
 
     // HTTP JSON-RPC fallback
-    const r = await rpcCall("account_tx", {
-      account: address,
-      limit: limit || PAGE_LIMIT,
-      marker: marker || undefined,
-      forward: !!forward,
-      ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
-      ledger_index_max: ledgerMax == null ? -1 : ledgerMax
-    }, { timeoutMs: 20000, retries: 2 });
+    const r = await rpcCall(
+      "account_tx",
+      {
+        account: address,
+        limit: limit || PAGE_LIMIT,
+        marker: marker || undefined,
+        forward: !!forward,
+        ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
+        ledger_index_max: ledgerMax == null ? -1 : ledgerMax
+      },
+      { timeoutMs: 20000, retries: 2 }
+    );
 
     const txs = Array.isArray(r?.transactions) ? r.transactions : [];
     const nextMarker = r?.marker || null;
+
+    setTransportLastSource("http_rpc");
     return { txs, marker: nextMarker, source: "http_rpc" };
   }
 
@@ -408,7 +491,6 @@
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
 
-    // shared WS
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
@@ -417,6 +499,7 @@
           const data = r?.result?.account_data || r?.account_data || null;
           const out = normalizeAccountInfo(data);
           accountInfoCache.set(address, out);
+          setTransportLastSource("shared_ws");
           return out;
         }
         if (window.XRPL?.client?.request) {
@@ -424,18 +507,23 @@
           const data = r?.result?.account_data || r?.account_data || null;
           const out = normalizeAccountInfo(data);
           accountInfoCache.set(address, out);
+          setTransportLastSource("shared_ws");
           return out;
         }
+      } else {
+        attemptSharedReconnect("ws offline");
       }
     } catch (e) {
-      console.warn("shared account_info failed", e && e.message ? e.message : e);
+      transportState.lastError = e && e.message ? e.message : String(e);
+      updateConnBadge();
+      attemptSharedReconnect("ws error");
     }
 
-    // HTTP JSON-RPC
     const res = await rpcCall("account_info", { account: address, ledger_index: "validated" }, { timeoutMs: 15000, retries: 2 });
     const data = res?.account_data || null;
     const out = normalizeAccountInfo(data);
     accountInfoCache.set(address, out);
+    setTransportLastSource("http_rpc");
     return out;
   }
 
@@ -453,8 +541,6 @@
     let source = "unknown";
     let complete = true;
 
-    // We want earliest inbound Payment -> address.
-    // Use forward:true to move chronologically.
     while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
       pages += 1;
 
@@ -513,8 +599,36 @@
     return entry;
   }
 
+  // ---------------- STRICT PROOF MODE ----------------
+  function strictProofEnabled() {
+    return !!$("uiStrictProof")?.checked;
+  }
+
+  function makeStrictProofEnvelope({ address, needCount, constraints, forward }) {
+    return {
+      version: 1,
+      address,
+      needCount,
+      forward: !!forward,
+      constraints: {
+        startDate: constraints.startDate || null,
+        endDate: constraints.endDate || null,
+        ledgerMin: constraints.ledgerMin == null ? null : constraints.ledgerMin,
+        ledgerMax: constraints.ledgerMax == null ? null : constraints.ledgerMax,
+        minXrp: constraints.minXrp || 0
+      },
+      pages: [],
+      selected: {
+        selectedTxHashes: [],
+        selectedTxs: []
+      },
+      sources: [],
+      builtAt: new Date().toISOString()
+    };
+  }
+
   // ---------------- TREE DATA (first N outgoing, chronological) ----------------
-  async function collectOutgoingPaymentsEarliest(address, needCount, constraints) {
+  async function collectOutgoingPaymentsEarliest(address, needCount, constraints, withStrictProof) {
     const collected = [];
     let marker = null;
     let pages = 0;
@@ -523,8 +637,12 @@
     const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
     const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
+    const proof = withStrictProof ? makeStrictProofEnvelope({ address, needCount, constraints, forward: true }) : null;
+
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
+
+      const markerIn = marker || null;
 
       const resp = await fetchAccountTxPaged(address, {
         marker,
@@ -533,6 +651,20 @@
         ledgerMin,
         ledgerMax
       });
+
+      const markerOut = resp.marker || null;
+
+      if (proof) {
+        proof.sources.push(resp.source || "unknown");
+        proof.pages.push({
+          page: pages,
+          markerIn,
+          markerOut,
+          fetchedCount: resp.txs.length,
+          matchedCount: 0,
+          matchedTxHashes: []
+        });
+      }
 
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
@@ -551,6 +683,12 @@
         if (from !== address) continue;
 
         collected.push(tx);
+
+        if (proof) {
+          const pageRec = proof.pages[proof.pages.length - 1];
+          pageRec.matchedCount += 1;
+          if (tx.hash) pageRec.matchedTxHashes.push(String(tx.hash));
+        }
       }
 
       marker = resp.marker;
@@ -561,8 +699,23 @@
     }
 
     const sorted = normalizeAndSortTxs(collected);
+    const picked = sorted.slice(0, needCount);
+
+    if (proof) {
+      proof.selected.selectedTxHashes = picked.map((t) => String(t.hash || "")).filter(Boolean);
+      proof.selected.selectedTxs = picked.map((t) => ({
+        tx_hash: String(t.hash || ""),
+        ledger_index: Number(t.ledger_index || 0),
+        date: t._iso || null,
+        to: t.Destination || t.destination || null,
+        amount: parseAmount(t.Amount ?? t.delivered_amount ?? t._meta?.delivered_amount ?? null).value,
+        currency: parseAmount(t.Amount ?? t.delivered_amount ?? t._meta?.delivered_amount ?? null).currency
+      }));
+    }
+
     return {
-      txs: sorted.slice(0, needCount),
+      txs: picked,
+      strictProof: proof,
       meta: {
         pages,
         scanned,
@@ -578,10 +731,10 @@
       issuer,
       builtAt: null,
       params,
-      nodes: new Map(),      // addr -> node
-      edges: [],             // { from,to,ledger_index,date,amount,currency,tx_hash }
-      adjacency: new Map(),  // from -> [edgeIdx]
-      parentChoice: new Map()// child -> parent (tree)
+      nodes: new Map(), // addr -> node
+      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash }
+      adjacency: new Map(), // from -> [edgeIdx]
+      parentChoice: new Map() // child -> parent (tree)
     };
   }
 
@@ -596,7 +749,8 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: []
+        outgoingFirst: [],
+        outgoingProof: null
       });
     } else {
       const n = g.nodes.get(addr);
@@ -627,6 +781,7 @@
 
   async function buildIssuerTree(g) {
     const { depth, perNode, maxAccounts, maxEdges, constraints } = g.params;
+    const strict = strictProofEnabled();
 
     ensureNode(g, g.issuer, 0);
 
@@ -648,9 +803,11 @@
       if (g.nodes.size >= maxAccounts) break;
       if (g.edges.length >= maxEdges) break;
 
-      const { txs } = await collectOutgoingPaymentsEarliest(addr, perNode, constraints);
+      const res = await collectOutgoingPaymentsEarliest(addr, perNode, constraints, strict);
+      const txs = res.txs;
 
       const node = g.nodes.get(addr);
+      node.outgoingProof = res.strictProof || null;
       node.outgoingFirst = txs.map((tx) => {
         const to = tx.Destination || tx.destination || null;
         const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
@@ -1044,9 +1201,7 @@
     setStatus("Ready");
 
     if (autoBuildIfMissing) {
-      const elDepth = $("uiDepth");
-      const elPer = $("uiPerNode");
-      if (elDepth && elPer) buildTreeClicked().catch(() => {});
+      buildTreeClicked().catch(() => {});
     }
   }
 
@@ -1070,6 +1225,12 @@
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
           <div style="opacity:.85">Issuer tree • activated_by • patterns</div>
+
+          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
+            <div style="width:10px;height:10px;border-radius:999px;background:rgba(0,0,0,0.25);"></div>
+            <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
+            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
+          </div>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;align-items:start;">
@@ -1103,7 +1264,7 @@
                 <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
               </div>
 
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
                 <label style="font-size:13px;">Date</label>
                 <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
                 <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
@@ -1111,6 +1272,14 @@
                 <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
                 <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
                 <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+              </div>
+
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+                  <input id="uiStrictProof" type="checkbox" />
+                  Strict first-N proof
+                </label>
+                <div style="opacity:.75;font-size:12px;">stores marker chain + selected tx hashes per node</div>
               </div>
 
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
@@ -1170,6 +1339,16 @@
 
     $("uiModalClose").addEventListener("click", closeModal);
 
+    $("uiRetryWs").addEventListener("click", () => {
+      attemptSharedReconnect("manual retry");
+      setStatus("Retry requested.");
+    });
+
+    // live badge updates
+    updateConnBadge();
+    window.addEventListener("xrpl-connection", () => updateConnBadge());
+    setInterval(updateConnBadge, 1500);
+
     const list = getIssuerList();
     $("uiIssuerList").value = list.join("\n");
     hydrateIssuerSelect();
@@ -1221,6 +1400,7 @@
 
     const domain = info?.domain ? escapeHtml(info.domain) : "—";
     const bal = info?.balanceXrp != null ? `${info.balanceXrp.toFixed(6)} XRP` : "—";
+    const strict = strictProofEnabled() ? "ON" : "OFF";
 
     const actHtml = act
       ? (() => {
@@ -1244,7 +1424,8 @@
       <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
       ${actHtml}
       <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
-      <div style="margin-top:8px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
+      <div style="margin-top:8px;opacity:.85;font-size:12px;">Strict proof: <strong>${escapeHtml(strict)}</strong></div>
+      <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
     `;
   }
 
@@ -1303,10 +1484,12 @@
     function nodeRow(addr) {
       const n = g.nodes.get(addr);
       const lvl = levels.get(addr) ?? n?.level ?? 0;
+      const proof = n?.outgoingProof;
+      const proofHint = proof ? `<span style="opacity:.7;font-size:12px;">proof: ${escapeHtml(proof.selected.selectedTxHashes.length)}</span>` : "";
       return `
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
           <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
+            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span> ${proofHint}</div>
             ${activationLine(n?.activation)}
             <div style="opacity:.75;font-size:12px;margin-top:4px;">
               out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
@@ -1452,6 +1635,7 @@
         inCount: n.inCount,
         inXrp: Number(n.inXrp.toFixed(6))
       },
+      strict_firstN_proof: n.outgoingProof || null,
       first_outgoing_payments: outgoing
     };
 
@@ -1459,6 +1643,7 @@
       <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy tx hashes</button>
       <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
       <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
+      <button id="uiExportProof" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Export proof</button>
       <span style="opacity:.75;font-size:12px;display:flex;align-items:center;margin-left:auto;">${escapeHtml(outgoing.length)} txs</span>
     `;
 
@@ -1471,6 +1656,13 @@
     };
     $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-first-${outgoing.length}-txs.csv`, "text/csv");
     $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
+    $("uiExportProof").onclick = () => {
+      if (!n.outgoingProof) {
+        setStatus("No proof stored (enable Strict proof and rebuild).");
+        return;
+      }
+      downloadText(JSON.stringify(n.outgoingProof, null, 2), `naluxrp-node-${addr}-strict-proof.json`, "application/json");
+    };
   }
 
   // ---------------- EXPORT GRAPH ----------------
@@ -1484,7 +1676,14 @@
     const exportObj = {
       issuer: g.issuer,
       builtAt: g.builtAt,
-      params: g.params,
+      transport: {
+        lastSource: transportState.lastSource,
+        sharedConnected: transportState.sharedConnected
+      },
+      params: {
+        ...g.params,
+        strictProof: strictProofEnabled()
+      },
       nodes: Array.from(g.nodes.values()).map((n) => ({
         address: n.address,
         level: n.level,
@@ -1496,7 +1695,8 @@
         balanceXrp: n.acctInfo?.balanceXrp ?? null,
         activated_by: n.activation?.act || null,
         activation_source: n.activation?.source || null,
-        activation_complete: n.activation?.complete ?? null
+        activation_complete: n.activation?.complete ?? null,
+        strict_firstN_proof: n.outgoingProof || null
       })),
       edges: g.edges
     };
@@ -1629,9 +1829,9 @@
     setIssuerList,
     buildActive: () => buildTreeClicked(),
     getGraph: () => issuerRegistry.get(activeIssuer) || null,
-    exportActiveGraph
+    exportActiveGraph,
+    attemptSharedReconnect
   };
 
-  console.log("✅ Unified Inspector loaded (JSON-RPC fallback enabled)");
+  console.log("✅ Unified Inspector loaded (transport badge + strict proof enabled)");
 })();
-
