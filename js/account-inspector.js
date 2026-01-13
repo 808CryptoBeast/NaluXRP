@@ -1,11 +1,8 @@
-/* =========================================
+/* =========================================================
+   FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (Simplified, One Page)
-   - Issuer list mode (dropdown + paste list)
-   - Ledger-only issuer tree (first N outgoing Payments per node; paged until earliest found)
-   - Activated-by (strict-ish, cached; explorer links)
-   - Full Pattern Scan (dominance / bursts / reconsolidation hubs / cycles<=4 / split clusters)
-   - Node modal: tx hash list + copy hashes + export CSV
-   ========================================= */
+   - Exposes window.initInspector() for ui.js loader
+   ========================================================= */
 
 (function () {
   // ---------------- CONFIG ----------------
@@ -234,7 +231,6 @@
   }
 
   function extractTxArrayFromV2(j) {
-    // FIX: v2 responses are often { result: { transactions: [...] } }
     if (!j) return [];
     if (Array.isArray(j.transactions)) return j.transactions;
     if (Array.isArray(j.result?.transactions)) return j.result.transactions;
@@ -266,72 +262,6 @@
     return txs;
   }
 
-  async function fetchAccountInfo(address) {
-    if (!isValidXrpAddress(address)) return null;
-    if (accountInfoCache.has(address)) return accountInfoCache.get(address);
-
-    // shared
-    try {
-      const sharedReady = await waitForSharedConn();
-      if (sharedReady) {
-        if (typeof window.requestXrpl === "function") {
-          const r = await window.requestXrpl({ command: "account_info", account: address }, { timeoutMs: 8000 });
-          const data = r?.result?.account_data || r?.account_data || null;
-          const out = normalizeAccountInfo(data);
-          accountInfoCache.set(address, out);
-          return out;
-        }
-        if (window.XRPL?.client?.request) {
-          const r = await window.XRPL.client.request({ command: "account_info", account: address });
-          const data = r?.result?.account_data || r?.account_data || null;
-          const out = normalizeAccountInfo(data);
-          accountInfoCache.set(address, out);
-          return out;
-        }
-      }
-    } catch (_) {}
-
-    // HTTP v2 fallback
-    const j = await tryFetchUrl(`${XRPL_V2_ACCT}/${encodeURIComponent(address)}`, 12000);
-    const acct = j?.result?.account || j?.account || j?.result || null;
-    const out = normalizeAccountInfo(acct);
-    accountInfoCache.set(address, out);
-    return out;
-  }
-
-  function hexToAscii(hex) {
-    try {
-      if (!hex) return null;
-      const clean = String(hex).replace(/^0x/i, "");
-      let str = "";
-      for (let i = 0; i < clean.length; i += 2) {
-        const code = parseInt(clean.slice(i, i + 2), 16);
-        if (!code) continue;
-        str += String.fromCharCode(code);
-      }
-      return str || null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function normalizeAccountInfo(info) {
-    if (!info || typeof info !== "object") return null;
-    const dom = info.Domain || info.domain || null;
-    const domain = dom ? (String(dom).startsWith("http") ? String(dom) : (hexToAscii(dom) || String(dom))) : null;
-
-    const balDrops = info.Balance ?? info.balance ?? null;
-    const balanceXrp =
-      balDrops != null && Number.isFinite(Number(balDrops)) ? Number(balDrops) / 1_000_000 : null;
-
-    return {
-      domain: domain || null,
-      balanceXrp: balanceXrp != null ? balanceXrp : null,
-      sequence: info.Sequence ?? info.sequence ?? null,
-      ownerCount: info.OwnerCount ?? info.owner_count ?? null
-    };
-  }
-
   function withinConstraints(tx, constraints) {
     const l = Number(tx.ledger_index || 0);
     if (constraints.ledgerMin != null && l < constraints.ledgerMin) return false;
@@ -348,7 +278,6 @@
   }
 
   async function fetchAccountTxsPaged(address, { marker, limit }) {
-    // Prefer proxy if present, else xrpl.org v2
     if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) {
       let url = `${DEPLOYED_PROXY.replace(/\/+$/, "")}/accounts/${encodeURIComponent(address)}/transactions?limit=${limit || PAGE_LIMIT}`;
       if (marker) url += `&marker=${encodeURIComponent(marker)}`;
@@ -363,8 +292,6 @@
   }
 
   async function collectOutgoingPaymentsEarliest(address, needCount, constraints) {
-    // Goal: reconstruct the EARLIEST outgoing Payments by paging backward until we have enough.
-    // We page: newest -> older via marker, then sort ascending and take first N.
     const collected = [];
     let marker = null;
     let pages = 0;
@@ -396,10 +323,8 @@
       if (!nextMarker) break;
       marker = nextMarker;
 
-      // We need earliest N; collecting more helps. Stop once we have enough + buffer.
       if (collected.length >= needCount + 50) break;
 
-      // progress hint
       if (pages % 15 === 0) setStatus(`Scanning ${address.slice(0, 6)}… pages:${pages} outgoing:${collected.length}`);
     }
 
@@ -410,18 +335,77 @@
     };
   }
 
+  // ---------------- ACCOUNT INFO ----------------
+  function hexToAscii(hex) {
+    try {
+      if (!hex) return null;
+      const clean = String(hex).replace(/^0x/i, "");
+      let str = "";
+      for (let i = 0; i < clean.length; i += 2) {
+        const code = parseInt(clean.slice(i, i + 2), 16);
+        if (!code) continue;
+        str += String.fromCharCode(code);
+      }
+      return str || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normalizeAccountInfo(info) {
+    if (!info || typeof info !== "object") return null;
+    const dom = info.Domain || info.domain || null;
+    const domain = dom ? (String(dom).startsWith("http") ? String(dom) : (hexToAscii(dom) || String(dom))) : null;
+
+    const balDrops = info.Balance ?? info.balance ?? null;
+    const balanceXrp = balDrops != null && Number.isFinite(Number(balDrops)) ? Number(balDrops) / 1_000_000 : null;
+
+    return {
+      domain: domain || null,
+      balanceXrp: balanceXrp != null ? balanceXrp : null,
+      sequence: info.Sequence ?? info.sequence ?? null,
+      ownerCount: info.OwnerCount ?? info.owner_count ?? null
+    };
+  }
+
+  async function fetchAccountInfo(address) {
+    if (!isValidXrpAddress(address)) return null;
+    if (accountInfoCache.has(address)) return accountInfoCache.get(address);
+
+    try {
+      const sharedReady = await waitForSharedConn();
+      if (sharedReady) {
+        if (typeof window.requestXrpl === "function") {
+          const r = await window.requestXrpl({ command: "account_info", account: address }, { timeoutMs: 8000 });
+          const data = r?.result?.account_data || r?.account_data || null;
+          const out = normalizeAccountInfo(data);
+          accountInfoCache.set(address, out);
+          return out;
+        }
+        if (window.XRPL?.client?.request) {
+          const r = await window.XRPL.client.request({ command: "account_info", account: address });
+          const data = r?.result?.account_data || r?.account_data || null;
+          const out = normalizeAccountInfo(data);
+          accountInfoCache.set(address, out);
+          return out;
+        }
+      }
+    } catch (_) {}
+
+    const j = await tryFetchUrl(`${XRPL_V2_ACCT}/${encodeURIComponent(address)}`, 12000);
+    const acct = j?.result?.account || j?.account || j?.result || null;
+    const out = normalizeAccountInfo(acct);
+    accountInfoCache.set(address, out);
+    return out;
+  }
+
   // ---------------- ACTIVATION ----------------
   async function getActivatedByStrict(address, constraints) {
     if (!isValidXrpAddress(address)) return { act: null, complete: true, scanned: 0, pages: 0, source: "invalid" };
     if (activationCache.has(address)) return activationCache.get(address);
 
-    // Best effort strategy:
-    // 1) Try shared account_tx forward:true (earliest->latest) if available
-    // 2) Else: page backward via HTTP and pick earliest inbound Payment to address (from the pages we scanned)
-
     const sharedReady = await waitForSharedConn();
-    const canShared =
-      sharedReady && (typeof window.requestXrpl === "function" || window.XRPL?.client?.request);
+    const canShared = sharedReady && (typeof window.requestXrpl === "function" || window.XRPL?.client?.request);
 
     if (canShared) {
       let marker = null;
@@ -491,7 +475,6 @@
       }
     }
 
-    // HTTP fallback: scan pages newest->older, pick earliest inbound from what we saw
     let marker = null;
     let pages = 0;
     let scanned = 0;
@@ -577,7 +560,7 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: [] // array of { tx_hash,to,ledger_index,date,amount,currency }
+        outgoingFirst: []
       });
     } else {
       const n = g.nodes.get(addr);
@@ -610,7 +593,6 @@
 
     ensureNode(g, g.issuer, 0);
 
-    // issuer node enrichment
     g.nodes.get(g.issuer).acctInfo = await fetchAccountInfo(g.issuer);
     g.nodes.get(g.issuer).activation = await getActivatedByStrict(g.issuer, constraints);
 
@@ -629,8 +611,7 @@
       if (g.nodes.size >= maxAccounts) break;
       if (g.edges.length >= maxEdges) break;
 
-      // Get earliest outgoing Payments for this node
-      const { txs, meta } = await collectOutgoingPaymentsEarliest(addr, perNode, constraints);
+      const { txs } = await collectOutgoingPaymentsEarliest(addr, perNode, constraints);
 
       const node = g.nodes.get(addr);
       node.outgoingFirst = txs.map((tx) => {
@@ -646,7 +627,6 @@
         };
       });
 
-      // If this node had no outgoing Payments, we still keep it (common for receivers)
       if (!txs.length) continue;
 
       for (const tx of txs) {
@@ -672,17 +652,11 @@
           seen.add(to);
           ensureNode(g, to, level + 1);
 
-          // node enrichment
           g.nodes.get(to).acctInfo = await fetchAccountInfo(to);
           g.nodes.get(to).activation = await getActivatedByStrict(to, constraints);
 
           q.push({ addr: to, level: level + 1 });
         }
-      }
-
-      // tiny debug breadcrumb into console if a node is unexpectedly empty
-      if (!node.outgoingFirst.length) {
-        console.debug("Node has no outgoing payments in scanned window:", addr, meta);
       }
     }
 
@@ -721,7 +695,66 @@
     return null;
   }
 
-  // ---------------- PATTERNS (full) ----------------
+  // ---------------- PATTERNS ----------------
+  function findCyclesUpTo4(g, maxOut) {
+    const cycles = [];
+    const seen = new Set();
+
+    const neigh = new Map();
+    for (const [from, idxs] of g.adjacency.entries()) {
+      neigh.set(from, idxs.map((i) => g.edges[i].to));
+    }
+
+    function addCycle(path) {
+      const minIdx = path.reduce((best, _, i) => (String(path[i]) < String(path[best]) ? i : best), 0);
+      const rotated = path.slice(minIdx).concat(path.slice(0, minIdx));
+      const key = rotated.join("->");
+      if (seen.has(key)) return;
+      seen.add(key);
+      cycles.push({ cycle: rotated });
+    }
+
+    const nodes = Array.from(g.nodes.keys()).slice(0, 1200);
+    for (const a of nodes) {
+      if (cycles.length >= maxOut) break;
+      const aN = neigh.get(a) || [];
+
+      for (const b of aN) {
+        if (cycles.length >= maxOut) break;
+        const bN = neigh.get(b) || [];
+        if (bN.includes(a)) addCycle([a, b]);
+      }
+
+      for (const b of aN.slice(0, 60)) {
+        if (cycles.length >= maxOut) break;
+        const bN = neigh.get(b) || [];
+        for (const c of bN.slice(0, 60)) {
+          if (cycles.length >= maxOut) break;
+          if (c === a) continue;
+          const cN = neigh.get(c) || [];
+          if (cN.includes(a)) addCycle([a, b, c]);
+        }
+      }
+
+      for (const b of aN.slice(0, 40)) {
+        if (cycles.length >= maxOut) break;
+        const bN = neigh.get(b) || [];
+        for (const c of bN.slice(0, 40)) {
+          if (cycles.length >= maxOut) break;
+          if (c === a || c === b) continue;
+          const cN = neigh.get(c) || [];
+          for (const d of cN.slice(0, 40)) {
+            if (cycles.length >= maxOut) break;
+            if (d === a || d === b || d === c) continue;
+            const dN = neigh.get(d) || [];
+            if (dN.includes(a)) addCycle([a, b, c, d]);
+          }
+        }
+      }
+    }
+    return cycles;
+  }
+
   function runPatternScan(g) {
     const outBy = new Map();
     const inBy = new Map();
@@ -890,65 +923,6 @@
     return { dominance, bursts, hubs, cycles, splits };
   }
 
-  function findCyclesUpTo4(g, maxOut) {
-    const cycles = [];
-    const seen = new Set();
-
-    const neigh = new Map();
-    for (const [from, idxs] of g.adjacency.entries()) {
-      neigh.set(from, idxs.map((i) => g.edges[i].to));
-    }
-
-    function addCycle(path) {
-      const minIdx = path.reduce((best, _, i) => (String(path[i]) < String(path[best]) ? i : best), 0);
-      const rotated = path.slice(minIdx).concat(path.slice(0, minIdx));
-      const key = rotated.join("->");
-      if (seen.has(key)) return;
-      seen.add(key);
-      cycles.push({ cycle: rotated });
-    }
-
-    const nodes = Array.from(g.nodes.keys()).slice(0, 1200);
-    for (const a of nodes) {
-      if (cycles.length >= maxOut) break;
-      const aN = neigh.get(a) || [];
-
-      for (const b of aN) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        if (bN.includes(a)) addCycle([a, b]);
-      }
-
-      for (const b of aN.slice(0, 60)) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        for (const c of bN.slice(0, 60)) {
-          if (cycles.length >= maxOut) break;
-          if (c === a) continue;
-          const cN = neigh.get(c) || [];
-          if (cN.includes(a)) addCycle([a, b, c]);
-        }
-      }
-
-      for (const b of aN.slice(0, 40)) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        for (const c of bN.slice(0, 40)) {
-          if (cycles.length >= maxOut) break;
-          if (c === a || c === b) continue;
-          const cN = neigh.get(c) || [];
-          for (const d of cN.slice(0, 40)) {
-            if (cycles.length >= maxOut) break;
-            if (d === a || d === b || d === c) continue;
-            const dN = neigh.get(d) || [];
-            if (dN.includes(a)) addCycle([a, b, c, d]);
-          }
-        }
-      }
-    }
-    return cycles;
-  }
-
   // ---------------- ISSUER LIST ----------------
   function normalizeIssuerListText(text) {
     const raw = String(text || "")
@@ -1024,9 +998,9 @@
     }
   }
 
-  // ---------------- RENDER (SIMPLIFIED) ----------------
+  // ---------------- RENDER ----------------
   function ensurePage() {
-    let page = $("inspector");
+    let page = document.getElementById("inspector");
     if (!page) {
       page = document.createElement("section");
       page.id = "inspector";
@@ -1047,7 +1021,6 @@
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;align-items:start;">
-          <!-- LEFT -->
           <div style="display:flex;flex-direction:column;gap:10px;">
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -1111,7 +1084,6 @@
             </div>
           </div>
 
-          <!-- RIGHT -->
           <div style="display:flex;flex-direction:column;gap:10px;">
             <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
               <div style="opacity:.8">Tree summary appears here.</div>
@@ -1128,7 +1100,6 @@
           </div>
         </div>
 
-        <!-- Modal -->
         <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
           <div style="width:min(900px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -1144,7 +1115,6 @@
 
     $("uiModalClose").addEventListener("click", closeModal);
 
-    // issuer list UI
     const list = getIssuerList();
     $("uiIssuerList").value = list.join("\n");
     hydrateIssuerSelect();
@@ -1226,7 +1196,6 @@
     const host = $("uiTree");
     if (!host) return;
 
-    // build level map from issuer (tree-ish)
     const levels = new Map();
     levels.set(g.issuer, 0);
     const qq = [g.issuer];
@@ -1245,7 +1214,6 @@
       }
     }
 
-    // tree children from parentChoice, restricted to computed levels
     const children = new Map();
     for (const addr of levels.keys()) children.set(addr, []);
     for (const [child, parent] of g.parentChoice.entries()) {
@@ -1562,10 +1530,13 @@
     );
   }
 
-  // ---------------- INIT ----------------
-  renderPage();
+  // ---------------- PUBLIC INIT ----------------
+  function initInspector() {
+    renderPage();
+  }
 
-  // expose minimal API
+  window.initInspector = initInspector;
+
   window.UnifiedInspector = {
     getIssuerList,
     setIssuerList,
@@ -1573,5 +1544,128 @@
     getGraph: () => issuerRegistry.get(activeIssuer) || null
   };
 
-  console.log("✅ Unified Inspector (simplified) loaded");
+  console.log("✅ Account Inspector module ready (initInspector exported)");
 })();
+
+/* =========================================================
+   FILE: js/ui.js
+   Patch ONLY the inspector loader bits (keep rest of your file)
+   - Replace inspector PAGE_INIT_MAP handler
+   - Replace loadScriptOnce with base-URL normalized matching
+   ========================================================= */
+
+// --- PATCH START: replace only your PAGE_INIT_MAP.inspector and loadScriptOnce ---
+
+// In your existing ui.js, replace PAGE_INIT_MAP.inspector with this version:
+const __NALU_PATCHED_INSPECTOR_INIT__ = (function () {
+  function normalizeUrl(src) {
+    try {
+      return new URL(src, window.location.href).href;
+    } catch (_) {
+      return String(src);
+    }
+  }
+
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      const targetUrl = normalizeUrl(src);
+
+      const already = Array.from(document.scripts).find((s) => {
+        if (!s.src) return false;
+        return normalizeUrl(s.src) === targetUrl || s.getAttribute("data-src") === targetUrl;
+      });
+
+      if (already) {
+        if (already.getAttribute("data-loaded") === "true") return resolve();
+        already.addEventListener("load", () => resolve(), { once: true });
+        already.addEventListener("error", (e) => reject(e), { once: true });
+        return;
+      }
+
+      const s = document.createElement("script");
+      s.setAttribute("data-src", targetUrl);
+      s.src = targetUrl;
+      s.async = true;
+      s.onload = () => {
+        s.setAttribute("data-loaded", "true");
+        resolve();
+      };
+      s.onerror = () => {
+        s.remove();
+        reject(new Error("Failed to load " + targetUrl));
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  function buildInspectorCandidates() {
+    // baseUrl respects GitHub Pages subpath AND <base href> overrides
+    const baseUrl = new URL(".", window.location.href);
+
+    const rel = new URL("js/account-inspector.js", baseUrl).href;
+    const relAlt = new URL("./js/account-inspector.js", baseUrl).href;
+
+    // If you deploy from /NaluXRP/, this auto-corrects.
+    // If you deploy at origin root, this still works.
+    const raw = "https://raw.githubusercontent.com/808CryptoBeast/NaluXRP/main/js/account-inspector.js";
+
+    return [rel, relAlt, raw];
+  }
+
+  async function tryLoadInspectorInto(el) {
+    const scriptSrcCandidates = buildInspectorCandidates();
+
+    for (const src of scriptSrcCandidates) {
+      try {
+        await loadScriptOnce(src);
+
+        // allow script to execute and register initInspector
+        for (let i = 0; i < 8; i++) {
+          if (typeof window.initInspector === "function") {
+            window.initInspector();
+            return true;
+          }
+          await new Promise((r) => setTimeout(r, 120));
+        }
+      } catch (e) {
+        console.warn("Failed to load inspector script from", src, e && e.message ? e.message : e);
+      }
+    }
+    return false;
+  }
+
+  return { tryLoadInspectorInto };
+})();
+
+// Then in your existing PAGE_INIT_MAP, replace inspector: () => { ... } with:
+function __patchedInspectorPageInit() {
+  if (typeof window.initInspector === "function") {
+    try {
+      window.initInspector();
+      return;
+    } catch (e) {
+      console.error("Inspector init failed:", e);
+    }
+  }
+
+  let el = document.getElementById("inspector");
+  if (!el) {
+    el = document.createElement("section");
+    el.id = "inspector";
+    el.className = "page-section";
+    const main = document.getElementById("main") || document.getElementById("dashboard")?.parentElement || document.body;
+    main.appendChild(el);
+  }
+
+  el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Loading module…</p></div>`;
+
+  (async function () {
+    const ok = await __NALU_PATCHED_INSPECTOR_INIT__.tryLoadInspectorInto(el);
+    if (!ok) {
+      console.error("Failed to load account-inspector.js from any candidate");
+      el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Failed to load module. Please ensure <code>js/account-inspector.js</code> is deployed.</p></div>`;
+    }
+  })();
+}
+
+// --- PATCH END ---
