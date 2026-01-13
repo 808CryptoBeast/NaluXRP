@@ -1,13 +1,11 @@
 /* =========================================================
    FILE: js/account-inspector.js
-   NaluXrp — Unified Inspector (One Page, Simplified)
-   - Issuer list mode (multi-issuer dropdown, cached graphs)
-   - Ledger-only defaults: first N outgoing Payments per node (chronological)
-   - Tree view (top->bottom), per-node modal includes activated_by + first outgoing list
-   - Pattern scan: bursts + split clusters + reconsolidation hubs + dominance + small cycles
-   - Transport badge + auto-retry when WS drops
-   - Strict first-N proof mode: persist page/marker chain + selected tx hashes per node
-   - Transport: prefers shared WS (window.requestXrpl / window.XRPL.client), falls back to CORS HTTP JSON-RPC
+   NaluXrp — Unified Inspector (One Page, Data-First)
+   - Issuer list mode (dropdown, cached graphs)
+   - Ledger-only defaults: first N outgoing txs from issuer (ALL types)
+   - Tree edges derived from txs with counterparties (Payment / TrustSet / OfferCreate issuers)
+   - Node inspector: activated_by + acct info + first outgoing list (UI, not raw JSON)
+   - Transport: shared WS preferred, HTTP JSON-RPC fallback (robust response parsing)
    ========================================================= */
 
 (function () {
@@ -17,6 +15,7 @@
   const DEPLOYED_PROXY =
     typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? String(window.NALU_DEPLOYED_PROXY) : "";
 
+  // Prefer known working JSON-RPC endpoints (set window.NALU_RPC_HTTP to override)
   const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
 
   const RPC_HTTP_OVERRIDE =
@@ -39,19 +38,14 @@
   const ACTIVATION_MAX_PAGES = 2000;
   const ACTIVATION_MAX_TX_SCAN = 350000;
 
-  // pattern thresholds
-  const BURST_HOURLY_MIN_TX = 12;
-  const BURST_DAILY_MIN_TX = 40;
-  const SPLIT_CLUSTER_MIN = 6;
-  const SPLIT_WINDOW_MINUTES = 15;
-  const DOMINANCE_CHILD_THRESHOLD = 0.8;
-
   // localStorage keys
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
 
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
+
+  const MODULE_VERSION = "unified-inspector@2.0.0";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -112,10 +106,9 @@
     }
   }
 
-  function openModal(title, text, actionsHtml = "") {
+  function openModal(title, html) {
     $("uiModalTitle").textContent = title || "Details";
-    $("uiModalActions").innerHTML = actionsHtml || "";
-    $("uiModalBody").textContent = text || "";
+    $("uiModalBody").innerHTML = html || "";
     $("uiModalOverlay").style.display = "flex";
   }
 
@@ -228,17 +221,20 @@
   function updateConnBadge() {
     const badge = $("uiConnBadge");
     const text = $("uiConnText");
-    if (!badge || !text) return;
+    const dot = $("uiConnDot");
+    if (!badge || !text || !dot) return;
 
     transportState.sharedConnected = computeSharedConnected();
 
     if (transportState.sharedConnected) {
       badge.style.background = "linear-gradient(135deg,#50fa7b,#2ecc71)";
       badge.style.color = "#000";
+      dot.style.background = "rgba(0,0,0,0.35)";
       text.textContent = `WS connected • last: ${transportState.lastSource}`;
     } else {
       badge.style.background = "rgba(255,255,255,0.10)";
       badge.style.color = "var(--text-primary)";
+      dot.style.background = "rgba(255,255,255,0.25)";
       const err = transportState.lastError ? ` • ${transportState.lastError}` : "";
       text.textContent = `WS offline • last: ${transportState.lastSource}${err}`;
     }
@@ -319,8 +315,17 @@
     }
   }
 
-  function rpcParams(method, paramsObj) {
-    return { method, params: [paramsObj] };
+  function unwrapRpcResult(json) {
+    // Handles shapes:
+    // 1) { result: { ... } }
+    // 2) { result: { result: { ... }, status:"success" } }
+    // 3) { status:"success", result:{...} } (rare)
+    const r = json?.result;
+    if (!r) return null;
+
+    if (r.error) return null;
+    if (r.status === "success" && r.result && typeof r.result === "object") return r.result;
+    return r;
   }
 
   async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
@@ -329,7 +334,7 @@
     if (RPC_HTTP_OVERRIDE && RPC_HTTP_OVERRIDE.startsWith("http")) endpoints.push(RPC_HTTP_OVERRIDE);
     endpoints.push(...RPC_HTTP_ENDPOINTS);
 
-    const body = rpcParams(method, paramsObj);
+    const body = { method, params: [paramsObj] };
 
     for (const base of endpoints) {
       const url = base.endsWith("/") ? base : base + "/";
@@ -337,10 +342,13 @@
 
       while (attempt <= retries) {
         const j = await tryFetchJson(url, { method: "POST", body, timeoutMs });
-        const r = j?.result;
-
-        if (r && !r.error) return r;
-
+        const out = unwrapRpcResult(j);
+        if (out) {
+          setTransportLastSource("http_rpc");
+          transportState.lastError = null;
+          updateConnBadge();
+          return out;
+        }
         attempt += 1;
         if (attempt <= retries) await new Promise((res) => setTimeout(res, 250 * attempt));
       }
@@ -450,7 +458,6 @@
     const txs = Array.isArray(r?.transactions) ? r.transactions : [];
     const nextMarker = r?.marker || null;
 
-    setTransportLastSource("http_rpc");
     return { txs, marker: nextMarker, source: "http_rpc" };
   }
 
@@ -473,6 +480,7 @@
 
   function normalizeAccountInfo(info) {
     if (!info || typeof info !== "object") return null;
+
     const dom = info.Domain || info.domain || null;
     const domain = dom ? (String(dom).startsWith("http") ? String(dom) : (hexToAscii(dom) || String(dom))) : null;
 
@@ -491,39 +499,36 @@
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
 
+    // Shared first
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
-        if (typeof window.requestXrpl === "function") {
-          const r = await window.requestXrpl({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
-          const data = r?.result?.account_data || r?.account_data || null;
-          const out = normalizeAccountInfo(data);
-          accountInfoCache.set(address, out);
-          setTransportLastSource("shared_ws");
-          return out;
-        }
-        if (window.XRPL?.client?.request) {
-          const r = await window.XRPL.client.request({ command: "account_info", account: address, ledger_index: "validated" });
-          const data = r?.result?.account_data || r?.account_data || null;
-          const out = normalizeAccountInfo(data);
-          accountInfoCache.set(address, out);
-          setTransportLastSource("shared_ws");
-          return out;
-        }
-      } else {
-        attemptSharedReconnect("ws offline");
+        const payload = { command: "account_info", account: address, ledger_index: "validated" };
+        const r =
+          typeof window.requestXrpl === "function"
+            ? await window.requestXrpl(payload, { timeoutMs: 12000 })
+            : window.XRPL?.client?.request
+              ? await window.XRPL.client.request(payload)
+              : null;
+
+        const data = r?.result?.account_data || r?.account_data || r?.account_data || null;
+        const out = normalizeAccountInfo(data);
+        accountInfoCache.set(address, out);
+        setTransportLastSource("shared_ws");
+        return out;
       }
+      attemptSharedReconnect("ws offline");
     } catch (e) {
       transportState.lastError = e && e.message ? e.message : String(e);
       updateConnBadge();
       attemptSharedReconnect("ws error");
     }
 
+    // HTTP fallback
     const res = await rpcCall("account_info", { account: address, ledger_index: "validated" }, { timeoutMs: 15000, retries: 2 });
     const data = res?.account_data || null;
     const out = normalizeAccountInfo(data);
     accountInfoCache.set(address, out);
-    setTransportLastSource("http_rpc");
     return out;
   }
 
@@ -590,8 +595,6 @@
 
       marker = resp.marker;
       if (!marker) break;
-
-      if (pages % 50 === 0) setStatus(`Activation scan ${address.slice(0, 6)}… pages:${pages}`);
     }
 
     const entry = { act: null, complete, scanned, pages, source: `activation_${source}` };
@@ -599,36 +602,44 @@
     return entry;
   }
 
-  // ---------------- STRICT PROOF MODE ----------------
-  function strictProofEnabled() {
-    return !!$("uiStrictProof")?.checked;
+  // ---------------- COUNTERPARTY EXTRACTION (for edges) ----------------
+  function extractCounterparty(tx) {
+    const type = tx.TransactionType || tx.type || "Unknown";
+
+    // Payment => Destination
+    if (type === "Payment") {
+      const to = tx.Destination || tx.destination || null;
+      if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
+      return null;
+    }
+
+    // TrustSet => LimitAmount.issuer
+    if (type === "TrustSet") {
+      const lim = tx.LimitAmount || tx.limit_amount || null;
+      const issuer = lim && typeof lim === "object" ? lim.issuer : null;
+      if (issuer && isValidXrpAddress(issuer)) return { counterparty: issuer, kind: "LimitAmount.issuer" };
+      return null;
+    }
+
+    // OfferCreate => if either side is issued currency, use issuer as "counterparty-ish"
+    // This is not a real peer, but useful to map gateway/issuer relationships.
+    if (type === "OfferCreate") {
+      const a = tx.TakerGets || tx.taker_gets || null;
+      const b = tx.TakerPays || tx.taker_pays || null;
+
+      const issuers = [];
+      if (a && typeof a === "object" && a.issuer && isValidXrpAddress(a.issuer)) issuers.push(a.issuer);
+      if (b && typeof b === "object" && b.issuer && isValidXrpAddress(b.issuer)) issuers.push(b.issuer);
+
+      if (issuers.length) return { counterparty: issuers[0], kind: "OfferCreate.issuer" };
+      return null;
+    }
+
+    return null;
   }
 
-  function makeStrictProofEnvelope({ address, needCount, constraints, forward }) {
-    return {
-      version: 1,
-      address,
-      needCount,
-      forward: !!forward,
-      constraints: {
-        startDate: constraints.startDate || null,
-        endDate: constraints.endDate || null,
-        ledgerMin: constraints.ledgerMin == null ? null : constraints.ledgerMin,
-        ledgerMax: constraints.ledgerMax == null ? null : constraints.ledgerMax,
-        minXrp: constraints.minXrp || 0
-      },
-      pages: [],
-      selected: {
-        selectedTxHashes: [],
-        selectedTxs: []
-      },
-      sources: [],
-      builtAt: new Date().toISOString()
-    };
-  }
-
-  // ---------------- TREE DATA (first N outgoing, chronological) ----------------
-  async function collectOutgoingPaymentsEarliest(address, needCount, constraints, withStrictProof) {
+  // ---------------- OUTGOING COLLECTION (ALL TYPES) ----------------
+  async function collectOutgoingTxsEarliest(address, needCount, constraints) {
     const collected = [];
     let marker = null;
     let pages = 0;
@@ -637,12 +648,8 @@
     const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
     const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
-    const proof = withStrictProof ? makeStrictProofEnvelope({ address, needCount, constraints, forward: true }) : null;
-
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
-
-      const markerIn = marker || null;
 
       const resp = await fetchAccountTxPaged(address, {
         marker,
@@ -652,20 +659,6 @@
         ledgerMax
       });
 
-      const markerOut = resp.marker || null;
-
-      if (proof) {
-        proof.sources.push(resp.source || "unknown");
-        proof.pages.push({
-          page: pages,
-          markerIn,
-          markerOut,
-          fetchedCount: resp.txs.length,
-          matchedCount: 0,
-          matchedTxHashes: []
-        });
-      }
-
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
 
@@ -674,54 +667,27 @@
         if (!tx) continue;
         if (!withinConstraints(tx, constraints)) continue;
 
-        const type = tx.TransactionType || tx.type;
-        if (type !== "Payment") continue;
-
         const from = tx.Account || tx.account;
-        const to = tx.Destination || tx.destination;
-        if (!from || !to) continue;
         if (from !== address) continue;
 
         collected.push(tx);
-
-        if (proof) {
-          const pageRec = proof.pages[proof.pages.length - 1];
-          pageRec.matchedCount += 1;
-          if (tx.hash) pageRec.matchedTxHashes.push(String(tx.hash));
-        }
+        if (collected.length >= needCount + 50) break;
       }
+
+      if (collected.length >= needCount + 50) break;
 
       marker = resp.marker;
       if (!marker) break;
 
-      if (collected.length >= needCount + 50) break;
       if (pages % 25 === 0) setStatus(`Scanning ${address.slice(0, 6)}… pages:${pages} outgoing:${collected.length}`);
     }
 
     const sorted = normalizeAndSortTxs(collected);
     const picked = sorted.slice(0, needCount);
 
-    if (proof) {
-      proof.selected.selectedTxHashes = picked.map((t) => String(t.hash || "")).filter(Boolean);
-      proof.selected.selectedTxs = picked.map((t) => ({
-        tx_hash: String(t.hash || ""),
-        ledger_index: Number(t.ledger_index || 0),
-        date: t._iso || null,
-        to: t.Destination || t.destination || null,
-        amount: parseAmount(t.Amount ?? t.delivered_amount ?? t._meta?.delivered_amount ?? null).value,
-        currency: parseAmount(t.Amount ?? t.delivered_amount ?? t._meta?.delivered_amount ?? null).currency
-      }));
-    }
-
     return {
       txs: picked,
-      strictProof: proof,
-      meta: {
-        pages,
-        scanned,
-        outgoingFound: collected.length,
-        complete: pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE
-      }
+      meta: { pages, scanned, outgoingFound: collected.length }
     };
   }
 
@@ -732,7 +698,7 @@
       builtAt: null,
       params,
       nodes: new Map(), // addr -> node
-      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash }
+      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash,type,kind }
       adjacency: new Map(), // from -> [edgeIdx]
       parentChoice: new Map() // child -> parent (tree)
     };
@@ -749,8 +715,7 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: [],
-        outgoingProof: null
+        outgoingFirst: [] // first N outgoing txs (ALL types)
       });
     } else {
       const n = g.nodes.get(addr);
@@ -781,7 +746,6 @@
 
   async function buildIssuerTree(g) {
     const { depth, perNode, maxAccounts, maxEdges, constraints } = g.params;
-    const strict = strictProofEnabled();
 
     ensureNode(g, g.issuer, 0);
 
@@ -803,17 +767,19 @@
       if (g.nodes.size >= maxAccounts) break;
       if (g.edges.length >= maxEdges) break;
 
-      const res = await collectOutgoingPaymentsEarliest(addr, perNode, constraints, strict);
+      const res = await collectOutgoingTxsEarliest(addr, perNode, constraints);
       const txs = res.txs;
 
       const node = g.nodes.get(addr);
-      node.outgoingProof = res.strictProof || null;
       node.outgoingFirst = txs.map((tx) => {
-        const to = tx.Destination || tx.destination || null;
+        const type = tx.TransactionType || tx.type || "Unknown";
+        const cp = extractCounterparty(tx);
         const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
         return {
           tx_hash: String(tx.hash || ""),
-          to,
+          type,
+          counterparty: cp?.counterparty || null,
+          counterpartyKind: cp?.kind || null,
           ledger_index: Number(tx.ledger_index || 0),
           date: tx._iso || null,
           amount: amt.value,
@@ -821,14 +787,19 @@
         };
       });
 
-      if (!txs.length) continue;
-
+      // add edges only when we have a real-ish counterparty
       for (const tx of txs) {
         if (g.edges.length >= maxEdges) break;
 
         const from = tx.Account || tx.account;
-        const to = tx.Destination || tx.destination;
-        if (!from || !to) continue;
+        if (!from || from !== addr) continue;
+
+        const type = tx.TransactionType || tx.type || "Unknown";
+        const cp = extractCounterparty(tx);
+        if (!cp?.counterparty) continue;
+
+        const to = cp.counterparty;
+        const kind = cp.kind;
 
         const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
 
@@ -839,7 +810,9 @@
           date: tx._iso || null,
           amount: amt.value,
           currency: amt.currency,
-          tx_hash: String(tx.hash || "")
+          tx_hash: String(tx.hash || ""),
+          type,
+          kind
         });
 
         if (!seen.has(to) && g.nodes.size < maxAccounts) {
@@ -889,68 +862,7 @@
     return null;
   }
 
-  // ---------------- PATTERNS ----------------
-  function findCyclesUpTo4(g, maxOut) {
-    const cycles = [];
-    const seen = new Set();
-
-    const neigh = new Map();
-    for (const [from, idxs] of g.adjacency.entries()) {
-      neigh.set(from, idxs.map((i) => g.edges[i].to));
-    }
-
-    function addCycle(path) {
-      const minIdx = path.reduce((best, _, i) => (String(path[i]) < String(path[best]) ? i : best), 0);
-      const rotated = path.slice(minIdx).concat(path.slice(0, minIdx));
-      const key = rotated.join("->");
-      if (seen.has(key)) return;
-      seen.add(key);
-      cycles.push({ cycle: rotated });
-    }
-
-    const nodes = Array.from(g.nodes.keys()).slice(0, 1200);
-
-    for (const a of nodes) {
-      if (cycles.length >= maxOut) break;
-      const aN = neigh.get(a) || [];
-
-      for (const b of aN) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        if (bN.includes(a)) addCycle([a, b]);
-      }
-
-      for (const b of aN.slice(0, 60)) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        for (const c of bN.slice(0, 60)) {
-          if (cycles.length >= maxOut) break;
-          if (c === a) continue;
-          const cN = neigh.get(c) || [];
-          if (cN.includes(a)) addCycle([a, b, c]);
-        }
-      }
-
-      for (const b of aN.slice(0, 40)) {
-        if (cycles.length >= maxOut) break;
-        const bN = neigh.get(b) || [];
-        for (const c of bN.slice(0, 40)) {
-          if (cycles.length >= maxOut) break;
-          if (c === a || c === b) continue;
-          const cN = neigh.get(c) || [];
-          for (const d of cN.slice(0, 40)) {
-            if (cycles.length >= maxOut) break;
-            if (d === a || d === b || d === c) continue;
-            const dN = neigh.get(d) || [];
-            if (dN.includes(a)) addCycle([a, b, c, d]);
-          }
-        }
-      }
-    }
-
-    return cycles;
-  }
-
+  // ---------------- PATTERNS (light, but real) ----------------
   function runPatternScan(g) {
     const outBy = new Map();
     const inBy = new Map();
@@ -961,168 +873,35 @@
       inBy.get(e.to).push(e);
     }
 
-    const domExamples = [];
+    // issuer first-hop dominance
     const issuerOut = outBy.get(g.issuer) || [];
+    const counts = new Map();
+    for (const e of issuerOut) counts.set(e.to, (counts.get(e.to) || 0) + 1);
+    const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
+    const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
 
-    {
-      const c = new Map();
-      for (const e of issuerOut) c.set(e.to, (c.get(e.to) || 0) + 1);
-      const top = Array.from(c.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
-      const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
-      domExamples.push({ scope: "issuer_first_hop", topRecipient: top[0], share: dom, total: issuerOut.length });
-    }
-
-    for (const [addr, outs] of outBy.entries()) {
-      if (!outs.length) continue;
-      const cc = new Map();
-      for (const e of outs) cc.set(e.to, (cc.get(e.to) || 0) + 1);
-      const top = Array.from(cc.entries()).sort((a, b) => b[1] - a[1])[0];
-      if (!top) continue;
-      const share = top[1] / outs.length;
-      if (share >= DOMINANCE_CHILD_THRESHOLD && outs.length >= 10) {
-        domExamples.push({ scope: "node_dominated_child", node: addr, topChild: top[0], share, outCount: outs.length });
-      }
-    }
-
-    const dominance = {
-      summary: [
-        `issuer first-hop dominance: ${Math.round((domExamples[0]?.share || 0) * 100)}%`,
-        `dominated nodes (≥${Math.round(DOMINANCE_CHILD_THRESHOLD * 100)}%): ${domExamples.filter((x) => x.scope === "node_dominated_child").length}`
-      ],
-      examples: domExamples.slice(0, 300)
-    };
-
-    const burstExamples = [];
-    for (const [addr, outs] of outBy.entries()) {
-      const withTime = outs.filter((e) => e.date).slice();
-      if (withTime.length < 10) continue;
-
-      const hourBuckets = new Map();
-      for (const e of withTime) {
-        const d = new Date(e.date);
-        const key = `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()} ${d.getUTCHours()}:00Z`;
-        hourBuckets.set(key, (hourBuckets.get(key) || 0) + 1);
-      }
-      for (const [k, cnt] of hourBuckets.entries()) {
-        if (cnt >= BURST_HOURLY_MIN_TX) burstExamples.push({ addr, window: "hour", bucket: k, txCount: cnt });
-      }
-
-      const dayBuckets = new Map();
-      for (const e of withTime) {
-        const key = e.date.slice(0, 10);
-        dayBuckets.set(key, (dayBuckets.get(key) || 0) + 1);
-      }
-      for (const [k, cnt] of dayBuckets.entries()) {
-        if (cnt >= BURST_DAILY_MIN_TX) burstExamples.push({ addr, window: "day", bucket: k, txCount: cnt });
-      }
-    }
-
-    burstExamples.sort((a, b) => b.txCount - a.txCount);
-    const bursts = {
-      summary: [
-        `hourly bursts (≥${BURST_HOURLY_MIN_TX}/hr): ${burstExamples.filter((x) => x.window === "hour").length}`,
-        `daily bursts (≥${BURST_DAILY_MIN_TX}/day): ${burstExamples.filter((x) => x.window === "day").length}`
-      ],
-      examples: burstExamples.slice(0, 300)
-    };
-
-    const hubExamples = [];
+    // reconsolidation hubs: many parents -> one hub -> few children
+    const hubs = [];
     for (const addr of g.nodes.keys()) {
       const ins = inBy.get(addr) || [];
       const outs = outBy.get(addr) || [];
-      if (ins.length < 8 || outs.length < 4) continue;
-
-      const parents = new Set(ins.map((e) => e.from));
-      const children = new Set(outs.map((e) => e.to));
-      if (parents.size < 6) continue;
-      if (children.size > 3) continue;
-
-      const cc = new Map();
-      for (const e of outs) cc.set(e.to, (cc.get(e.to) || 0) + 1);
-      const top = Array.from(cc.entries()).sort((a, b) => b[1] - a[1])[0];
-      const share = top ? top[1] / outs.length : 0;
-      if (share < 0.7) continue;
-
-      hubExamples.push({
-        hub: addr,
-        parentCount: parents.size,
-        inCount: ins.length,
-        childCount: children.size,
-        outCount: outs.length,
-        topChild: top?.[0] || null,
-        topChildShare: share
-      });
-    }
-
-    hubExamples.sort((a, b) => (b.parentCount - a.parentCount) || (b.inCount - a.inCount));
-    const hubs = {
-      summary: [`reconsolidation hubs: ${hubExamples.length}`, `top hub parents: ${hubExamples[0]?.parentCount || 0}`],
-      examples: hubExamples.slice(0, 200)
-    };
-
-    const cycles = {
-      summary: [`cycles found (≤4): ${findCyclesUpTo4(g, 200).length}`],
-      examples: findCyclesUpTo4(g, 200)
-    };
-
-    const splitExamples = [];
-    for (const [addr, outs] of outBy.entries()) {
-      const xrp = outs.filter((e) => e.currency === "XRP" && Number.isFinite(e.amount) && e.date);
-      if (xrp.length < SPLIT_CLUSTER_MIN) continue;
-
-      xrp.sort((a, b) => (a.date < b.date ? -1 : 1));
-
-      let start = 0;
-      while (start < xrp.length) {
-        let end = start;
-        const t0 = new Date(xrp[start].date).getTime();
-        while (end < xrp.length) {
-          const t1 = new Date(xrp[end].date).getTime();
-          const mins = (t1 - t0) / 60000;
-          if (mins > SPLIT_WINDOW_MINUTES) break;
-          end++;
-        }
-        const windowEdges = xrp.slice(start, end);
-        if (windowEdges.length >= SPLIT_CLUSTER_MIN) {
-          const groups = [];
-          for (const e of windowEdges) {
-            let placed = false;
-            for (const g0 of groups) {
-              const base = g0.base;
-              if (base > 0 && Math.abs(e.amount - base) / base <= 0.01) {
-                g0.edges.push(e);
-                placed = true;
-                break;
-              }
-            }
-            if (!placed) groups.push({ base: e.amount, edges: [e] });
-          }
-          const big = groups.filter((gg) => gg.edges.length >= SPLIT_CLUSTER_MIN);
-          for (const gg of big) {
-            splitExamples.push({
-              sender: addr,
-              windowStart: windowEdges[0].date,
-              windowEnd: windowEdges[windowEdges.length - 1].date,
-              count: gg.edges.length,
-              approxAmount: gg.base,
-              recipients: Array.from(new Set(gg.edges.map((e) => e.to))).slice(0, 50)
-            });
-          }
-        }
-        start = Math.max(start + 1, end);
+      const parents = new Set(ins.map((x) => x.from));
+      const children = new Set(outs.map((x) => x.to));
+      if (parents.size >= 6 && children.size <= 3 && ins.length >= 8 && outs.length >= 4) {
+        hubs.push({ hub: addr, parents: parents.size, in: ins.length, children: children.size, out: outs.length });
       }
     }
+    hubs.sort((a, b) => b.parents - a.parents);
 
-    splitExamples.sort((a, b) => b.count - a.count);
-    const splits = {
-      summary: [
-        `split clusters (≥${SPLIT_CLUSTER_MIN} similar within ${SPLIT_WINDOW_MINUTES}m): ${splitExamples.length}`,
-        `top split count: ${splitExamples[0]?.count || 0}`
-      ],
-      examples: splitExamples.slice(0, 200)
+    return {
+      summary: {
+        issuerFirstHopUniqueRecipients: counts.size,
+        issuerFirstHopDominancePct: Math.round(dom * 100),
+        issuerTopRecipient: top[0],
+        reconsolidationHubs: hubs.length
+      },
+      hubs: hubs.slice(0, 150)
     };
-
-    return { dominance, bursts, hubs, cycles, splits };
   }
 
   // ---------------- ISSUER LIST ----------------
@@ -1200,9 +979,7 @@
     clearViews();
     setStatus("Ready");
 
-    if (autoBuildIfMissing) {
-      buildTreeClicked().catch(() => {});
-    }
+    if (autoBuildIfMissing) buildTreeClicked().catch(() => {});
   }
 
   // ---------------- RENDER ----------------
@@ -1224,10 +1001,11 @@
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">Issuer tree • activated_by • patterns</div>
+          <div style="opacity:.85">issuer tree • activated_by • first N outgoing (ledger-only)</div>
+          <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
           <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
-            <div style="width:10px;height:10px;border-radius:999px;background:rgba(0,0,0,0.25);"></div>
+            <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
             <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
             <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
           </div>
@@ -1274,14 +1052,6 @@
                 <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
               </div>
 
-              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
-                  <input id="uiStrictProof" type="checkbox" />
-                  Strict first-N proof
-                </label>
-                <div style="opacity:.75;font-size:12px;">stores marker chain + selected tx hashes per node</div>
-              </div>
-
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
                 <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
               </div>
@@ -1316,7 +1086,7 @@
 
             <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <strong>Edges</strong>
+                <strong>Edges (counterparty-derived)</strong>
                 <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
               </div>
               <div id="uiEdgeItems" style="margin-top:10px;"></div>
@@ -1325,13 +1095,12 @@
         </div>
 
         <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
-          <div style="width:min(900px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
+          <div style="width:min(940px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
               <strong id="uiModalTitle">Details</strong>
               <button id="uiModalClose">✕</button>
             </div>
-            <div id="uiModalActions" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"></div>
-            <pre id="uiModalBody" style="white-space:pre-wrap;font-size:13px;color:var(--text-primary);"></pre>
+            <div id="uiModalBody"></div>
           </div>
         </div>
       </div>
@@ -1344,7 +1113,6 @@
       setStatus("Retry requested.");
     });
 
-    // live badge updates
     updateConnBadge();
     window.addEventListener("xrpl-connection", () => updateConnBadge());
     setInterval(updateConnBadge, 1500);
@@ -1400,19 +1168,20 @@
 
     const domain = info?.domain ? escapeHtml(info.domain) : "—";
     const bal = info?.balanceXrp != null ? `${info.balanceXrp.toFixed(6)} XRP` : "—";
-    const strict = strictProofEnabled() ? "ON" : "OFF";
 
     const actHtml = act
       ? (() => {
           const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
-          const txLink = links
-            ? ` • <a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-                <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;">Bithomp</a>`
+          const txLinks = links
+            ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
+               <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
             : "";
           const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
           return `<div style="margin-top:8px;"><strong>Activated by</strong>: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
             amt
-          )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(actEntry.source)})</span>${txLink}</div>`;
+          )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(actEntry.source)})</span>
+          <div style="margin-top:4px;font-size:12px;opacity:.85;">${txLinks}</div>
+          </div>`;
         })()
       : `<div style="margin-top:8px;opacity:.85;"><strong>Activated by</strong>: — <span style="opacity:.7">(${escapeHtml(
           actEntry?.source || "unknown"
@@ -1424,7 +1193,6 @@
       <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
       ${actHtml}
       <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
-      <div style="margin-top:8px;opacity:.85;font-size:12px;">Strict proof: <strong>${escapeHtml(strict)}</strong></div>
       <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
     `;
   }
@@ -1433,7 +1201,6 @@
     const host = $("uiTree");
     if (!host) return;
 
-    // Determine levels from issuer by BFS within depth.
     const levels = new Map();
     levels.set(g.issuer, 0);
     const qq = [g.issuer];
@@ -1453,13 +1220,11 @@
       }
     }
 
-    // Build chosen tree children using first-seen parentChoice.
     const children = new Map();
     for (const addr of levels.keys()) children.set(addr, []);
     for (const [child, parent] of g.parentChoice.entries()) {
       if (!parent) continue;
       if (levels.has(child) && levels.has(parent) && levels.get(child) === levels.get(parent) + 1) {
-        if (!children.has(parent)) children.set(parent, []);
         children.get(parent).push(child);
       }
     }
@@ -1484,20 +1249,21 @@
     function nodeRow(addr) {
       const n = g.nodes.get(addr);
       const lvl = levels.get(addr) ?? n?.level ?? 0;
-      const proof = n?.outgoingProof;
-      const proofHint = proof ? `<span style="opacity:.7;font-size:12px;">proof: ${escapeHtml(proof.selected.selectedTxHashes.length)}</span>` : "";
+      const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
+
       return `
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
           <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span> ${proofHint}</div>
+            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
             ${activationLine(n?.activation)}
             <div style="opacity:.75;font-size:12px;margin-top:4px;">
-              out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-              in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)})
+              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
+              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
+              first-outgoing:${escapeHtml(firstN)}
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">View</button>
+            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
           </div>
         </div>
       `;
@@ -1555,24 +1321,26 @@
 
     const filtered = q
       ? g.edges.filter((e) => {
-          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.currency} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
+          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
           return hay.includes(q);
         })
       : g.edges;
 
-    const slice = filtered.slice(0, 250);
+    const slice = filtered.slice(0, 300);
     items.innerHTML =
       slice
         .map((e) => {
           const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
           return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
-            <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code> • ledger ${escapeHtml(
-            e.ledger_index
-          )} • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}</div>
+            <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
+              • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
+              • ledger ${escapeHtml(e.ledger_index)}
+              • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
+            </div>
             <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
           </div>`;
         })
-        .join("") || `<div style="opacity:.7">No edges.</div>`;
+        .join("") || `<div style="opacity:.7">No edges (this account may not have Payment/TrustSet/OfferCreate issuers in first N).</div>`;
   }
 
   function renderEdgeFilterActive() {
@@ -1594,14 +1362,16 @@
     const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
 
     const outgoing = Array.isArray(n.outgoingFirst) ? n.outgoingFirst : [];
-    const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
 
+    const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
     const csv = [
-      ["tx_hash", "to", "ledger_index", "date", "amount", "currency"].join(","),
+      ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency"].join(","),
       ...outgoing.map((x) =>
         [
           `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
-          `"${String(x.to || "").replace(/"/g, '""')}"`,
+          `"${String(x.type || "").replace(/"/g, '""')}"`,
+          `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
+          `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
           Number(x.ledger_index || 0),
           `"${String(x.date || "").replace(/"/g, '""')}"`,
           Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
@@ -1612,56 +1382,107 @@
 
     const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
 
-    const bodyObj = {
-      address: addr,
-      level: n.level,
-      domain: domain || null,
-      balanceXrp: balance != null ? Number(balance) : null,
-      activated_by: act
-        ? {
-            activatedBy: act.activatedBy,
-            ledger_index: act.ledger_index,
-            date: act.date,
-            tx_hash: act.tx_hash,
-            xrpscan: actLinks?.xrpscan || null,
-            bithomp: actLinks?.bithomp || null
-          }
-        : null,
-      activation_source: actEntry?.source || null,
-      activation_complete: actEntry?.complete ?? null,
-      stats: {
-        outCount: n.outCount,
-        outXrp: Number(n.outXrp.toFixed(6)),
-        inCount: n.inCount,
-        inXrp: Number(n.inXrp.toFixed(6))
-      },
-      strict_firstN_proof: n.outgoingProof || null,
-      first_outgoing_payments: outgoing
-    };
+    const actBlock = act
+      ? `
+        <div style="margin-top:10px;">
+          <div style="font-weight:900;">Activated by</div>
+          <div style="margin-top:6px;">
+            <code>${escapeHtml(act.activatedBy)}</code>
+            <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
+          </div>
+          <div style="margin-top:6px;opacity:.9;">
+            ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
+            <span style="opacity:.7;">(${escapeHtml(actEntry.source || "unknown")})</span>
+          </div>
+          <div style="margin-top:6px;font-size:12px;opacity:.9;">
+            ${
+              actLinks?.xrpscan
+                ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
+                   <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
+                : `<span style="opacity:.75;">no tx link</span>`
+            }
+          </div>
+        </div>
+      `
+      : `
+        <div style="margin-top:10px;">
+          <div style="font-weight:900;">Activated by</div>
+          <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(actEntry?.source || "unknown")}${
+            actEntry && !actEntry.complete ? ", incomplete" : ""
+          })</span></div>
+        </div>
+      `;
 
-    const actionsHtml = `
-      <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy tx hashes</button>
-      <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-      <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
-      <button id="uiExportProof" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Export proof</button>
-      <span style="opacity:.75;font-size:12px;display:flex;align-items:center;margin-left:auto;">${escapeHtml(outgoing.length)} txs</span>
+    const rows = outgoing
+      .slice(0, 200)
+      .map((x, i) => {
+        const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
+        const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
+        const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
+        const amt = `${escapeHtml(x.currency)} ${Number.isFinite(Number(x.amount)) ? escapeHtml(Number(x.amount).toFixed(6)) : "—"}`;
+        const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
+        return `
+          <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+            <div style="display:flex;justify-content:space-between;gap:10px;">
+              <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
+              <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
+            </div>
+            <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const html = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+          <div style="font-weight:900;">Account</div>
+          <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
+          <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
+          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+          ${actBlock}
+        </div>
+
+        <div style="width:320px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+          <div style="font-weight:900;">Actions</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+            <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
+            <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
+            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
+            <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
+          </div>
+          <div style="margin-top:10px;opacity:.85;font-size:12px;">
+            first outgoing txs loaded: <strong>${escapeHtml(outgoing.length)}</strong>
+          </div>
+          <div style="margin-top:6px;opacity:.75;font-size:12px;">
+            note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="font-weight:900;">First outgoing transactions</div>
+          <div style="opacity:.75;font-size:12px;">(chronological)</div>
+        </div>
+        <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+          ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
+        </div>
+      </div>
     `;
 
-    openModal(`Node: ${addr}`, JSON.stringify(bodyObj, null, 2), actionsHtml);
+    openModal(`Node: ${addr}`, html);
 
     $("uiCopyHashes").onclick = async () => {
       const ok = await copyToClipboard(hashesOnly || "");
       $("uiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-      setTimeout(() => ($("uiCopyHashes").textContent = "Copy tx hashes"), 1200);
+      setTimeout(() => ($("uiCopyHashes").textContent = "Copy hashes"), 1200);
     };
     $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-first-${outgoing.length}-txs.csv`, "text/csv");
     $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
-    $("uiExportProof").onclick = () => {
-      if (!n.outgoingProof) {
-        setStatus("No proof stored (enable Strict proof and rebuild).");
-        return;
-      }
-      downloadText(JSON.stringify(n.outgoingProof, null, 2), `naluxrp-node-${addr}-strict-proof.json`, "application/json");
+    $("uiShowRaw").onclick = () => {
+      const rawObj = { address: addr, node: n };
+      openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
     };
   }
 
@@ -1674,16 +1495,11 @@
     }
 
     const exportObj = {
+      version: MODULE_VERSION,
       issuer: g.issuer,
       builtAt: g.builtAt,
-      transport: {
-        lastSource: transportState.lastSource,
-        sharedConnected: transportState.sharedConnected
-      },
-      params: {
-        ...g.params,
-        strictProof: strictProofEnabled()
-      },
+      transport: { lastSource: transportState.lastSource, sharedConnected: transportState.sharedConnected, lastError: transportState.lastError },
+      params: g.params,
       nodes: Array.from(g.nodes.values()).map((n) => ({
         address: n.address,
         level: n.level,
@@ -1696,7 +1512,7 @@
         activated_by: n.activation?.act || null,
         activation_source: n.activation?.source || null,
         activation_complete: n.activation?.complete ?? null,
-        strict_firstN_proof: n.outgoingProof || null
+        firstOutgoing: n.outgoingFirst || []
       })),
       edges: g.edges
     };
@@ -1783,55 +1599,55 @@
     }
     const report = runPatternScan(g);
 
-    const card = (k, title) => {
-      const ex = report[k]?.examples || [];
-      const lines = (report[k]?.summary || []).map((x) => `<div style="opacity:.9;">${escapeHtml(x)}</div>`).join("");
-      return `
-        <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <div style="font-weight:900;">${escapeHtml(title)}</div>
-            <div style="opacity:.7;font-size:12px;">examples: ${escapeHtml(ex.length)}</div>
-            <button class="uiPatternView" data-key="${escapeHtml(k)}" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">View</button>
-          </div>
-          <div style="margin-top:8px;font-size:13px;">${lines || `<div style="opacity:.7;">—</div>`}</div>
-        </div>
-      `;
-    };
-
     $("uiResults").innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        ${card("dominance", "Dominance")}
-        ${card("bursts", "Bursts")}
-        ${card("hubs", "Reconsolidation hubs")}
-        ${card("cycles", "Cycles (≤4)")}
-        ${card("splits", "Split clusters")}
+      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+        <div style="font-weight:900;">Pattern summary</div>
+        <div style="margin-top:10px;opacity:.9;">
+          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
+          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
+          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
+          <div>Reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;">Top hubs</div>
+          <div style="margin-top:8px;max-height:260px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${
+              report.hubs.length
+                ? report.hubs
+                    .map(
+                      (h) => `
+                        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+                          <div><code>${escapeHtml(h.hub)}</code></div>
+                          <div style="opacity:.85;margin-top:4px;">parents:${escapeHtml(h.parents)} • in:${escapeHtml(h.in)} • children:${escapeHtml(
+                        h.children
+                      )} • out:${escapeHtml(h.out)}</div>
+                        </div>
+                      `
+                    )
+                    .join("")
+                : `<div style="padding:12px;opacity:.75;">No hubs detected in current edge set.</div>`
+            }
+          </div>
+        </div>
       </div>
     `;
-
-    Array.from(document.querySelectorAll(".uiPatternView")).forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const key = btn.getAttribute("data-key");
-        const payload = report[key]?.examples || [];
-        openModal(`Pattern: ${key}`, JSON.stringify(payload, null, 2));
-      })
-    );
   }
 
-  // ---------------- PUBLIC INIT ----------------
+  // ---------------- INIT ----------------
   function initInspector() {
     renderPage();
+    setStatus("Ready");
   }
 
   window.initInspector = initInspector;
-
   window.UnifiedInspector = {
-    getIssuerList,
-    setIssuerList,
+    version: MODULE_VERSION,
     buildActive: () => buildTreeClicked(),
     getGraph: () => issuerRegistry.get(activeIssuer) || null,
     exportActiveGraph,
     attemptSharedReconnect
   };
 
-  console.log("✅ Unified Inspector loaded (transport badge + strict proof enabled)");
+  console.log(`✅ Unified Inspector loaded (${MODULE_VERSION})`);
 })();
