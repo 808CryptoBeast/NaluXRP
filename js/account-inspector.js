@@ -1,33 +1,31 @@
 /* =========================================
-   NaluXrp — Account Inspector (Full Page, Enhanced)
-   - Full-page inspector with robust filters
-   - Prefers shared in-page XRPL connection (no server needed)
-   - HTTP fallbacks: DEPLOYED_PROXY (optional), xrpl.org v2, data.ripple.com, xrpscan
-   - Deterministic canonical leaf schema
-   - Chunked Merkle tree (per-day or fixed-size chunks) + top-level tree
-   - Per-leaf and global inclusion proofs (leaf->chunk->top)
-   - Export snapshot (JSON) with schemaVersion, chunks, topRoot, leaves, txs
-   - Per-tx proof / verify UI
-   - Progress UI and safeguards for large histories
+   NaluXrp — Account Inspector (Full Page, Forensics + Merkle)
+   - Full-page inspector with filters, canonical leaf schema
+   - Chunked Merkle snapshot (per-day / fixed-size)
+   - Account summary: domain, logo (Clearbit), address, activated_by, initial balance
+   - Issuer detection heuristic, dominance metrics, pathway flags (fan-out / dominated)
+   - Per-tx details and inclusion proofs (leaf->chunk->top)
+   - Uses shared XRPL client (preferred) and public APIs as fallbacks
    ========================================= */
 
 (function () {
   // -------- CONFIG --------
-  const DEPLOYED_PROXY = ""; // e.g. "https://naluxrp-proxy.onrender.com" (optional)
+  const DEPLOYED_PROXY = ""; // Optional proxy base URL, e.g. "https://naluxrp-proxy.onrender.com"
   const PUBLIC_TX_API = "https://api.xrpl.org/v2/accounts";
+  const PUBLIC_ACCT_API = "https://api.xrpl.org/v2/accounts";
   const MAX_FETCH_PAGES = 200;
   const PAGE_LIMIT = 100;
-  const MAX_TXS = 5000;        // safety cap (adjust if needed)
-  const SHARED_WAIT_MS = 8000; // how long to wait for shared XRPL connection
+  const MAX_TXS_DEFAULT = 2000;  // default safety cap (user-adjustable in UI)
+  const SHARED_WAIT_MS = 8000;
   const SCHEMA_VERSION = "1.0";
 
   // -------- STATE --------
-  let snapshot = null; // structured snapshot object
+  let snapshot = null;
   let building = false;
 
-  // -------- UTIL: DOM helpers --------
-  function $(id) { return document.getElementById(id); }
-  function el(tag, props = {}, children = []) {
+  // -------- DOM helpers --------
+  const $ = id => document.getElementById(id);
+  function el(tag, props = {}, ...children) {
     const e = document.createElement(tag);
     for (const k in props) {
       if (k === "style") Object.assign(e.style, props[k]);
@@ -36,12 +34,12 @@
     }
     for (const c of children) {
       if (typeof c === "string") e.appendChild(document.createTextNode(c));
-      else e.appendChild(c);
+      else if (c instanceof Node) e.appendChild(c);
     }
     return e;
   }
 
-  // -------- INIT UI (full-page) --------
+  // -------- UI render (full page) --------
   function ensurePage() {
     let page = $("inspector");
     if (!page) {
@@ -60,10 +58,10 @@
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
           <h2 style="margin:0">🔎 Account Inspector</h2>
-          <div style="opacity:.9">Filters • chunked Merkle snapshots • proofs • export</div>
+          <div style="opacity:.9">Address summary • chunked Merkle snapshots • proofs • pathway flags</div>
         </div>
 
-        <div id="ai-controls" style="display:grid;grid-template-columns: 1fr 420px; gap:12px;align-items:start;margin-bottom:12px;">
+        <div style="display:grid;grid-template-columns:1fr 420px;gap:12px;margin-bottom:12px;align-items:start;">
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;gap:8px;">
               <input id="aiAddress" placeholder="r... address" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
@@ -78,7 +76,7 @@
             <div style="display:flex;gap:8px;">
               <input id="aiStart" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);"/>
               <input id="aiEnd" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);"/>
-              <input id="aiMinAmt" type="number" placeholder="Min amt" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);"/>
+              <input id="aiMinAmt" type="number" placeholder="Min amt (XRP)" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);"/>
             </div>
 
             <div style="display:flex;gap:8px;align-items:center;">
@@ -93,14 +91,16 @@
             </div>
 
             <div style="display:flex;gap:8px;align-items:center;">
-              <label style="font-size:13px;">Chunking</label>
+              <label>Chunking</label>
               <select id="aiChunkMode" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);">
-                <option value="auto">Auto (per-day if date range set, else fixed)</option>
+                <option value="auto">Auto (per-day if date range set)</option>
                 <option value="per-day">Per-day</option>
                 <option value="fixed">Fixed-size</option>
               </select>
               <input id="aiChunkSize" type="number" value="500" min="50" step="50" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);"/>
-              <label style="margin-left:auto;font-size:13px;">Max txs: <input id="aiMaxT" type="number" value="${MAX_TXS}" style="width:90px;padding:6px;border-radius:6px;border:1px solid var(--accent-tertiary)"/></label>
+              <label style="margin-left:auto;font-size:13px;">Max txs:
+                <input id="aiMaxT" type="number" value="${MAX_TXS_DEFAULT}" style="width:90px;padding:6px;border-radius:6px;border:1px solid var(--accent-tertiary)"/>
+              </label>
             </div>
 
             <div style="display:flex;gap:8px;">
@@ -117,8 +117,12 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:8px;">
-            <div id="aiOverview" style="padding:10px;background:rgba(255,255,255,0.02);border-radius:8px;min-height:120px;">No snapshot</div>
-            <div id="aiChunkInfo" style="padding:10px;background:rgba(255,255,255,0.02);border-radius:8px;min-height:120px;">Chunks: —</div>
+            <div id="aiSummary" style="padding:10px;background:rgba(255,255,255,0.02);border-radius:8px;min-height:120px;">
+              <div style="opacity:.8">Account summary will appear here after snapshot.</div>
+            </div>
+            <div id="aiChunkInfo" style="padding:10px;background:rgba(255,255,255,0.02);border-radius:8px;min-height:120px;">
+              <div><strong>Chunks:</strong> —</div>
+            </div>
           </div>
         </div>
 
@@ -127,7 +131,6 @@
         <div id="aiRaw" style="white-space:pre-wrap;margin-top:12px;font-size:12px;color:var(--text-secondary)"></div>
       </div>
 
-      <!-- modal for proofs/details -->
       <div id="aiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
         <div id="aiModal" style="width:min(900px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -139,26 +142,25 @@
       </div>
     `;
 
-    // wire events
+    // wire controls
     $("aiFetch").addEventListener("click", onBuild);
     $("aiClear").addEventListener("click", () => { clearAll(); setStatus("Ready"); });
     $("aiExport").addEventListener("click", exportSnapshot);
     $("aiModalClose").addEventListener("click", () => { $("aiModalOverlay").style.display = "none"; });
-
     const addr = $("aiAddress");
     if (addr) addr.addEventListener("keypress", (e) => { if (e.key === "Enter") onBuild(); });
   }
 
-  // -------- helpers --------
+  // -------- small helpers --------
   function setStatus(s) { const el = $("aiStatus"); if (el) el.textContent = s; }
-  function setProgress(p) { const wrap = $("aiProgress"); const bar = $("aiProgressBar"); if (!wrap || !bar) return; wrap.style.display = (p >= 0 && p < 1) ? "block" : "none"; bar.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; }
-  function setOverviewHtml(html) { const el = $("aiOverview"); if (el) el.innerHTML = html; }
-  function setChunkInfo(html) { const el = $("aiChunkInfo"); if (el) el.innerHTML = html; }
+  function setProgress(p) { const wrap = $("aiProgress"); const bar = $("aiProgressBar"); if (!wrap || !bar) return; if (p < 0) { wrap.style.display = "none"; bar.style.width = "0%"; } else { wrap.style.display = "block"; bar.style.width = `${Math.round(Math.max(0, Math.min(1, p))*100)}%`; } }
+  function setSummaryHtml(html) { const el = $("aiSummary"); if (el) el.innerHTML = html; }
+  function setChunkInfoHtml(html) { const el = $("aiChunkInfo"); if (el) el.innerHTML = html; }
   function setTxListHtml(html) { const el = $("aiTxList"); if (el) el.innerHTML = html; }
   function setRaw(txt) { const el = $("aiRaw"); if (el) el.innerText = txt; }
   function escapeHtml(s) { if (s == null) return ""; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  // canonicalize function
+  // canonicalize and hashing
   function canonicalize(obj) {
     if (obj === null || typeof obj !== "object") return obj;
     if (Array.isArray(obj)) return obj.map(canonicalize);
@@ -166,15 +168,14 @@
     for (const k of Object.keys(obj).sort()) out[k] = canonicalize(obj[k]);
     return out;
   }
-
   async function hashUtf8Hex(input) {
     const enc = new TextEncoder();
     const data = enc.encode(input);
-    const hash = await crypto.subtle.digest("SHA-256", data);
-    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+    const h = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join('');
   }
 
-  // parse amount helper
+  // parse amount helper (normalize to numeric XRP when possible)
   function parseAmount(amount) {
     if (amount == null) return { value: 0, currency: "XRP", issuer: null };
     if (typeof amount === "string") {
@@ -189,38 +190,31 @@
     return { value: 0, currency: "XRP", issuer: null };
   }
 
-  // ---------------------------
-  // Canonical leaf builder (deterministic)
-  // ---------------------------
+  // -------- canonical leaf builder --------
   async function buildLeafForTx(tx, inspectedAccount) {
-    const txHash = String(tx.hash || tx.tx?.hash || tx.transaction?.hash || "");
-    const ledgerIndex = Number(tx.ledger_index ?? tx.tx?.LedgerIndex ?? tx.transaction?.ledger_index ?? 0);
-    const dateISO = tx.date || tx.close_time || tx.date_close || tx.tx?.date || tx.transaction?.date
-      ? new Date(tx.date || tx.close_time || tx.tx?.date || tx.transaction?.date).toISOString()
-      : null;
-    const account = tx.Account || tx.tx?.Account || tx.transaction?.Account || null;
-    const dest = tx.Destination || tx.tx?.Destination || tx.transaction?.Destination || null;
-
+    const t = tx.tx || tx.transaction || tx;
+    const txHash = String(t.hash || t.tx?.hash || t.transaction?.hash || "");
+    const ledgerIndex = Number(t.ledger_index ?? t.tx?.LedgerIndex ?? t.transaction?.ledger_index ?? 0);
+    const date = t.date || t.close_time || t.tx?.date || t.transaction?.date ? new Date(t.date || t.close_time || t.tx?.date || t.transaction?.date).toISOString() : null;
+    const account = t.Account || t.account || null;
+    const dest = t.Destination || t.destination || null;
     let direction = "other";
     if (account && dest) {
       if (account === inspectedAccount && dest === inspectedAccount) direction = "self";
       else if (account === inspectedAccount) direction = "out";
       else if (dest === inspectedAccount) direction = "in";
-      else direction = "other";
     } else if (account && account === inspectedAccount) direction = "out";
     else if (dest && dest === inspectedAccount) direction = "in";
 
-    const type = tx.TransactionType || tx.tx?.TransactionType || tx.transaction?.TransactionType || tx.type || "Unknown";
-
-    const rawAmount = tx.Amount ?? tx.delivered_amount ?? tx.tx?.Amount ?? tx.transaction?.Amount ?? null;
+    const type = t.TransactionType || t.type || "Unknown";
+    const rawAmount = t.Amount ?? t.delivered_amount ?? null;
     const amount = parseAmount(rawAmount);
-
-    const result = tx.meta?.TransactionResult || tx.engine_result || tx.tx?.meta?.TransactionResult || null;
+    const result = t.meta?.TransactionResult || t.engine_result || null;
 
     const leaf = {
       tx_hash: txHash,
       ledger_index: ledgerIndex,
-      date: dateISO,
+      date,
       account: account || null,
       counterparty: dest || null,
       direction,
@@ -228,39 +222,34 @@
       amount,
       result,
       meta: {
-        delivered_amount: tx.delivered_amount || tx.meta?.delivered_amount || null
+        delivered_amount: t.delivered_amount || t.meta?.delivered_amount || null
       }
     };
 
     const canon = canonicalize(leaf);
     const json = JSON.stringify(canon);
     const leafHash = await hashUtf8Hex(json);
-    return { leaf, leafHash, json };
+    return { leaf, leafHash, json, raw: t };
   }
 
-  // ---------------------------
-  // Merkle tree builder (layers with root at index 0)
-  // ---------------------------
+  // -------- Merkle helpers (as implemented previously) --------
   async function buildMerkleTreeAsync(leafHexes) {
     if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
     let layer = leafHexes.slice();
-    const layers = [layer.slice()]; // leaves at last index
+    const layers = [layer.slice()];
     while (layer.length > 1) {
       const next = [];
       for (let i = 0; i < layer.length; i += 2) {
         const left = layer[i];
-        const right = (i + 1 < layer.length) ? layer[i + 1] : layer[i]; // duplicate if odd
-        const combined = await hashUtf8Hex(left + right);
-        next.push(combined);
+        const right = (i + 1 < layer.length) ? layer[i + 1] : layer[i];
+        next.push(await hashUtf8Hex(left + right));
       }
       layer = next;
       layers.unshift(layer.slice());
     }
     return { root: layers[0][0], layers };
   }
-
   function getMerkleProof(layers, leafIndex) {
-    // layers: root @ 0, leaves @ last index
     const proof = [];
     let idx = leafIndex;
     for (let li = layers.length - 1; li > 0; li--) {
@@ -273,7 +262,6 @@
     }
     return proof;
   }
-
   async function verifyMerkleProof(leafHex, proof, rootHex) {
     let h = leafHex;
     for (const step of proof) {
@@ -282,7 +270,6 @@
     return h === rootHex;
   }
 
-  // global proof: leaf -> chunk root -> top root
   function getGlobalProof(chunks, topTree, globalIndex) {
     const chunkIdx = chunks.findIndex(c => globalIndex >= c.startIndex && globalIndex <= c.endIndex);
     if (chunkIdx < 0) return null;
@@ -307,9 +294,7 @@
     return ok1 && ok2;
   }
 
-  // ---------------------------
-  // Data fetching: prefer shared client, then proxy (if configured), then public APIs
-  // ---------------------------
+  // -------- Network fetching helpers --------
   function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
     return new Promise((resolve) => {
       try {
@@ -342,16 +327,44 @@
     }
   }
 
-  async function fetchAccountTxs(address, startIso, endIso, maxTxsCap = MAX_TXS) {
+  // fetch account_info (domain decode, balance)
+  async function fetchAccountInfo(address) {
+    // Try shared client first
+    try {
+      if (typeof window.requestXrpl === 'function') {
+        const res = await window.requestXrpl({ command: 'account_info', account: address }, { timeoutMs: 8000 });
+        const info = res.result?.account_data || res.account_data || res;
+        return info || null;
+      } else if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === 'function') {
+        const resp = await window.XRPL.client.request({ command: 'account_info', account: address });
+        return resp.result?.account_data || resp.account_data || resp;
+      }
+    } catch (e) {
+      console.warn('Shared account_info failed', e && e.message ? e.message : e);
+    }
+
+    // Fallback to xrpl.org v2
+    try {
+      const url = `${PUBLIC_ACCT_API}/${encodeURIComponent(address)}`;
+      const j = await tryFetchUrl(url, 9000);
+      if (j && (j.result || j.account)) {
+        // xrpl.org v2 shape: result.account or result
+        return (j.result?.account || j.account || j.result || j);
+      }
+    } catch (e) {
+      console.warn('xrpl.org account fetch failed', e && e.message ? e.message : e);
+    }
+    return null;
+  }
+
+  // fetch transactions - prefer shared client, proxy, then public APIs (same as previous)
+  async function fetchAccountTxs(address, startIso, endIso, maxTxsCap = MAX_TXS_DEFAULT) {
     setStatus('Resolving data source...');
     const collected = [];
-
-    // 1) Shared client
     const sharedReady = await waitForSharedConn();
     if (sharedReady) {
       setStatus('Querying shared XRPL connection...');
       try {
-        // requestXrpl wrapper first
         if (typeof window.requestXrpl === 'function') {
           let marker;
           for (let p = 0; p < MAX_FETCH_PAGES; p++) {
@@ -367,7 +380,6 @@
           }
           if (collected.length) return collected.slice(0, maxTxsCap);
         }
-        // XRPL.client fallback
         if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === 'function') {
           let marker;
           for (let p = 0; p < MAX_FETCH_PAGES; p++) {
@@ -386,13 +398,13 @@
         console.warn('Shared client fetch failed', e && e.message ? e.message : e);
       }
     } else {
-      setStatus('Shared connection not ready; falling back to HTTP APIs...');
+      setStatus('Shared XRPL connection not ready; using HTTP APIs...');
     }
 
-    // 2) DEPLOYED_PROXY (optional)
+    // Proxy
     if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith('http')) {
-      setStatus('Trying deployed proxy...');
       try {
+        setStatus('Fetching via deployed proxy...');
         let url = `${DEPLOYED_PROXY.replace(/\/+$/,'')}/accounts/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
         if (startIso) url += `&start=${encodeURIComponent(startIso)}`;
         if (endIso) url += `&end=${encodeURIComponent(endIso)}`;
@@ -413,15 +425,15 @@
       } catch (e) { console.warn('Proxy fetch failed', e && e.message ? e.message : e); }
     }
 
-    // 3) xrpl.org v2 (pagination supported)
+    // xrpl.org v2
     try {
-      setStatus('Trying xrpl.org (public API)...');
+      setStatus('Fetching from xrpl.org (public API)...');
       let url = `${PUBLIC_TX_API}/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
       if (startIso) url += `&start=${encodeURIComponent(startIso)}`;
       if (endIso) url += `&end=${encodeURIComponent(endIso)}`;
-      let p = 0;
-      while (p++ < MAX_FETCH_PAGES) {
-        setStatus(`xrpl.org page ${p}...`);
+      let page = 0;
+      while (page++ < MAX_FETCH_PAGES) {
+        setStatus(`xrpl.org page ${page}...`);
         const j = await tryFetchUrl(url, 10000);
         if (!j) break;
         const arr = j.result || j.transactions || j.data || j;
@@ -435,7 +447,7 @@
       if (collected.length) return collected.slice(0, maxTxsCap);
     } catch (e) { console.warn('xrpl.org failed', e && e.message ? e.message : e); }
 
-    // 4) data.ripple.com (one page)
+    // data.ripple.com
     try {
       setStatus('Trying data.ripple.com...');
       let url = `https://data.ripple.com/v2/accounts/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
@@ -448,7 +460,7 @@
       }
     } catch (e) { console.warn('data.ripple.com failed', e && e.message ? e.message : e); }
 
-    // 5) xrpscan
+    // xrpscan
     try {
       setStatus('Trying xrpscan...');
       const url = `https://api.xrpscan.com/api/v1/accounts/${encodeURIComponent(address)}/transactions?limit=${PAGE_LIMIT}`;
@@ -459,38 +471,30 @@
       }
     } catch (e) { console.warn('xrpscan failed', e && e.message ? e.message : e); }
 
-    throw new Error('No transaction source succeeded (check network or deploy proxy)');
+    throw new Error('Failed to fetch transactions from any source');
   }
 
-  // ---------------------------
-  // Chunked merkle snapshot builder
-  // ---------------------------
+  // -------- Chunked snapshot builder (leaves + chunks + topTree) --------
   async function buildChunkedSnapshot(txs, strategy, chunkSize, inspectedAccount) {
-    // txs: array in descending or incoming order — we will preserve the order provided
-    // strategy: "per-day" or "fixed"
-    setStatus('Building leaves (canonicalization & hashing)...');
+    setStatus('Canonicalizing & hashing leaves...');
     const leaves = [];
-    const leafJsons = []; // store canonical JSON for UI/proofs
+    const leafJsons = [];
     for (let i = 0; i < txs.length; i++) {
-      const tx = txs[i];
-      const { leaf, leafHash, json } = await buildLeafForTx(tx, inspectedAccount);
+      const { leaf, leafHash, json, raw } = await buildLeafForTx(txs[i], inspectedAccount);
       leaves.push(leafHash);
-      leafJsons.push({ leaf, json, txIndex: i });
+      leafJsons.push({ leaf, json, raw, txIndex: i });
       if (i % 50 === 0) setProgress(i / txs.length);
     }
     setProgress(-1);
 
-    // Group into chunks
     const chunks = [];
     if (strategy === 'per-day') {
-      // group by date (YYYY-MM-DD) based on leaf.date
       const map = new Map();
       for (let i = 0; i < leafJsons.length; i++) {
         const d = leafJsons[i].leaf.date ? leafJsons[i].leaf.date.slice(0,10) : 'unknown';
         if (!map.has(d)) map.set(d, []);
         map.get(d).push({ index: leafJsons[i].txIndex, hash: leaves[i] });
       }
-      // preserve chronological order of keys (sort descending by date presence)
       const keys = Array.from(map.keys()).sort((a,b) => b.localeCompare(a));
       let runningIndex = 0;
       for (const k of keys) {
@@ -509,8 +513,6 @@
         runningIndex += hashes.length;
       }
     } else {
-      // fixed-size chunking
-      let runningIndex = 0;
       for (let i = 0; i < leaves.length; i += chunkSize) {
         const slice = leaves.slice(i, i + chunkSize);
         const tree = await buildMerkleTreeAsync(slice);
@@ -525,16 +527,149 @@
       }
     }
 
-    // Top-level tree over chunk roots
     const chunkRoots = chunks.map(c => c.root);
     const topTree = await buildMerkleTreeAsync(chunkRoots);
 
     return { leaves, leafJsons, chunks, topTree };
   }
 
-  // ---------------------------
-  // UI Build flow
-  // ---------------------------
+  // -------- Analysis helpers (activation, issuer detection, dominance & flags) --------
+  function analyzeSnapshotBasic(inspectedAddress, txLeafJsons) {
+    const types = {};
+    const counterparties = {};
+    let totalAmt = 0;
+    let nonXrpCount = 0;
+    for (const entry of txLeafJsons) {
+      const t = entry.leaf;
+      types[t.type] = (types[t.type] || 0) + 1;
+      const other = (t.direction === 'out') ? t.counterparty : t.account;
+      if (other) counterparties[other] = (counterparties[other] || 0) + 1;
+      if (t.amount && t.amount.currency !== 'XRP') nonXrpCount++;
+      totalAmt += (t.amount && t.amount.value) || 0;
+    }
+    const topCounterparty = Object.entries(counterparties).sort((a,b)=>b[1]-a[1])[0] || [null,0];
+    const dominance = txLeafJsons.length ? (topCounterparty[1] / txLeafJsons.length) : 0;
+    const fanOut = (Object.keys(counterparties).length / Math.max(1, txLeafJsons.length)) > 0.6 && txLeafJsons.length > 10;
+    const dominatedBySingle = dominance > 0.6;
+    return {
+      typeCounts: types,
+      counterparties,
+      topCounterparty: { address: topCounterparty[0], count: topCounterparty[1], dominance },
+      flags: {
+        fanOut: !!fanOut,
+        dominatedBySingle: !!dominatedBySingle,
+        likelyIssuer: nonXrpCount > 0
+      },
+      avgAmount: txLeafJsons.length ? totalAmt / txLeafJsons.length : 0
+    };
+  }
+
+  // Attempt to find activation event (earliest incoming Payment in provided transactions)
+  function findActivationInTxs(inspectedAddress, txLeafJsons) {
+    // find earliest (min ledger) tx where type Payment and destination equals inspectedAddress
+    const incoming = txLeafJsons.filter(x => x.leaf.type === 'Payment' && x.leaf.counterparty === inspectedAddress);
+    if (!incoming.length) return null;
+    const earliest = incoming.reduce((a,b) => ( (a.leaf.ledger_index || 1e12) < (b.leaf.ledger_index || 1e12) ? a : b ));
+    return { activatedBy: earliest.leaf.account, amount: earliest.leaf.amount, date: earliest.leaf.date };
+  }
+
+  // -------- Account info fetch + domain decode + logo --------
+  function hexToAscii(hex) {
+    try {
+      if (!hex) return null;
+      if (typeof hex !== 'string') return String(hex);
+      // Domain in AccountRoot is hex, but can be empty
+      const clean = hex.replace(/^0x/i, '');
+      let str = '';
+      for (let i = 0; i < clean.length; i += 2) {
+        const code = parseInt(clean.slice(i, i+2), 16);
+        if (!code) continue;
+        str += String.fromCharCode(code);
+      }
+      return str || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function getAccountSummary(address, txLeafJsons) {
+    // fetch account_info for domain and balance
+    let info = null;
+    try { info = await fetchAccountInfo(address); } catch (e) { console.warn('account_info failed', e); }
+    let domain = null;
+    let balance = null;
+    let sequence = null;
+    let ownerCount = null;
+    if (info) {
+      // xrpl.org v2 returns different shapes; try to find domain field
+      domain = info.domain ? (typeof info.domain === 'string' ? info.domain : hexToAscii(info.domain)) : (hexToAscii(info.Domain) || null);
+      // balance: AccountRoot may include Balance in drops
+      const balVal = info.balance || info.Balance || (info.account && info.account.balance);
+      if (balVal != null) {
+        // if returned in drops (string) convert to XRP if big number like "1000000"
+        const asNum = Number(balVal);
+        balance = Number.isFinite(asNum) ? (asNum > 10000 ? (asNum / 1_000_000) : asNum) : String(balVal);
+      } else if (info.account && info.account.xrp_balance) {
+        balance = Number(info.account.xrp_balance);
+      }
+      sequence = info.Sequence || info.sequence || info.account?.sequence || null;
+      ownerCount = info.OwnerCount || info.owner_count || info.account?.owner_count || null;
+    }
+
+    // logo via clearbit (best-effort)
+    let logoUrl = null;
+    if (domain) {
+      try {
+        // Clearbit logo service uses domain
+        logoUrl = `https://logo.clearbit.com/${domain}`;
+      } catch (e) { logoUrl = null; }
+    }
+
+    // Activation attempt from txs
+    const activation = findActivationInTxs(address, txLeafJsons);
+    // issuer heuristic & dominance
+    const analysis = analyzeSnapshotBasic(address, txLeafJsons);
+
+    return {
+      domain,
+      logoUrl,
+      balance,
+      sequence,
+      ownerCount,
+      activation,
+      analysis
+    };
+  }
+
+  // fetch account_info wrapper (shared + xrpl.org)
+  async function fetchAccountInfo(address) {
+    // shared client first
+    try {
+      if (typeof window.requestXrpl === 'function') {
+        const r = await window.requestXrpl({ command: 'account_info', account: address }, { timeoutMs: 8000 });
+        // rippled returns result.account_data
+        const data = r.result?.account_data || r.account_data || r;
+        return data;
+      } else if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === 'function') {
+        const resp = await window.XRPL.client.request({ command: 'account_info', account: address });
+        return resp.result?.account_data || resp.account_data || resp;
+      }
+    } catch (e) {
+      console.warn('shared account_info failed', e && e.message ? e.message : e);
+    }
+    // fallback to xrpl.org v2
+    try {
+      const url = `${PUBLIC_ACCT_API}/${encodeURIComponent(address)}`;
+      const j = await tryFetchUrl(url, 8000);
+      // xrpl.org v2 returns result.account
+      return j.result?.account || j.account || j;
+    } catch (e) {
+      console.warn('xrpl.org account fetch failed', e && e.message ? e.message : e);
+    }
+    return null;
+  }
+
+  // -------- Build and render snapshot flow --------
   async function onBuild() {
     if (building) return;
     building = true;
@@ -550,25 +685,25 @@
       const types = Array.from(($('aiTypes') || {}).querySelectorAll('input[type=checkbox]:checked')).map(i => i.value);
       const chunkMode = ($('aiChunkMode') || {}).value || 'auto';
       const chunkSize = Number(($('aiChunkSize') || {}).value || 500);
-      const maxT = Number(($('aiMaxT') || {}).value || MAX_TXS);
+      const maxT = Number(($('aiMaxT') || {}).value || MAX_TXS_DEFAULT);
 
-      setStatus('Fetching transactions (this may take a while)...');
-      const rawTxs = await fetchAccountTxs(addr, start, end, maxT);
-      if (!rawTxs || !rawTxs.length) { setStatus('No transactions returned'); building = false; setProgress(-1); return; }
+      setStatus('Fetching transactions...');
+      const raw = await fetchAccountTxs(addr, start, end, maxT);
+      if (!raw || !raw.length) { setStatus('No transactions'); building = false; setProgress(-1); return; }
 
-      // Filter by types, direction, minAmt
+      // normalize tx objects and filter per UI
       setStatus('Filtering transactions...');
       const filtered = [];
-      for (const tx of rawTxs) {
-        const tObj = tx.tx || tx.transaction || tx;
-        const txType = tObj.TransactionType || tObj.type || '';
-        if (types.length && !types.includes(txType) && types.indexOf('') === -1) {
-          // if none of selected types match, skip; if user kept Payment only but txType may be e.g. OfferCreate, skip
+      for (const r of raw) {
+        const t = r.tx || r.transaction || r;
+        const txType = t.TransactionType || t.type || '';
+        if (types.length && !types.includes(txType)) {
+          // if checkboxes filtered out this type, skip
           if (!types.includes(txType)) continue;
         }
         // direction filter
-        const acc = tObj.Account || tObj.account;
-        const dst = tObj.Destination || tObj.destination;
+        const acc = t.Account || t.account;
+        const dst = t.Destination || t.destination;
         let direction = 'other';
         if (acc && dst) {
           if (acc === addr && dst === addr) direction = 'self';
@@ -578,40 +713,42 @@
         else if (dst && dst === addr) direction = 'in';
         if (dir !== 'both' && direction !== dir) continue;
 
-        // min amount check (convert to XRP)
-        const rawAmount = tObj.Amount || tObj.delivered_amount || null;
+        // min amount filter (XRP)
+        const rawAmount = t.Amount ?? t.delivered_amount ?? null;
         const amt = parseAmount(rawAmount).value || 0;
         if (minAmt > 0 && amt < minAmt) continue;
 
-        filtered.push(tObj);
+        filtered.push(t);
         if (filtered.length >= maxT) break;
       }
 
-      setStatus(`Building canonical leaves for ${filtered.length} tx(s)...`);
+      setStatus(`Canonicalizing ${filtered.length} transactions and building Merkle chunks...`);
       const strategy = (chunkMode === 'auto' ? (start && end ? 'per-day' : 'fixed') : chunkMode);
-      const actualChunkSize = Math.max(50, Math.min(2000, chunkSize || 500));
-
-      const { leaves, leafJsons, chunks, topTree } = await buildChunkedSnapshot(filtered, strategy, actualChunkSize, addr);
+      const actualChunk = Math.max(50, Math.min(2000, chunkSize || 500));
+      const { leaves, leafJsons, chunks, topTree } = await buildChunkedSnapshot(filtered, strategy, actualChunk, addr);
 
       snapshot = {
         schemaVersion: SCHEMA_VERSION,
         generatedAt: new Date().toISOString(),
         mode: strategy,
-        chunkSize: actualChunkSize,
+        chunkSize: actualChunk,
         address: addr,
         dateRange: { start, end },
         txCount: filtered.length,
         leaves,
         leafJsons,
         chunks,
-        topTree
+        topTree,
+        txs: filtered
       };
 
-      // Render UI summary
-      setOverviewHtml(`<div><strong>Address:</strong> ${escapeHtml(addr)}<br/><strong>Txs:</strong> ${snapshot.txCount}<br/><strong>Top Root:</strong> <code>${snapshot.topTree.root}</code></div>`);
-      setChunkInfo(`<div><strong>Chunks:</strong> ${snapshot.chunks.length} • Avg size: ${Math.round((snapshot.leaves.length / Math.max(1, snapshot.chunks.length))*10)/10}</div>`);
-      // tx list with proof buttons
-      const txListHtml = snapshot.leafJsons.map((l, idx) => {
+      // analyze & fetch account info (domain & balance)
+      const summary = await getAccountSummary(addr, snapshot.leafJsons);
+      // render summary
+      renderSummaryUI(snapshot, summary);
+
+      // render tx list (compact)
+      const txHtml = snapshot.leafJsons.map((l, idx) => {
         const h = snapshot.leaves[idx];
         const short = h.slice(0,10) + '…' + h.slice(-6);
         return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.04);display:flex;justify-content:space-between;align-items:center;">
@@ -625,25 +762,18 @@
           </div>
         </div>`;
       }).join('');
-      setTxListHtml(txListHtml);
+      setTxListHtml(txHtml);
       setRaw(JSON.stringify({ topRoot: snapshot.topTree.root, chunks: snapshot.chunks.map(c => ({ start: c.startIndex, end: c.endIndex, root: c.root })) }, null, 2));
-
-      // attach handlers for details/proof
-      Array.from(document.querySelectorAll('.ai-btn-show')).forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.getAttribute('data-idx'));
-          showTxDetails(idx);
-        });
-      });
-      Array.from(document.querySelectorAll('.ai-btn-proof')).forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          const idx = Number(btn.getAttribute('data-idx'));
-          await showProofForIndex(idx);
-        });
-      });
+      // attach handlers
+      Array.from(document.querySelectorAll('.ai-btn-show')).forEach(btn => btn.addEventListener('click', (e) => {
+        const idx = Number(btn.getAttribute('data-idx')); showTxDetails(idx);
+      }));
+      Array.from(document.querySelectorAll('.ai-btn-proof')).forEach(btn => btn.addEventListener('click', async (e) => {
+        const idx = Number(btn.getAttribute('data-idx')); await showProofForIndex(idx);
+      }));
 
       $('aiExport').style.display = 'inline-block';
-      setStatus('Snapshot built successfully');
+      setStatus('Snapshot built');
       setProgress(-1);
     } catch (err) {
       console.error(err);
@@ -654,18 +784,79 @@
     }
   }
 
-  // show tx details modal
+  // -------- render summary UI --------
+  function renderSummaryUI(snap, summary) {
+    const domain = summary.domain || '—';
+    const logoUrl = summary.logoUrl;
+    const balance = summary.balance != null ? `${summary.balance} XRP` : '—';
+    const ownerCount = summary.ownerCount ?? '—';
+    const seq = summary.sequence ?? '—';
+    const activated = summary.activation ? `${summary.activation.activatedBy} • ${summary.activation.amount && summary.activation.amount.value ? summary.activation.amount.value + ' ' + (summary.activation.amount.currency || 'XRP') : '—'} • ${summary.activation.date || '—'}` : 'Not found in snapshot (expand range)';
+    const { typeCounts, topCounterparty, flags } = summary.analysis;
+
+    const typesHtml = Object.entries(typeCounts || {}).map(([k,v]) => `<div style="font-size:13px">${k}: ${v}</div>`).join('');
+    const counterpartyHtml = topCounterparty.address ? `<div style="font-size:13px">${topCounterparty.address} (${Math.round(topCounterparty.dominance*100)}%)</div>` : '<div style="opacity:.7">None</div>';
+    const flagList = [];
+    if (flags.fanOut) flagList.push('Fan-out pattern');
+    if (flags.dominatedBySingle) flagList.push('Dominated by single counterparty');
+    if (flags.likelyIssuer) flagList.push('Likely issuing address (non-XRP txs observed)');
+
+    const html = `
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div style="width:68px;height:68px;border-radius:8px;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;">
+          ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="logo" style="max-width:64px;max-height:64px;border-radius:6px"/>` : `<div style="opacity:.6">No logo</div>`}
+        </div>
+        <div>
+          <div><strong>Address</strong>: ${escapeHtml(snap.address)}</div>
+          <div><strong>Domain</strong>: ${escapeHtml(domain)}</div>
+          <div><strong>Balance</strong>: ${escapeHtml(balance)} • Seq: ${escapeHtml(String(seq))} • Owners: ${escapeHtml(String(ownerCount))}</div>
+          <div style="margin-top:6px"><strong>Activated by</strong>: ${escapeHtml(activated)}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="padding:8px;border-radius:8px;background:rgba(255,255,255,0.02)">
+          <div><strong>Top counterparty</strong></div>
+          ${counterpartyHtml}
+        </div>
+
+        <div style="padding:8px;border-radius:8px;background:rgba(255,255,255,0.02)">
+          <div><strong>Top types</strong></div>
+          ${typesHtml}
+        </div>
+
+        <div style="padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);min-width:220px">
+          <div><strong>Flags</strong></div>
+          <div>${flagList.length ? flagList.map(f => `<div style="font-size:13px">${escapeHtml(f)}</div>`).join('') : '<div style="opacity:.7">None</div>'}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.01)">
+        <div><strong>Merkle</strong></div>
+        <div>Top root: <code style="font-family:monospace;">${snap.topTree.root}</code></div>
+        <div>Chunks: ${snap.chunks.length} • Leaves: ${snap.leaves.length}</div>
+      </div>
+    `;
+    setSummaryHtml(html);
+
+    // chunk info
+    const chunkInfoHtml = snap.chunks.map((c, idx) => {
+      const key = c.key ? `date:${c.key}` : `chunk:${idx}`;
+      return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.04)"><strong>${key}</strong> • ${c.count} txs • root: <code>${c.root.slice(0,12)}…</code></div>`;
+    }).join('');
+    setChunkInfoHtml(`<div style="max-height:240px;overflow:auto;">${chunkInfoHtml}</div>`);
+  }
+
+  // -------- Details / proof modal --------
   function showTxDetails(idx) {
     if (!snapshot) return;
     const info = snapshot.leafJsons[idx];
-    const body = $('aiModalBody');
-    const title = $('aiModalTitle');
+    const title = $('aiModalTitle'); const body = $('aiModalBody');
     title.textContent = `Tx #${idx} details`;
-    body.textContent = JSON.stringify({ canonicalLeaf: info.leaf, canonicalJson: info.json }, null, 2);
+    body.textContent = JSON.stringify({ canonicalLeaf: info.leaf, canonicalJson: info.json, rawTx: info.raw }, null, 2);
     $('aiModalOverlay').style.display = 'flex';
   }
 
-  // show proof modal and verify
   async function showProofForIndex(idx) {
     if (!snapshot) return;
     const info = snapshot.leafJsons[idx];
@@ -673,32 +864,22 @@
     const proof = getGlobalProof(snapshot.chunks, snapshot.topTree, idx);
     if (!proof) {
       $('aiModalTitle').textContent = 'Proof';
-      $('aiModalBody').textContent = 'No proof found for this index';
+      $('aiModalBody').textContent = 'No proof available';
       $('aiModalOverlay').style.display = 'flex';
       return;
     }
-    const verifyOk = await verifyGlobalProof(leafHex, { ...proof, topRoot: snapshot.topTree.root, chunkRoot: proof.chunkRoot ?? snapshot.chunks[proof.chunkIndex].root });
-    const out = {
-      index: idx,
-      leafHash: leafHex,
-      chunkIndex: proof.chunkIndex,
-      localIndex: proof.localIndex,
-      proofToChunk: proof.proofToChunk,
-      proofChunkToTop: proof.proofChunkToTop,
-      chunkRoot: snapshot.chunks[proof.chunkIndex].root,
-      topRoot: snapshot.topTree.root,
-      verified: verifyOk
-    };
-    $('aiModalTitle').textContent = `Proof for tx #${idx} • verified: ${verifyOk ? 'OK' : 'FAIL'}`;
+    const proofObj = { proofToChunk: proof.proofToChunk, proofChunkToTop: proof.proofChunkToTop, chunkRoot: snapshot.chunks[proof.chunkIndex].root, topRoot: snapshot.topTree.root };
+    const verified = await verifyGlobalProof(leafHex, proofObj);
+    const out = { index: idx, leafHash: leafHex, proofObj, verified };
+    $('aiModalTitle').textContent = `Proof #${idx} • verified: ${verified ? 'OK' : 'FAIL'}`;
     $('aiModalBody').textContent = JSON.stringify(out, null, 2);
     $('aiModalOverlay').style.display = 'flex';
   }
 
-  // export snapshot full JSON
+  // -------- export snapshot (full) --------
   function exportSnapshot() {
     if (!snapshot) { setStatus('No snapshot'); return; }
     setStatus('Exporting snapshot...');
-    // Compose export object (you may remove heavy txs or leafJsons if you prefer compact)
     const exportObj = {
       schemaVersion: snapshot.schemaVersion,
       generatedAt: snapshot.generatedAt,
@@ -710,34 +891,35 @@
       topRoot: snapshot.topTree.root,
       chunks: snapshot.chunks.map(c => ({ startIndex: c.startIndex, endIndex: c.endIndex, count: c.count, root: c.root, leafHashes: c.leafHashes })),
       leaves: snapshot.leaves,
-      txs: snapshot.txs ? snapshot.txs : snapshot.leafJsons.map(l => l.leaf),
+      txs: snapshot.txs
     };
     const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `naluxrp-snapshot-${snapshot.address}-${Date.now()}.json`;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = url; a.download = `naluxrp-snapshot-${snapshot.address}-${Date.now()}.json`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     setStatus('Export complete');
   }
 
-  // clear everything
+  // -------- clear & init --------
   function clearAll() {
     snapshot = null;
-    clearUI();
-    setOverviewHtml('No snapshot');
-    setChunkInfo('Chunks: —');
+    setSummaryHtml('<div style="opacity:.8">Account summary will appear here after snapshot.</div>');
+    setChunkInfoHtml('<div><strong>Chunks:</strong> —</div>');
+    setTxListHtml('');
+    setRaw('');
+    setStatus('Ready');
+    setProgress(-1);
+    $('aiExport').style.display = 'none';
   }
 
-  // initial UI render and expose API
+  // -------- init & expose API --------
   renderPage();
-  window.initInspector = function() { renderPage(); };
+  window.initInspector = () => renderPage();
   window.AccountInspector = {
     buildSnapshot: onBuild,
     getSnapshot: () => snapshot,
     getGlobalProof: (idx) => snapshot ? getGlobalProof(snapshot.chunks, snapshot.topTree, idx) : null,
-    verifyGlobalProof: verifyGlobalProof
+    verifyGlobalProof
   };
 
-  console.log('🛡️ Account Inspector (enhanced) loaded');
+  console.log('🛡️ Account Inspector (full page enhanced) loaded');
 })();
