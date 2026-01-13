@@ -1,20 +1,33 @@
 /* =========================================================
    FILE: js/account-inspector.js
-   NaluXrp — Unified Inspector (Simplified, One Page)
-   - Exposes window.initInspector() for ui.js loader
+   NaluXrp — Unified Inspector (One Page, Simplified)
+   - Issuer list mode (multi-issuer dropdown, cached graphs)
+   - Ledger-only defaults: first N outgoing Payments per node (chronological)
+   - Tree view (top->bottom), per-node modal includes activated_by + first outgoing list
+   - Pattern scan: bursts + split clusters + reconsolidation hubs + dominance + small cycles
+   - Transport: prefers shared WS (window.requestXrpl / window.XRPL.client), falls back to CORS HTTP JSON-RPC
    ========================================================= */
 
 (function () {
+  "use strict";
+
   // ---------------- CONFIG ----------------
   const DEPLOYED_PROXY =
-    typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? window.NALU_DEPLOYED_PROXY : "";
+    typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? String(window.NALU_DEPLOYED_PROXY) : "";
 
-  const XRPL_V2_ACCT = "https://api.xrpl.org/v2/accounts"; // /:addr
-  const XRPL_V2_TXS = "https://api.xrpl.org/v2/accounts"; // /:addr/transactions
+  const RPC_HTTP_ENDPOINTS = [
+    "https://xrplcluster.com/",
+    "https://xrpl.ws/"
+  ];
+
+  const RPC_HTTP_OVERRIDE =
+    typeof window !== "undefined" && window.NALU_RPC_HTTP ? String(window.NALU_RPC_HTTP) : "";
+
   const SHARED_WAIT_MS = 8000;
 
+  // paging / caps
   const PAGE_LIMIT = 200;
-  const MAX_PAGES_TREE_SCAN = 2500; // paging backward for earliest txs (per node)
+  const MAX_PAGES_TREE_SCAN = 2500;
   const MAX_TX_SCAN_PER_NODE = 250000;
 
   const DEFAULT_DEPTH = 2;
@@ -24,8 +37,8 @@
 
   // activation lookup caps
   const ACTIVATION_PAGE_LIMIT = 200;
-  const ACTIVATION_MAX_PAGES = 1500;
-  const ACTIVATION_MAX_TX_SCAN = 300000;
+  const ACTIVATION_MAX_PAGES = 2000;
+  const ACTIVATION_MAX_TX_SCAN = 350000;
 
   // pattern thresholds
   const BURST_HOURLY_MIN_TX = 12;
@@ -42,10 +55,7 @@
   let buildingTree = false;
   let activeIssuer = null;
 
-  // issuer -> graph
-  const issuerRegistry = new Map();
-
-  // caches
+  const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
 
@@ -149,6 +159,7 @@
   // ---------------- TIME HELPERS ----------------
   function safeToIso(x) {
     try {
+      if (x == null) return null;
       if (typeof x === "string") {
         const d = new Date(x);
         if (!Number.isNaN(d.getTime())) return d.toISOString();
@@ -192,7 +203,7 @@
     return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
-  // ---------------- NETWORK ----------------
+  // ---------------- TRANSPORT ----------------
   function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
     return new Promise((resolve) => {
       try {
@@ -216,27 +227,60 @@
     });
   }
 
-  async function tryFetchUrl(url, timeoutMs = 12000) {
+  async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}) {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
-      const resp = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
+
+      const resp = await fetch(url, {
+        method,
+        headers: {
+          Accept: "application/json",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+          ...headers
+        },
+        body: body ? JSON.stringify(body) : null,
+        signal: controller.signal
+      });
+
       clearTimeout(id);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (err) {
-      console.warn("tryFetchUrl failed", url, err && err.message ? err.message : err);
+      console.warn("tryFetchJson failed", url, err && err.message ? err.message : err);
       return null;
     }
   }
 
-  function extractTxArrayFromV2(j) {
-    if (!j) return [];
-    if (Array.isArray(j.transactions)) return j.transactions;
-    if (Array.isArray(j.result?.transactions)) return j.result.transactions;
-    if (Array.isArray(j.result)) return j.result;
-    if (Array.isArray(j.data)) return j.data;
-    return [];
+  function rpcParams(method, paramsObj) {
+    return { method, params: [paramsObj] };
+  }
+
+  async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
+    const endpoints = [];
+
+    if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) endpoints.push(DEPLOYED_PROXY);
+    if (RPC_HTTP_OVERRIDE && RPC_HTTP_OVERRIDE.startsWith("http")) endpoints.push(RPC_HTTP_OVERRIDE);
+    endpoints.push(...RPC_HTTP_ENDPOINTS);
+
+    const body = rpcParams(method, paramsObj);
+
+    for (const base of endpoints) {
+      const url = base.endsWith("/") ? base : base + "/";
+      let attempt = 0;
+
+      while (attempt <= retries) {
+        const j = await tryFetchJson(url, { method: "POST", body, timeoutMs });
+        const r = j?.result;
+
+        if (r && !r.error) return r;
+
+        attempt += 1;
+        if (attempt <= retries) await new Promise((res) => setTimeout(res, 250 * attempt));
+      }
+    }
+
+    return null;
   }
 
   function normalizeTxEntry(entry) {
@@ -244,8 +288,10 @@
     if (!t0) return null;
     return {
       ...t0,
-      ledger_index: Number(t0.ledger_index ?? t0.LedgerIndex ?? 0),
-      _iso: safeToIso(t0.date ?? t0.close_time ?? null)
+      _meta: entry?.meta || t0?.meta || null,
+      hash: t0.hash || entry?.hash || t0?.tx_hash || null,
+      ledger_index: Number(t0.ledger_index ?? t0.LedgerIndex ?? entry?.ledger_index ?? 0),
+      _iso: safeToIso(t0.date ?? t0.close_time ?? entry?.date ?? null)
     };
   }
 
@@ -264,6 +310,7 @@
 
   function withinConstraints(tx, constraints) {
     const l = Number(tx.ledger_index || 0);
+
     if (constraints.ledgerMin != null && l < constraints.ledgerMin) return false;
     if (constraints.ledgerMax != null && l > constraints.ledgerMax) return false;
 
@@ -271,68 +318,57 @@
     if (constraints.endDate && tx._iso && tx._iso > constraints.endDate) return false;
 
     if (constraints.minXrp) {
-      const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx.meta?.delivered_amount ?? null);
+      const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
       if (amt.currency === "XRP" && amt.value < constraints.minXrp) return false;
     }
+
     return true;
   }
 
-  async function fetchAccountTxsPaged(address, { marker, limit }) {
-    if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) {
-      let url = `${DEPLOYED_PROXY.replace(/\/+$/, "")}/accounts/${encodeURIComponent(address)}/transactions?limit=${limit || PAGE_LIMIT}`;
-      if (marker) url += `&marker=${encodeURIComponent(marker)}`;
-      const j = await tryFetchUrl(url, 15000);
-      return { txs: extractTxArrayFromV2(j), marker: j?.marker || j?.result?.marker || null };
-    }
+  async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
+    // Prefer shared WS when available (more reliable for deep history)
+    try {
+      const sharedReady = await waitForSharedConn();
+      if (sharedReady) {
+        const payload = {
+          command: "account_tx",
+          account: address,
+          limit: limit || PAGE_LIMIT,
+          forward: !!forward,
+          ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
+          ledger_index_max: ledgerMax == null ? -1 : ledgerMax
+        };
+        if (marker) payload.marker = marker;
 
-    let url = `${XRPL_V2_TXS}/${encodeURIComponent(address)}/transactions?limit=${limit || PAGE_LIMIT}`;
-    if (marker) url += `&marker=${encodeURIComponent(marker)}`;
-    const j = await tryFetchUrl(url, 15000);
-    return { txs: extractTxArrayFromV2(j), marker: j?.marker || j?.result?.marker || null };
-  }
+        const res =
+          typeof window.requestXrpl === "function"
+            ? await window.requestXrpl(payload, { timeoutMs: 20000 })
+            : window.XRPL?.client?.request
+              ? await window.XRPL.client.request(payload)
+              : null;
 
-  async function collectOutgoingPaymentsEarliest(address, needCount, constraints) {
-    const collected = [];
-    let marker = null;
-    let pages = 0;
-    let scanned = 0;
-
-    while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
-      pages += 1;
-      const { txs, marker: nextMarker } = await fetchAccountTxsPaged(address, { marker, limit: PAGE_LIMIT });
-      if (!txs.length) break;
-
-      scanned += txs.length;
-
-      for (const entry of txs) {
-        const tx = normalizeTxEntry(entry);
-        if (!tx) continue;
-        if (!withinConstraints(tx, constraints)) continue;
-
-        const type = tx.TransactionType || tx.type;
-        if (type !== "Payment") continue;
-
-        const from = tx.Account || tx.account;
-        const to = tx.Destination || tx.destination;
-        if (!from || !to) continue;
-        if (from !== address) continue;
-
-        collected.push(tx);
+        const rr = res?.result || res;
+        const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
+        const nextMarker = rr?.marker || null;
+        return { txs, marker: nextMarker, source: "shared" };
       }
-
-      if (!nextMarker) break;
-      marker = nextMarker;
-
-      if (collected.length >= needCount + 50) break;
-
-      if (pages % 15 === 0) setStatus(`Scanning ${address.slice(0, 6)}… pages:${pages} outgoing:${collected.length}`);
+    } catch (e) {
+      console.warn("shared account_tx failed", e && e.message ? e.message : e);
     }
 
-    const sorted = normalizeAndSortTxs(collected);
-    return {
-      txs: sorted.slice(0, needCount),
-      meta: { pages, scanned, outgoingFound: collected.length, complete: pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE }
-    };
+    // HTTP JSON-RPC fallback
+    const r = await rpcCall("account_tx", {
+      account: address,
+      limit: limit || PAGE_LIMIT,
+      marker: marker || undefined,
+      forward: !!forward,
+      ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
+      ledger_index_max: ledgerMax == null ? -1 : ledgerMax
+    }, { timeoutMs: 20000, retries: 2 });
+
+    const txs = Array.isArray(r?.transactions) ? r.transactions : [];
+    const nextMarker = r?.marker || null;
+    return { txs, marker: nextMarker, source: "http_rpc" };
   }
 
   // ---------------- ACCOUNT INFO ----------------
@@ -372,168 +408,168 @@
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
 
+    // shared WS
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
         if (typeof window.requestXrpl === "function") {
-          const r = await window.requestXrpl({ command: "account_info", account: address }, { timeoutMs: 8000 });
+          const r = await window.requestXrpl({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
           const data = r?.result?.account_data || r?.account_data || null;
           const out = normalizeAccountInfo(data);
           accountInfoCache.set(address, out);
           return out;
         }
         if (window.XRPL?.client?.request) {
-          const r = await window.XRPL.client.request({ command: "account_info", account: address });
+          const r = await window.XRPL.client.request({ command: "account_info", account: address, ledger_index: "validated" });
           const data = r?.result?.account_data || r?.account_data || null;
           const out = normalizeAccountInfo(data);
           accountInfoCache.set(address, out);
           return out;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("shared account_info failed", e && e.message ? e.message : e);
+    }
 
-    const j = await tryFetchUrl(`${XRPL_V2_ACCT}/${encodeURIComponent(address)}`, 12000);
-    const acct = j?.result?.account || j?.account || j?.result || null;
-    const out = normalizeAccountInfo(acct);
+    // HTTP JSON-RPC
+    const res = await rpcCall("account_info", { account: address, ledger_index: "validated" }, { timeoutMs: 15000, retries: 2 });
+    const data = res?.account_data || null;
+    const out = normalizeAccountInfo(data);
     accountInfoCache.set(address, out);
     return out;
   }
 
-  // ---------------- ACTIVATION ----------------
+  // ---------------- ACTIVATION (activated_by) ----------------
   async function getActivatedByStrict(address, constraints) {
     if (!isValidXrpAddress(address)) return { act: null, complete: true, scanned: 0, pages: 0, source: "invalid" };
     if (activationCache.has(address)) return activationCache.get(address);
 
-    const sharedReady = await waitForSharedConn();
-    const canShared = sharedReady && (typeof window.requestXrpl === "function" || window.XRPL?.client?.request);
-
-    if (canShared) {
-      let marker = null;
-      let pages = 0;
-      let scanned = 0;
-
-      try {
-        while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
-          pages += 1;
-
-          const payload = {
-            command: "account_tx",
-            account: address,
-            limit: ACTIVATION_PAGE_LIMIT,
-            forward: true,
-            ledger_index_min: constraints.ledgerMin == null ? -1 : constraints.ledgerMin,
-            ledger_index_max: constraints.ledgerMax == null ? -1 : constraints.ledgerMax
-          };
-          if (marker) payload.marker = marker;
-
-          const res =
-            typeof window.requestXrpl === "function"
-              ? await window.requestXrpl(payload, { timeoutMs: 15000 })
-              : await window.XRPL.client.request(payload);
-
-          const rr = res?.result || res;
-          const entries = rr?.transactions || rr;
-          const list = Array.isArray(entries) ? entries : [];
-          scanned += list.length;
-
-          for (const item of list) {
-            const tx = normalizeTxEntry(item);
-            if (!tx) continue;
-            if (!withinConstraints(tx, constraints)) continue;
-
-            const type = tx.TransactionType || tx.type;
-            if (type !== "Payment") continue;
-
-            const dst = tx.Destination || tx.destination;
-            const src = tx.Account || tx.account;
-            if (dst !== address || !src) continue;
-
-            const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx.meta?.delivered_amount ?? null);
-            const act = {
-              activatedBy: src,
-              date: tx._iso || null,
-              ledger_index: Number(tx.ledger_index || 0),
-              amount: amt.currency === "XRP" ? amt.value : null,
-              currency: amt.currency,
-              tx_hash: String(tx.hash || "")
-            };
-
-            const entry = { act, complete: true, scanned, pages, source: "shared_forward" };
-            activationCache.set(address, entry);
-            return entry;
-          }
-
-          marker = rr?.marker || res?.marker || null;
-          if (!marker) break;
-        }
-
-        const entry = { act: null, complete: marker ? false : true, scanned, pages, source: "shared_forward" };
-        activationCache.set(address, entry);
-        return entry;
-      } catch (e) {
-        console.warn("activation(shared) failed", e && e.message ? e.message : e);
-      }
-    }
+    const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
+    const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
     let marker = null;
     let pages = 0;
     let scanned = 0;
-    const inbound = [];
+    let source = "unknown";
+    let complete = true;
 
-    try {
-      while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
-        pages += 1;
-        const { txs, marker: nextMarker } = await fetchAccountTxsPaged(address, { marker, limit: ACTIVATION_PAGE_LIMIT });
-        if (!txs.length) break;
+    // We want earliest inbound Payment -> address.
+    // Use forward:true to move chronologically.
+    while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
+      pages += 1;
 
-        scanned += txs.length;
+      const resp = await fetchAccountTxPaged(address, {
+        marker,
+        limit: ACTIVATION_PAGE_LIMIT,
+        forward: true,
+        ledgerMin,
+        ledgerMax
+      });
 
-        for (const item of txs) {
-          const tx = normalizeTxEntry(item);
-          if (!tx) continue;
-          if (!withinConstraints(tx, constraints)) continue;
+      source = resp.source || source;
 
-          const type = tx.TransactionType || tx.type;
-          if (type !== "Payment") continue;
-
-          const dst = tx.Destination || tx.destination;
-          const src = tx.Account || tx.account;
-          if (dst !== address || !src) continue;
-
-          inbound.push(tx);
-        }
-
-        if (!nextMarker) break;
-        marker = nextMarker;
+      if (!resp.txs.length) {
+        complete = !resp.marker;
+        break;
       }
 
-      const sorted = normalizeAndSortTxs(inbound);
-      const first = sorted[0] || null;
+      scanned += resp.txs.length;
 
-      if (!first) {
-        const entry = { act: null, complete: marker ? false : true, scanned, pages, source: "http_backward_best_effort" };
+      for (const item of resp.txs) {
+        const tx = normalizeTxEntry(item);
+        if (!tx) continue;
+        if (!withinConstraints(tx, constraints)) continue;
+
+        const type = tx.TransactionType || tx.type;
+        if (type !== "Payment") continue;
+
+        const dst = tx.Destination || tx.destination;
+        const src = tx.Account || tx.account;
+        if (dst !== address || !src) continue;
+
+        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
+        const act = {
+          activatedBy: src,
+          date: tx._iso || null,
+          ledger_index: Number(tx.ledger_index || 0),
+          amount: amt.currency === "XRP" ? amt.value : null,
+          currency: amt.currency,
+          tx_hash: String(tx.hash || "")
+        };
+
+        const entry = { act, complete: true, scanned, pages, source: `activation_${source}` };
         activationCache.set(address, entry);
         return entry;
       }
 
-      const amt = parseAmount(first.Amount ?? first.delivered_amount ?? first.meta?.delivered_amount ?? null);
-      const act = {
-        activatedBy: first.Account || first.account,
-        date: first._iso || null,
-        ledger_index: Number(first.ledger_index || 0),
-        amount: amt.currency === "XRP" ? amt.value : null,
-        currency: amt.currency,
-        tx_hash: String(first.hash || "")
-      };
-      const entry = { act, complete: marker ? false : true, scanned, pages, source: "http_backward_best_effort" };
-      activationCache.set(address, entry);
-      return entry;
-    } catch (e) {
-      console.warn("activation(http) failed", e && e.message ? e.message : e);
-      const entry = { act: null, complete: false, scanned, pages, source: "failed" };
-      activationCache.set(address, entry);
-      return entry;
+      marker = resp.marker;
+      if (!marker) break;
+
+      if (pages % 50 === 0) setStatus(`Activation scan ${address.slice(0, 6)}… pages:${pages}`);
     }
+
+    const entry = { act: null, complete, scanned, pages, source: `activation_${source}` };
+    activationCache.set(address, entry);
+    return entry;
+  }
+
+  // ---------------- TREE DATA (first N outgoing, chronological) ----------------
+  async function collectOutgoingPaymentsEarliest(address, needCount, constraints) {
+    const collected = [];
+    let marker = null;
+    let pages = 0;
+    let scanned = 0;
+
+    const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
+    const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
+
+    while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
+      pages += 1;
+
+      const resp = await fetchAccountTxPaged(address, {
+        marker,
+        limit: PAGE_LIMIT,
+        forward: true,
+        ledgerMin,
+        ledgerMax
+      });
+
+      if (!resp.txs.length) break;
+      scanned += resp.txs.length;
+
+      for (const entry of resp.txs) {
+        const tx = normalizeTxEntry(entry);
+        if (!tx) continue;
+        if (!withinConstraints(tx, constraints)) continue;
+
+        const type = tx.TransactionType || tx.type;
+        if (type !== "Payment") continue;
+
+        const from = tx.Account || tx.account;
+        const to = tx.Destination || tx.destination;
+        if (!from || !to) continue;
+        if (from !== address) continue;
+
+        collected.push(tx);
+      }
+
+      marker = resp.marker;
+      if (!marker) break;
+
+      if (collected.length >= needCount + 50) break;
+      if (pages % 25 === 0) setStatus(`Scanning ${address.slice(0, 6)}… pages:${pages} outgoing:${collected.length}`);
+    }
+
+    const sorted = normalizeAndSortTxs(collected);
+    return {
+      txs: sorted.slice(0, needCount),
+      meta: {
+        pages,
+        scanned,
+        outgoingFound: collected.length,
+        complete: pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE
+      }
+    };
   }
 
   // ---------------- GRAPH ----------------
@@ -542,10 +578,10 @@
       issuer,
       builtAt: null,
       params,
-      nodes: new Map(), // addr -> node
-      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash }
-      adjacency: new Map(), // from -> [edgeIdx]
-      parentChoice: new Map() // child -> parent (tree)
+      nodes: new Map(),      // addr -> node
+      edges: [],             // { from,to,ledger_index,date,amount,currency,tx_hash }
+      adjacency: new Map(),  // from -> [edgeIdx]
+      parentChoice: new Map()// child -> parent (tree)
     };
   }
 
@@ -571,6 +607,7 @@
   function addEdge(g, e) {
     const idx = g.edges.length;
     g.edges.push(e);
+
     if (!g.adjacency.has(e.from)) g.adjacency.set(e.from, []);
     g.adjacency.get(e.from).push(idx);
 
@@ -616,7 +653,7 @@
       const node = g.nodes.get(addr);
       node.outgoingFirst = txs.map((tx) => {
         const to = tx.Destination || tx.destination || null;
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx.meta?.delivered_amount ?? null);
+        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
         return {
           tx_hash: String(tx.hash || ""),
           to,
@@ -636,7 +673,7 @@
         const to = tx.Destination || tx.destination;
         if (!from || !to) continue;
 
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx.meta?.delivered_amount ?? null);
+        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
 
         addEdge(g, {
           from,
@@ -715,6 +752,7 @@
     }
 
     const nodes = Array.from(g.nodes.keys()).slice(0, 1200);
+
     for (const a of nodes) {
       if (cycles.length >= maxOut) break;
       const aN = neigh.get(a) || [];
@@ -752,6 +790,7 @@
         }
       }
     }
+
     return cycles;
   }
 
@@ -767,6 +806,7 @@
 
     const domExamples = [];
     const issuerOut = outBy.get(g.issuer) || [];
+
     {
       const c = new Map();
       for (const e of issuerOut) c.set(e.to, (c.get(e.to) || 0) + 1);
@@ -774,6 +814,7 @@
       const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
       domExamples.push({ scope: "issuer_first_hop", topRecipient: top[0], share: dom, total: issuerOut.length });
     }
+
     for (const [addr, outs] of outBy.entries()) {
       if (!outs.length) continue;
       const cc = new Map();
@@ -785,6 +826,7 @@
         domExamples.push({ scope: "node_dominated_child", node: addr, topChild: top[0], share, outCount: outs.length });
       }
     }
+
     const dominance = {
       summary: [
         `issuer first-hop dominance: ${Math.round((domExamples[0]?.share || 0) * 100)}%`,
@@ -817,6 +859,7 @@
         if (cnt >= BURST_DAILY_MIN_TX) burstExamples.push({ addr, window: "day", bucket: k, txCount: cnt });
       }
     }
+
     burstExamples.sort((a, b) => b.txCount - a.txCount);
     const bursts = {
       summary: [
@@ -853,6 +896,7 @@
         topChildShare: share
       });
     }
+
     hubExamples.sort((a, b) => (b.parentCount - a.parentCount) || (b.inCount - a.inCount));
     const hubs = {
       summary: [`reconsolidation hubs: ${hubExamples.length}`, `top hub parents: ${hubExamples[0]?.parentCount || 0}`],
@@ -911,6 +955,7 @@
         start = Math.max(start + 1, end);
       }
     }
+
     splitExamples.sort((a, b) => b.count - a.count);
     const splits = {
       summary: [
@@ -980,10 +1025,10 @@
     const stored = safeGetStorage(LOCAL_KEY_SELECTED_ISSUER);
     const initial = stored && list.includes(stored) ? stored : list[0];
     sel.value = initial;
-    onIssuerSelected(initial);
+    onIssuerSelected(initial, { autoBuildIfMissing: true });
   }
 
-  function onIssuerSelected(issuer) {
+  function onIssuerSelected(issuer, { autoBuildIfMissing } = { autoBuildIfMissing: false }) {
     if (!issuer || !isValidXrpAddress(issuer)) return;
     activeIssuer = issuer;
     safeSetStorage(LOCAL_KEY_SELECTED_ISSUER, issuer);
@@ -992,9 +1037,16 @@
     if (cached?.builtAt) {
       renderAll(cached);
       setStatus(`Loaded cached tree (${cached.nodes.size} accounts / ${cached.edges.length} edges)`);
-    } else {
-      clearViews();
-      setStatus("Ready");
+      return;
+    }
+
+    clearViews();
+    setStatus("Ready");
+
+    if (autoBuildIfMissing) {
+      const elDepth = $("uiDepth");
+      const elPer = $("uiPerNode");
+      if (elDepth && elPer) buildTreeClicked().catch(() => {});
     }
   }
 
@@ -1017,7 +1069,7 @@
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">Issuer ledger view • tree • patterns</div>
+          <div style="opacity:.85">Issuer tree • activated_by • patterns</div>
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;align-items:start;">
@@ -1026,16 +1078,16 @@
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuers</div>
                 <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
-                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build Tree</button>
+                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
               </div>
 
               <details style="margin-top:10px;">
-                <summary style="cursor:pointer;opacity:.9;">Issuer list (paste / edit)</summary>
+                <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
                 <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
                   <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
                   <div style="display:flex;flex-direction:column;gap:8px;">
                     <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
-                    <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear Cache</button>
+                    <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Cache</button>
                   </div>
                 </div>
               </details>
@@ -1071,13 +1123,13 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuer Tree</div>
-                <input id="uiSearch" placeholder="Search (addr/tx/hash/date/ledger)..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
               </div>
 
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
                 <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
-                <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Find Path</button>
-                <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Pattern Scan</button>
+                <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
+                <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
               </div>
 
               <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
@@ -1094,7 +1146,10 @@
             </div>
 
             <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
-              <div><strong>Edges (filtered)</strong></div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <strong>Edges</strong>
+                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
+              </div>
               <div id="uiEdgeItems" style="margin-top:10px;"></div>
             </div>
           </div>
@@ -1134,10 +1189,11 @@
       setStatus("Cache cleared");
     });
 
-    $("uiBuild").addEventListener("click", buildTreeClicked);
+    $("uiBuild").addEventListener("click", () => buildTreeClicked().catch(() => {}));
     $("uiSearch").addEventListener("input", renderEdgeFilterActive);
     $("uiFindPath").addEventListener("click", findPathClicked);
     $("uiPatterns").addEventListener("click", patternsClicked);
+    $("uiExportGraph").addEventListener("click", exportActiveGraph);
   }
 
   function clearViews() {
@@ -1176,7 +1232,7 @@
           const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
           return `<div style="margin-top:8px;"><strong>Activated by</strong>: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
             amt
-          )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(actEntry.source)})</span> ${txLink}</div>`;
+          )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(actEntry.source)})</span>${txLink}</div>`;
         })()
       : `<div style="margin-top:8px;opacity:.85;"><strong>Activated by</strong>: — <span style="opacity:.7">(${escapeHtml(
           actEntry?.source || "unknown"
@@ -1196,6 +1252,7 @@
     const host = $("uiTree");
     if (!host) return;
 
+    // Determine levels from issuer by BFS within depth.
     const levels = new Map();
     levels.set(g.issuer, 0);
     const qq = [g.issuer];
@@ -1204,6 +1261,7 @@
       const cur = qq.shift();
       const lv = levels.get(cur) ?? 0;
       if (lv >= g.params.depth) continue;
+
       const idxs = g.adjacency.get(cur) || [];
       for (const ei of idxs) {
         const e = g.edges[ei];
@@ -1214,6 +1272,7 @@
       }
     }
 
+    // Build chosen tree children using first-seen parentChoice.
     const children = new Map();
     for (const addr of levels.keys()) children.set(addr, []);
     for (const [child, parent] of g.parentChoice.entries()) {
@@ -1236,14 +1295,9 @@
       }
       const act = entry.act;
       const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
-      const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
-      const txLink = links
-        ? ` • <a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-            <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;">Bithomp</a>`
-        : "";
       return `<div style="opacity:.85;font-size:12px;">activated by: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
         amt
-      )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(entry.source)})</span>${txLink}</div>`;
+      )} • ${escapeHtml(act.date || "—")}</div>`;
     }
 
     function nodeRow(addr) {
@@ -1270,6 +1324,7 @@
       const kids = children.get(addr) || [];
       const sectionId = `uiKids_${addr}`;
       const hasKids = kids.length > 0;
+
       const head = `
         <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);margin-left:${indentPx}px;">
           <div style="display:flex;align-items:flex-start;gap:8px;">
@@ -1283,6 +1338,7 @@
           ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
         </div>
       `;
+
       let html = head;
       if (hasKids) {
         const inner = kids.map((k) => renderRec(k, indentPx + 18)).join("");
@@ -1388,22 +1444,22 @@
             bithomp: actLinks?.bithomp || null
           }
         : null,
+      activation_source: actEntry?.source || null,
+      activation_complete: actEntry?.complete ?? null,
       stats: {
         outCount: n.outCount,
         outXrp: Number(n.outXrp.toFixed(6)),
         inCount: n.inCount,
         inXrp: Number(n.inXrp.toFixed(6))
       },
-      firstOutgoingPayments: outgoing
+      first_outgoing_payments: outgoing
     };
 
     const actionsHtml = `
       <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy tx hashes</button>
       <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
       <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
-      <span style="opacity:.75;font-size:12px;display:flex;align-items:center;margin-left:auto;">${escapeHtml(
-        outgoing.length
-      )} txs</span>
+      <span style="opacity:.75;font-size:12px;display:flex;align-items:center;margin-left:auto;">${escapeHtml(outgoing.length)} txs</span>
     `;
 
     openModal(`Node: ${addr}`, JSON.stringify(bodyObj, null, 2), actionsHtml);
@@ -1415,6 +1471,37 @@
     };
     $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-first-${outgoing.length}-txs.csv`, "text/csv");
     $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
+  }
+
+  // ---------------- EXPORT GRAPH ----------------
+  function exportActiveGraph() {
+    const g = issuerRegistry.get(activeIssuer);
+    if (!g) {
+      setStatus("Build a tree first.");
+      return;
+    }
+
+    const exportObj = {
+      issuer: g.issuer,
+      builtAt: g.builtAt,
+      params: g.params,
+      nodes: Array.from(g.nodes.values()).map((n) => ({
+        address: n.address,
+        level: n.level,
+        outCount: n.outCount,
+        inCount: n.inCount,
+        outXrp: Number(n.outXrp.toFixed(6)),
+        inXrp: Number(n.inXrp.toFixed(6)),
+        domain: n.acctInfo?.domain || null,
+        balanceXrp: n.acctInfo?.balanceXrp ?? null,
+        activated_by: n.activation?.act || null,
+        activation_source: n.activation?.source || null,
+        activation_complete: n.activation?.complete ?? null
+      })),
+      edges: g.edges
+    };
+
+    downloadText(JSON.stringify(exportObj, null, 2), `naluxrp-issuer-tree-${g.issuer}-${Date.now()}.json`, "application/json");
   }
 
   // ---------------- BUTTON HANDLERS ----------------
@@ -1540,9 +1627,11 @@
   window.UnifiedInspector = {
     getIssuerList,
     setIssuerList,
-    buildActive: buildTreeClicked,
-    getGraph: () => issuerRegistry.get(activeIssuer) || null
+    buildActive: () => buildTreeClicked(),
+    getGraph: () => issuerRegistry.get(activeIssuer) || null,
+    exportActiveGraph
   };
 
-  console.log("✅ Account Inspector module ready (initInspector exported)");
+  console.log("✅ Unified Inspector loaded (JSON-RPC fallback enabled)");
 })();
+
