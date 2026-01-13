@@ -5,12 +5,13 @@
    - Account summary: domain, logo (Clearbit), address, activated_by, initial balance
    - Issuer detection heuristic, dominance metrics, pathway flags (fan-out / dominated)
    - Per-tx details and inclusion proofs (leaf->chunk->top)
-   - Uses shared XRPL client (preferred) and public APIs as fallbacks
+   - Uses shared XRPL client (preferred) and can reuse dashboard in-memory txs to avoid CORS/fallbacks
    ========================================= */
 
 (function () {
   // -------- CONFIG --------
-  const DEPLOYED_PROXY = ""; // Optional proxy base URL, e.g. "https://naluxrp-proxy.onrender.com"
+  // Allow runtime override via window.NALU_DEPLOYED_PROXY (useful for ngrok/dev)
+  const DEPLOYED_PROXY = (typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY) ? window.NALU_DEPLOYED_PROXY : "";
   const PUBLIC_TX_API = "https://api.xrpl.org/v2/accounts";
   const PUBLIC_ACCT_API = "https://api.xrpl.org/v2/accounts";
   const MAX_FETCH_PAGES = 200;
@@ -105,6 +106,7 @@
 
             <div style="display:flex;gap:8px;">
               <button id="aiFetch" class="nav-btn" style="padding:10px 14px;border-radius:8px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:700;">Build Snapshot</button>
+              <button id="aiUseDashboard" class="nav-btn" style="padding:10px 14px;border-radius:8px;background:#ffd1a9;border:none;color:#000;">Use Dashboard Data</button>
               <button id="aiClear" class="nav-btn" style="padding:10px 14px;border-radius:8px;background:#ffb86c;border:none;color:#000;">Clear</button>
               <button id="aiExport" class="nav-btn" style="padding:10px 14px;border-radius:8px;background:#50a8ff;border:none;color:#000;display:none;">Export Snapshot</button>
             </div>
@@ -144,6 +146,7 @@
 
     // wire controls
     $("aiFetch").addEventListener("click", onBuild);
+    $("aiUseDashboard").addEventListener("click", handleUseDashboard);
     $("aiClear").addEventListener("click", () => { clearAll(); setStatus("Ready"); });
     $("aiExport").addEventListener("click", exportSnapshot);
     $("aiModalClose").addEventListener("click", () => { $("aiModalOverlay").style.display = "none"; });
@@ -232,7 +235,7 @@
     return { leaf, leafHash, json, raw: t };
   }
 
-  // -------- Merkle helpers (as implemented previously) --------
+  // -------- Merkle helpers --------
   async function buildMerkleTreeAsync(leafHexes) {
     if (!leafHexes || !leafHexes.length) return { root: null, layers: [] };
     let layer = leafHexes.slice();
@@ -357,7 +360,7 @@
     return null;
   }
 
-  // fetch transactions - prefer shared client, proxy, then public APIs (same as previous)
+  // fetch transactions - prefer shared client, proxy, then public APIs
   async function fetchAccountTxs(address, startIso, endIso, maxTxsCap = MAX_TXS_DEFAULT) {
     setStatus('Resolving data source...');
     const collected = [];
@@ -564,9 +567,7 @@
     };
   }
 
-  // Attempt to find activation event (earliest incoming Payment in provided transactions)
   function findActivationInTxs(inspectedAddress, txLeafJsons) {
-    // find earliest (min ledger) tx where type Payment and destination equals inspectedAddress
     const incoming = txLeafJsons.filter(x => x.leaf.type === 'Payment' && x.leaf.counterparty === inspectedAddress);
     if (!incoming.length) return null;
     const earliest = incoming.reduce((a,b) => ( (a.leaf.ledger_index || 1e12) < (b.leaf.ledger_index || 1e12) ? a : b ));
@@ -578,7 +579,6 @@
     try {
       if (!hex) return null;
       if (typeof hex !== 'string') return String(hex);
-      // Domain in AccountRoot is hex, but can be empty
       const clean = hex.replace(/^0x/i, '');
       let str = '';
       for (let i = 0; i < clean.length; i += 2) {
@@ -593,7 +593,6 @@
   }
 
   async function getAccountSummary(address, txLeafJsons) {
-    // fetch account_info for domain and balance
     let info = null;
     try { info = await fetchAccountInfo(address); } catch (e) { console.warn('account_info failed', e); }
     let domain = null;
@@ -601,12 +600,9 @@
     let sequence = null;
     let ownerCount = null;
     if (info) {
-      // xrpl.org v2 returns different shapes; try to find domain field
       domain = info.domain ? (typeof info.domain === 'string' ? info.domain : hexToAscii(info.domain)) : (hexToAscii(info.Domain) || null);
-      // balance: AccountRoot may include Balance in drops
       const balVal = info.balance || info.Balance || (info.account && info.account.balance);
       if (balVal != null) {
-        // if returned in drops (string) convert to XRP if big number like "1000000"
         const asNum = Number(balVal);
         balance = Number.isFinite(asNum) ? (asNum > 10000 ? (asNum / 1_000_000) : asNum) : String(balVal);
       } else if (info.account && info.account.xrp_balance) {
@@ -616,18 +612,12 @@
       ownerCount = info.OwnerCount || info.owner_count || info.account?.owner_count || null;
     }
 
-    // logo via clearbit (best-effort)
     let logoUrl = null;
     if (domain) {
-      try {
-        // Clearbit logo service uses domain
-        logoUrl = `https://logo.clearbit.com/${domain}`;
-      } catch (e) { logoUrl = null; }
+      try { logoUrl = `https://logo.clearbit.com/${domain}`; } catch (e) { logoUrl = null; }
     }
 
-    // Activation attempt from txs
     const activation = findActivationInTxs(address, txLeafJsons);
-    // issuer heuristic & dominance
     const analysis = analyzeSnapshotBasic(address, txLeafJsons);
 
     return {
@@ -643,11 +633,9 @@
 
   // fetch account_info wrapper (shared + xrpl.org)
   async function fetchAccountInfo(address) {
-    // shared client first
     try {
       if (typeof window.requestXrpl === 'function') {
         const r = await window.requestXrpl({ command: 'account_info', account: address }, { timeoutMs: 8000 });
-        // rippled returns result.account_data
         const data = r.result?.account_data || r.account_data || r;
         return data;
       } else if (window.XRPL && window.XRPL.client && typeof window.XRPL.client.request === 'function') {
@@ -657,11 +645,9 @@
     } catch (e) {
       console.warn('shared account_info failed', e && e.message ? e.message : e);
     }
-    // fallback to xrpl.org v2
     try {
       const url = `${PUBLIC_ACCT_API}/${encodeURIComponent(address)}`;
       const j = await tryFetchUrl(url, 8000);
-      // xrpl.org v2 returns result.account
       return j.result?.account || j.account || j;
     } catch (e) {
       console.warn('xrpl.org account fetch failed', e && e.message ? e.message : e);
@@ -669,7 +655,159 @@
     return null;
   }
 
-  // -------- Build and render snapshot flow --------
+  // -------- Use Dashboard Data integration --------
+  function getTransactionsFromDashboard() {
+    try {
+      // Prefer the XRPL module's recentTransactions
+      const xr = window.XRPL?.state?.recentTransactions;
+      if (Array.isArray(xr) && xr.length) return xr.slice().reverse(); // oldest-first if possible
+
+      // Dashboard recentTransactions field
+      if (window.NaluDashboard && Array.isArray(window.NaluDashboard.recentTransactions) && window.NaluDashboard.recentTransactions.length) {
+        return window.NaluDashboard.recentTransactions.slice().reverse();
+      }
+
+      // Dashboard module's replayHistory (flatten txs is not guaranteed; fallback)
+      if (window.NaluDashboard && Array.isArray(window.NaluDashboard.replayHistory) && window.NaluDashboard.replayHistory.length) {
+        // replayHistory contains ledger summaries; not ideal. Return empty to indicate not found.
+        return null;
+      }
+
+      // fallback global stores
+      if (Array.isArray(window.replayHistory) && window.replayHistory.length) return window.replayHistory.slice();
+
+      return null;
+    } catch (e) {
+      console.warn("getTransactionsFromDashboard error", e);
+      return null;
+    }
+  }
+
+  async function handleUseDashboard() {
+    setStatus("Importing dashboard transactions...");
+    setProgress(0);
+    const imported = getTransactionsFromDashboard();
+    if (!imported || !imported.length) {
+      setStatus("No dashboard transactions found. Ensure the dashboard is running and has recent txs.");
+      setProgress(-1);
+      return;
+    }
+
+    const maxT = Number(($('aiMaxT') || {}).value || MAX_TXS_DEFAULT);
+    const sliced = imported.slice(0, maxT);
+
+    // infer or use provided address
+    let addr = ($('aiAddress') || {}).value?.trim();
+    if (!addr || !/^r[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(addr)) {
+      const counts = {};
+      for (const tx of sliced) {
+        const a = tx.Account || tx.account; if (a) counts[a] = (counts[a]||0)+1;
+        const d = tx.Destination || tx.destination; if (d) counts[d] = (counts[d]||0)+1;
+      }
+      const most = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+      if (most && most[0]) {
+        addr = most[0];
+        ($('aiAddress') || {}).value = addr;
+        setStatus(`Guessed inspected address: ${addr}`);
+      } else {
+        setStatus("Unable to infer inspected address — paste an r... address into the input.");
+        setProgress(-1);
+        return;
+      }
+    }
+
+    // apply filters
+    const types = Array.from(($('aiTypes') || {}).querySelectorAll('input[type=checkbox]:checked')).map(i=>i.value);
+    const dir = ($('aiDirection') || {}).value || 'both';
+    const minAmt = Number(($('aiMinAmt') || {}).value || 0);
+
+    const filtered = [];
+    for (const tRaw of sliced) {
+      const t = tRaw.tx || tRaw.transaction || tRaw;
+      if (!t) continue;
+      const txType = t.TransactionType || t.type || '';
+      if (types.length && !types.includes(txType)) continue;
+
+      const acc = t.Account || t.account; const dst = t.Destination || t.destination;
+      let direction = 'other';
+      if (acc && dst) {
+        if (acc === addr && dst === addr) direction = 'self';
+        else if (acc === addr) direction = 'out';
+        else if (dst === addr) direction = 'in';
+      } else if (acc && acc === addr) direction = 'out';
+      else if (dst && dst === addr) direction = 'in';
+      if (dir !== 'both' && direction !== dir) continue;
+
+      const rawAmount = t.Amount ?? t.delivered_amount ?? null;
+      const amt = parseAmount(rawAmount).value || 0;
+      if (minAmt > 0 && amt < minAmt) continue;
+
+      filtered.push(t);
+      if (filtered.length >= maxT) break;
+    }
+
+    if (!filtered.length) {
+      setStatus("No dashboard transactions remain after filters.");
+      setProgress(-1);
+      return;
+    }
+
+    setStatus(`Building snapshot from ${filtered.length} imported txs...`);
+    const chunkMode = ($('aiChunkMode') || {}).value || 'auto';
+    const strategy = (chunkMode === 'auto' ? ( ($('aiStart')?.value && $('aiEnd')?.value) ? 'per-day' : 'fixed' ) : chunkMode);
+    const chunkSize = Number(($('aiChunkSize') || {}).value || 500);
+
+    const { leaves, leafJsons, chunks, topTree } = await buildChunkedSnapshot(filtered, strategy, chunkSize, addr);
+
+    snapshot = {
+      schemaVersion: SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      mode: strategy,
+      chunkSize,
+      address: addr,
+      dateRange: { start: ($('aiStart')||{}).value || null, end: ($('aiEnd')||{}).value || null },
+      txCount: filtered.length,
+      leaves,
+      leafJsons,
+      chunks,
+      topTree,
+      txs: filtered
+    };
+
+    const summary = await getAccountSummary(addr, snapshot.leafJsons);
+    renderSummaryUI(snapshot, summary);
+
+    // Build tx list and proof buttons
+    const txHtml = snapshot.leafJsons.map((l, idx) => {
+      const h = snapshot.leaves[idx];
+      const short = h.slice(0,10) + '…' + h.slice(-6);
+      return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.04);display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:13px;">
+          <div><strong>#${idx}</strong> <code style="font-family:monospace;">${short}</code></div>
+          <div style="font-size:12px;opacity:.8;">${escapeHtml(String(l.leaf.type || ''))} • ${escapeHtml(String(l.leaf.date || ''))}</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button data-idx="${idx}" class="ai-btn-show" style="padding:6px 8px;border-radius:6px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">Details</button>
+          <button data-idx="${idx}" class="ai-btn-proof" style="padding:6px 8px;border-radius:6px;border:none;background:linear-gradient(135deg,#ffd166,#ffb86c);cursor:pointer;">Proof</button>
+        </div>
+      </div>`;
+    }).join('');
+    setTxListHtml(txHtml);
+    setRaw(JSON.stringify({ topRoot: snapshot.topTree.root, chunks: snapshot.chunks.map(c => ({ start: c.startIndex, end: c.endIndex, root: c.root })) }, null, 2));
+
+    Array.from(document.querySelectorAll('.ai-btn-show')).forEach(btn => btn.addEventListener('click', (e) => {
+      const idx = Number(btn.getAttribute('data-idx')); showTxDetails(idx);
+    }));
+    Array.from(document.querySelectorAll('.ai-btn-proof')).forEach(btn => btn.addEventListener('click', async (e) => {
+      const idx = Number(btn.getAttribute('data-idx')); await showProofForIndex(idx);
+    }));
+
+    $('aiExport').style.display = 'inline-block';
+    setStatus('Snapshot built from dashboard data');
+    setProgress(-1);
+  }
+
+  // -------- Build and render snapshot flow (from remote or shared client) --------
   async function onBuild() {
     if (building) return;
     building = true;
@@ -698,10 +836,8 @@
         const t = r.tx || r.transaction || r;
         const txType = t.TransactionType || t.type || '';
         if (types.length && !types.includes(txType)) {
-          // if checkboxes filtered out this type, skip
           if (!types.includes(txType)) continue;
         }
-        // direction filter
         const acc = t.Account || t.account;
         const dst = t.Destination || t.destination;
         let direction = 'other';
@@ -713,7 +849,6 @@
         else if (dst && dst === addr) direction = 'in';
         if (dir !== 'both' && direction !== dir) continue;
 
-        // min amount filter (XRP)
         const rawAmount = t.Amount ?? t.delivered_amount ?? null;
         const amt = parseAmount(rawAmount).value || 0;
         if (minAmt > 0 && amt < minAmt) continue;
