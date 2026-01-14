@@ -74,6 +74,13 @@
 
     // Inspector page: full-page account inspector
     inspector: () => {
+      // Nudge XRPL connection so inspector can behave like dashboard (ledger-first)
+      try {
+        if (typeof window.connectXRPL === "function" && !(window.XRPL && window.XRPL.connected)) {
+          window.connectXRPL();
+        }
+      } catch (_) {}
+
       // If inspector module already loaded, initialize it
       if (typeof window.initInspector === "function") {
         try {
@@ -100,12 +107,23 @@
       // Show a loading placeholder while we fetch the module
       el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Loading module…</p></div>`;
 
-      // Lazy-load the inspector script (relative path works with GitHub Pages repo subpaths)
+      // Base path helper (GitHub Pages safe, e.g. /NaluXRP/)
+      const basePath = (function () {
+        const p = window.location.pathname || "/";
+        // if ends with /, use as-is; else strip file name
+        return p.endsWith("/") ? p : p.replace(/\/[^\/]*$/, "/");
+      })();
+
+      // IMPORTANT:
+      // - DO NOT use raw.githubusercontent.com as <script> fallback (blocked by nosniff/mime)
+      // - Use jsDelivr as CDN fallback instead
       const scriptSrcCandidates = [
+        // relative (works in most deploys)
         "js/account-inspector.js",
-        "/js/account-inspector.js",
-        `${window.location.origin}/js/account-inspector.js`,
-        `https://raw.githubusercontent.com/808CryptoBeast/NaluXRP/main/js/account-inspector.js`
+        // GitHub Pages safe absolute (origin + basePath)
+        `${window.location.origin}${basePath}js/account-inspector.js`,
+        // jsDelivr fallback (works as executable JS)
+        "https://cdn.jsdelivr.net/gh/808CryptoBeast/NaluXRP@main/js/account-inspector.js",
       ];
 
       // attempt to load candidates in order until one succeeds
@@ -113,6 +131,7 @@
         for (const src of scriptSrcCandidates) {
           try {
             await loadScriptOnce(src);
+
             // give the module a moment to register its init function
             if (typeof window.initInspector === "function") {
               try {
@@ -123,7 +142,6 @@
                 break;
               }
             } else {
-              // small pause to allow script to run
               await new Promise((r) => setTimeout(r, 120));
               if (typeof window.initInspector === "function") {
                 try {
@@ -136,16 +154,15 @@
               }
             }
           } catch (e) {
-            // try next candidate
             console.warn("Failed to load inspector script from", src, e && e.message ? e.message : e);
             continue;
           }
         }
-        // if we reach here, loading failed
+
         console.error("Failed to load account-inspector.js from any candidate");
         el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Failed to load module. Please ensure <code>js/account-inspector.js</code> is deployed.</p></div>`;
       })();
-    }
+    },
   };
 
   /* -----------------------------
@@ -157,7 +174,6 @@
       const stub = document.createElement("section");
       stub.id = pageId;
       stub.className = "page-section";
-      // try to insert into main container if present, before footer
       const main = document.getElementById("main") || document.getElementById("dashboard")?.parentElement || document.body;
       main.appendChild(stub);
     }
@@ -411,25 +427,58 @@
   }
 
   /* -----------------------------
-     SCRIPT LOADER (used by PAGE_INIT_MAP inspector)
-     Attempts to load a script once (resolves when loaded)
+     SCRIPT LOADER
+     Loads a script once, safely across relative/absolute URLs.
   ----------------------------- */
+  function canonicalUrl(src) {
+    try {
+      return new URL(src, document.baseURI).href;
+    } catch (_) {
+      return src;
+    }
+  }
+
   function loadScriptOnce(src) {
     return new Promise((resolve, reject) => {
+      const canon = canonicalUrl(src);
+
       // already present?
-      const already = Array.from(document.scripts).find(s => s.src && (s.src.indexOf(src) !== -1 || s.getAttribute('data-src') === src));
+      const already = Array.from(document.scripts).find((s) => s.src && canonicalUrl(s.src) === canon);
       if (already) {
-        if (already.getAttribute('data-loaded') === 'true') return resolve();
-        already.addEventListener('load', () => resolve());
-        already.addEventListener('error', (e) => reject(e));
+        // if it already loaded, resolve immediately
+        if (already.getAttribute("data-loaded") === "true") return resolve();
+
+        // otherwise wait for it
+        const onLoad = () => {
+          already.setAttribute("data-loaded", "true");
+          cleanup();
+          resolve();
+        };
+        const onErr = (e) => {
+          cleanup();
+          reject(e instanceof Error ? e : new Error("Failed to load " + src));
+        };
+        const cleanup = () => {
+          already.removeEventListener("load", onLoad);
+          already.removeEventListener("error", onErr);
+        };
+
+        already.addEventListener("load", onLoad);
+        already.addEventListener("error", onErr);
         return;
       }
-      const s = document.createElement('script');
-      s.setAttribute('data-src', src);
-      s.src = src;
+
+      const s = document.createElement("script");
+      s.src = canon;
       s.async = true;
-      s.onload = () => { s.setAttribute('data-loaded', 'true'); resolve(); };
-      s.onerror = (e) => { s.remove(); reject(new Error('Failed to load ' + src)); };
+      s.onload = () => {
+        s.setAttribute("data-loaded", "true");
+        resolve();
+      };
+      s.onerror = () => {
+        s.remove();
+        reject(new Error("Failed to load " + src));
+      };
       document.head.appendChild(s);
     });
   }
