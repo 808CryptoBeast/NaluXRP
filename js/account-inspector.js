@@ -2,10 +2,10 @@
    FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (One Page, Data-First)
    - Issuer list mode (dropdown, cached graphs)
-   - Ledger-only defaults: first N outgoing txs from issuer (ALL types)
+   - Ledger-only defaults: MOST RECENT N outgoing txs from issuer (ALL types)
    - Tree edges derived from txs with counterparties (Payment / TrustSet / OfferCreate issuers)
    - Node inspector: activated_by + acct info + first outgoing list (UI, not raw JSON)
-   - Transport: shared WS preferred, HTTP JSON-RPC fallback (robust response parsing)
+   - Transport: shared WS preferred (window.requestXrpl), HTTP JSON-RPC fallback (proxy-friendly)
    ========================================================= */
 
 (function () {
@@ -16,6 +16,7 @@
     typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? String(window.NALU_DEPLOYED_PROXY) : "";
 
   // Prefer known working JSON-RPC endpoints (set window.NALU_RPC_HTTP to override)
+  // NOTE: Many public endpoints will fail CORS on GitHub pages unless you use a proxy.
   const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
 
   const RPC_HTTP_OVERRIDE =
@@ -45,7 +46,7 @@
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.0.0";
+  const MODULE_VERSION = "unified-inspector@2.0.1";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -199,17 +200,23 @@
     }
     if (typeof amount === "object" && amount.value != null) {
       const v = Number(amount.value);
-      return { value: Number.isFinite(v) ? v : 0, currency: amount.currency || "XRP", issuer: amount.issuer || null, raw: amount };
+      return {
+        value: Number.isFinite(v) ? v : 0,
+        currency: amount.currency || "XRP",
+        issuer: amount.issuer || null,
+        raw: amount
+      };
     }
     if (typeof amount === "number") return { value: amount, currency: "XRP", issuer: null, raw: amount };
     return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
   // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
+  // IMPORTANT: "requestXrpl exists" != "WS connected"
   function computeSharedConnected() {
-    if (typeof window.requestXrpl === "function") return true;
+    // Real connected state should come from XRPL connection module
     if (window.XRPL?.connected) return true;
-    if (window.XRPL?.client && window.XRPL?.client?.isConnected?.()) return true;
+    if (window.XRPL?.client && typeof window.XRPL.client.isConnected === "function" && window.XRPL.client.isConnected()) return true;
     return false;
   }
 
@@ -241,6 +248,13 @@
   }
 
   async function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
+    // kick connection attempt if possible
+    try {
+      if (!computeSharedConnected()) {
+        if (typeof window.connectXRPL === "function") window.connectXRPL();
+      }
+    } catch (_) {}
+
     return new Promise((resolve) => {
       try {
         if (computeSharedConnected()) return resolve(true);
@@ -271,14 +285,14 @@
     transportState.lastSharedReconnectAttemptAt = now;
 
     try {
-      if (typeof window.XRPL?.connect === "function") {
-        window.XRPL.connect();
+      if (typeof window.reconnectXRPL === "function") {
+        window.reconnectXRPL();
         transportState.lastError = reason || "reconnect requested";
-      } else if (typeof window.initXrplConnection === "function") {
-        window.initXrplConnection();
-        transportState.lastError = reason || "reconnect requested";
+      } else if (typeof window.connectXRPL === "function") {
+        window.connectXRPL();
+        transportState.lastError = reason || "connect requested";
       } else {
-        transportState.lastError = reason || "ws unavailable";
+        transportState.lastError = reason || "ws module missing";
       }
     } catch (e) {
       transportState.lastError = e?.message ? e.message : String(e);
@@ -316,13 +330,8 @@
   }
 
   function unwrapRpcResult(json) {
-    // Handles shapes:
-    // 1) { result: { ... } }
-    // 2) { result: { result: { ... }, status:"success" } }
-    // 3) { status:"success", result:{...} } (rare)
     const r = json?.result;
     if (!r) return null;
-
     if (r.error) return null;
     if (r.status === "success" && r.result && typeof r.result === "object") return r.result;
     return r;
@@ -401,7 +410,7 @@
   }
 
   async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
-    // Prefer shared WS
+    // Prefer shared WS (only if actually connected)
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
@@ -482,7 +491,11 @@
     if (!info || typeof info !== "object") return null;
 
     const dom = info.Domain || info.domain || null;
-    const domain = dom ? (String(dom).startsWith("http") ? String(dom) : (hexToAscii(dom) || String(dom))) : null;
+    const domain = dom
+      ? String(dom).startsWith("http")
+        ? String(dom)
+        : (hexToAscii(dom) || String(dom))
+      : null;
 
     const balDrops = info.Balance ?? info.balance ?? null;
     const balanceXrp = balDrops != null && Number.isFinite(Number(balDrops)) ? Number(balDrops) / 1_000_000 : null;
@@ -499,7 +512,7 @@
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
 
-    // Shared first
+    // Shared first (only if WS connected)
     try {
       const sharedReady = await waitForSharedConn();
       if (sharedReady) {
@@ -511,10 +524,12 @@
               ? await window.XRPL.client.request(payload)
               : null;
 
-        const data = r?.result?.account_data || r?.account_data || r?.account_data || null;
+        const data = r?.result?.account_data || r?.account_data || null;
         const out = normalizeAccountInfo(data);
         accountInfoCache.set(address, out);
         setTransportLastSource("shared_ws");
+        transportState.lastError = null;
+        updateConnBadge();
         return out;
       }
       attemptSharedReconnect("ws offline");
@@ -552,7 +567,7 @@
       const resp = await fetchAccountTxPaged(address, {
         marker,
         limit: ACTIVATION_PAGE_LIMIT,
-        forward: true,
+        forward: true, // activation is earliest inbound
         ledgerMin,
         ledgerMax
       });
@@ -606,14 +621,12 @@
   function extractCounterparty(tx) {
     const type = tx.TransactionType || tx.type || "Unknown";
 
-    // Payment => Destination
     if (type === "Payment") {
       const to = tx.Destination || tx.destination || null;
       if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
       return null;
     }
 
-    // TrustSet => LimitAmount.issuer
     if (type === "TrustSet") {
       const lim = tx.LimitAmount || tx.limit_amount || null;
       const issuer = lim && typeof lim === "object" ? lim.issuer : null;
@@ -621,8 +634,6 @@
       return null;
     }
 
-    // OfferCreate => if either side is issued currency, use issuer as "counterparty-ish"
-    // This is not a real peer, but useful to map gateway/issuer relationships.
     if (type === "OfferCreate") {
       const a = tx.TakerGets || tx.taker_gets || null;
       const b = tx.TakerPays || tx.taker_pays || null;
@@ -638,8 +649,8 @@
     return null;
   }
 
-  // ---------------- OUTGOING COLLECTION (ALL TYPES) ----------------
-  async function collectOutgoingTxsEarliest(address, needCount, constraints) {
+  // ---------------- OUTGOING COLLECTION (MOST RECENT N, ALL TYPES) ----------------
+  async function collectOutgoingTxsRecent(address, needCount, constraints) {
     const collected = [];
     let marker = null;
     let pages = 0;
@@ -648,13 +659,14 @@
     const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
     const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
+    // account_tx returns newest-first by default when forward=false
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
 
       const resp = await fetchAccountTxPaged(address, {
         marker,
         limit: PAGE_LIMIT,
-        forward: true,
+        forward: false, // MOST RECENT
         ledgerMin,
         ledgerMax
       });
@@ -671,19 +683,23 @@
         if (from !== address) continue;
 
         collected.push(tx);
-        if (collected.length >= needCount + 50) break;
+        if (collected.length >= needCount) break;
       }
 
-      if (collected.length >= needCount + 50) break;
+      if (collected.length >= needCount) break;
 
       marker = resp.marker;
       if (!marker) break;
 
-      if (pages % 25 === 0) setStatus(`Scanning ${address.slice(0, 6)}… pages:${pages} outgoing:${collected.length}`);
+      if (pages % 10 === 0) {
+        setStatus(`Scanning recent outgoing for ${address.slice(0, 6)}… pages:${pages} found:${collected.length}`);
+      }
     }
 
-    const sorted = normalizeAndSortTxs(collected);
-    const picked = sorted.slice(0, needCount);
+    // We want the most recent N but displayed chronologically.
+    // collected is roughly newest-first; we normalize+sort ascending then take the last N.
+    const sortedAsc = normalizeAndSortTxs(collected);
+    const picked = sortedAsc.slice(Math.max(0, sortedAsc.length - needCount));
 
     return {
       txs: picked,
@@ -697,10 +713,10 @@
       issuer,
       builtAt: null,
       params,
-      nodes: new Map(), // addr -> node
-      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash,type,kind }
-      adjacency: new Map(), // from -> [edgeIdx]
-      parentChoice: new Map() // child -> parent (tree)
+      nodes: new Map(),
+      edges: [],
+      adjacency: new Map(),
+      parentChoice: new Map()
     };
   }
 
@@ -715,7 +731,7 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: [] // first N outgoing txs (ALL types)
+        outgoingFirst: []
       });
     } else {
       const n = g.nodes.get(addr);
@@ -749,6 +765,7 @@
 
     ensureNode(g, g.issuer, 0);
 
+    setStatus("Loading issuer info…");
     g.nodes.get(g.issuer).acctInfo = await fetchAccountInfo(g.issuer);
     g.nodes.get(g.issuer).activation = await getActivatedByStrict(g.issuer, constraints);
 
@@ -767,7 +784,8 @@
       if (g.nodes.size >= maxAccounts) break;
       if (g.edges.length >= maxEdges) break;
 
-      const res = await collectOutgoingTxsEarliest(addr, perNode, constraints);
+      // MOST RECENT outgoing default (fixes "0 outgoing" for many issuers)
+      const res = await collectOutgoingTxsRecent(addr, perNode, constraints);
       const txs = res.txs;
 
       const node = g.nodes.get(addr);
@@ -819,6 +837,7 @@
           seen.add(to);
           ensureNode(g, to, level + 1);
 
+          // fetch node enrichments
           g.nodes.get(to).acctInfo = await fetchAccountInfo(to);
           g.nodes.get(to).activation = await getActivatedByStrict(to, constraints);
 
@@ -873,14 +892,12 @@
       inBy.get(e.to).push(e);
     }
 
-    // issuer first-hop dominance
     const issuerOut = outBy.get(g.issuer) || [];
     const counts = new Map();
     for (const e of issuerOut) counts.set(e.to, (counts.get(e.to) || 0) + 1);
     const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
     const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
 
-    // reconsolidation hubs: many parents -> one hub -> few children
     const hubs = [];
     for (const addr of g.nodes.keys()) {
       const ins = inBy.get(addr) || [];
@@ -941,6 +958,8 @@
   function hydrateIssuerSelect() {
     const list = getIssuerList();
     const sel = $("uiIssuerSelect");
+    if (!sel) return;
+
     sel.innerHTML = "";
 
     if (!list.length) {
@@ -1001,7 +1020,7 @@
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">issuer tree • activated_by • first N outgoing (ledger-only)</div>
+          <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-only)</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
           <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
@@ -1118,7 +1137,8 @@
     setInterval(updateConnBadge, 1500);
 
     const list = getIssuerList();
-    $("uiIssuerList").value = list.join("\n");
+    const listBox = $("uiIssuerList");
+    if (listBox) listBox.value = list.join("\n");
     hydrateIssuerSelect();
 
     $("uiIssuerSelect").addEventListener("change", () => onIssuerSelected($("uiIssuerSelect").value));
@@ -1259,7 +1279,7 @@
             <div style="opacity:.75;font-size:12px;margin-top:4px;">
               edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
               edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-              first-outgoing:${escapeHtml(firstN)}
+              recent-outgoing:${escapeHtml(firstN)}
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
@@ -1340,7 +1360,7 @@
             <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
           </div>`;
         })
-        .join("") || `<div style="opacity:.7">No edges (this account may not have Payment/TrustSet/OfferCreate issuers in first N).</div>`;
+        .join("") || `<div style="opacity:.7">No edges (try increasing per-node or removing filters).</div>`;
   }
 
   function renderEdgeFilterActive() {
@@ -1375,8 +1395,7 @@
           Number(x.ledger_index || 0),
           `"${String(x.date || "").replace(/"/g, '""')}"`,
           Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
-          `"${String(x.currency || "").replace(/"/g, '""')}"`
-        ].join(",")
+          `"${String(x.currency || "").replace(/"/g, '""')}"` ].join(",")
       )
     ].join("\n");
 
@@ -1452,21 +1471,21 @@
             <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
           </div>
           <div style="margin-top:10px;opacity:.85;font-size:12px;">
-            first outgoing txs loaded: <strong>${escapeHtml(outgoing.length)}</strong>
+            outgoing txs loaded: <strong>${escapeHtml(outgoing.length)}</strong>
           </div>
           <div style="margin-top:6px;opacity:.75;font-size:12px;">
-            note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
+            edges created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
           </div>
         </div>
       </div>
 
       <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <div style="font-weight:900;">First outgoing transactions</div>
+          <div style="font-weight:900;">Recent outgoing transactions</div>
           <div style="opacity:.75;font-size:12px;">(chronological)</div>
         </div>
         <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-          ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
+          ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found. Remove date/ledger filters or increase per-node.</div>`}
         </div>
       </div>
     `;
@@ -1478,7 +1497,7 @@
       $("uiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
       setTimeout(() => ($("uiCopyHashes").textContent = "Copy hashes"), 1200);
     };
-    $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-first-${outgoing.length}-txs.csv`, "text/csv");
+    $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-outgoing-${outgoing.length}.csv`, "text/csv");
     $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
     $("uiShowRaw").onclick = () => {
       const rawObj = { address: addr, node: n };
@@ -1522,7 +1541,7 @@
 
   // ---------------- BUTTON HANDLERS ----------------
   async function buildTreeClicked() {
-    const issuer = $("uiIssuerSelect").value;
+    const issuer = $("uiIssuerSelect")?.value;
     if (!issuer || !isValidXrpAddress(issuer)) {
       setStatus("Pick a valid issuer.");
       return;
@@ -1552,6 +1571,9 @@
 
       const g = makeGraph(issuer, { depth, perNode, maxAccounts, maxEdges, constraints });
       clearViews();
+
+      // Ensure WS attempt starts early
+      if (!computeSharedConnected()) attemptSharedReconnect("build start");
 
       await buildIssuerTree(g);
 
