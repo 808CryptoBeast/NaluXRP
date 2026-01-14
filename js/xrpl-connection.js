@@ -9,6 +9,10 @@
    - Safe request wrapper with hard timeouts (prevents hangs)
    - server_info treated as non-fatal; fallback to ledger_current where possible
    - requestXrpl wrapper hardened + optional HTTP JSON-RPC fallback
+
+   PATCH NOTES (IMPORTANT):
+   - FIXED: attemptConnection() used `const info` then reassigned -> crash -> perpetual disconnects
+   - requestXrpl returns a consistent shape from WS (xrpl.js) and HTTP fallback ({ result: ... })
    ========================================= */
 
 (function () {
@@ -21,7 +25,7 @@
     connecting: false,
     server: null,
     reconnectAttempts: 0,
-    maxReconnectAttempts: 999, // Never give up!
+    maxReconnectAttempts: 999,
     lastLedgerTime: Date.now(),
     lastLedgerIndex: 0,
     lastCloseTimeSec: null,
@@ -48,10 +52,8 @@
       feeHistory: [],
       ledgerHistory: [],
       txCountHistory: [],
-
-      // 🔥 Deep analytics extras
-      recentTransactions: [], // normalized per-tx window
-      recentLedgers: [] // small ledger summary history
+      recentTransactions: [],
+      recentLedgers: []
     },
     mode: "connecting",
     modeReason: "Initializing",
@@ -66,7 +68,7 @@
   };
 
   // -------------------- CONSTANTS --------------------
-  const RAW_TX_WINDOW_SIZE = 800; // recent tx kept for analytics
+  const RAW_TX_WINDOW_SIZE = 800;
   const MAX_LEDGER_HISTORY = 60;
 
   const WS_CONNECT_TIMEOUT_MS = Number.isFinite(Number(window.NALU_WS_CONNECT_TIMEOUT_MS))
@@ -80,10 +82,8 @@
   const LEDGER_POLL_INTERVAL_MS = 4000;
   const KEEPALIVE_INTERVAL_MS = 30000;
 
-  // server_info is useful but can timeout; treat as best-effort
   const SERVER_INFO_CACHE_MS = 8000;
 
-  // Backoff
   const BACKOFF_MIN_MS = 1200;
   const BACKOFF_MAX_MS = 20000;
 
@@ -176,8 +176,11 @@
   }
 
   function backoffMs() {
-    // Use reconnectAttempts as backoff driver
-    const base = clamp(BACKOFF_MIN_MS * Math.pow(1.45, window.XRPL.reconnectAttempts || 0), BACKOFF_MIN_MS, BACKOFF_MAX_MS);
+    const base = clamp(
+      BACKOFF_MIN_MS * Math.pow(1.45, window.XRPL.reconnectAttempts || 0),
+      BACKOFF_MIN_MS,
+      BACKOFF_MAX_MS
+    );
     return jitter(Math.floor(base));
   }
 
@@ -192,7 +195,13 @@
 
   function isLikelyTransportError(msg) {
     const m = String(msg || "").toLowerCase();
-    return m.includes("timeout") || m.includes("timed out") || m.includes("websocket was closed") || m.includes("closed") || m.includes("disconnected");
+    return (
+      m.includes("timeout") ||
+      m.includes("timed out") ||
+      m.includes("websocket was closed") ||
+      m.includes("closed") ||
+      m.includes("disconnected")
+    );
   }
 
   // -------------------- AMOUNT HELPERS --------------------
@@ -300,7 +309,6 @@
   async function safeClientRequest(payload, timeoutMs = WS_REQUEST_TIMEOUT_MS) {
     if (!window.XRPL.client) throw new Error("XRPL client not available");
 
-    // Remove api_version to reduce incompat edge-cases
     const cleanPayload = payload && typeof payload === "object" ? { ...payload } : payload;
     if (cleanPayload && cleanPayload.api_version != null) delete cleanPayload.api_version;
 
@@ -357,7 +365,6 @@
     updateConnectionStatus(false, "Connecting...");
     dispatchConnectionEvent();
 
-    // Try ONE server per connect call; failover occurs across retries.
     const server = nextServer();
     const success = await attemptConnection(server);
 
@@ -384,14 +391,16 @@
 
       await withTimeout(window.XRPL.client.connect(), WS_CONNECT_TIMEOUT_MS, `connect(${server.url})`);
 
-      const info = await verifyConnectionAndSubscribe();
-      // server_info can fail on some infra; treat as best-effort but require *some* validated ledger signal
+      // IMPORTANT: must be `let` because we may synthesize info
+      let info = await verifyConnectionAndSubscribe();
+
+      // server_info can be flaky; accept ledger_current if available
       if (!info || !info.validated_ledger || !info.validated_ledger.seq) {
         console.warn("⚠️ server_info incomplete; trying ledger_current for sanity...");
         const cur = await safeClientRequest({ command: "ledger_current" }, 8000).catch(() => null);
         const idx = cur?.result?.ledger_current_index ?? null;
         if (!idx) throw new Error("Failed to verify connection (no validated ledger)");
-        // synthesize minimal info
+
         info = info || {};
         info.validated_ledger = { seq: idx, txn_count: 0 };
       }
@@ -435,7 +444,6 @@
         window.XRPL.lastServerInfoError = null;
       }
     } catch (e) {
-      // Non-fatal; return null and let caller try ledger_current
       window.XRPL.lastServerInfoErrorAt = Date.now();
       window.XRPL.lastServerInfoError = e && e.message ? e.message : String(e);
       console.warn("⚠️ server_info failed (non-fatal):", window.XRPL.lastServerInfoError);
@@ -494,7 +502,6 @@
     if (!window.XRPL.connected || !window.XRPL.client) return;
 
     try {
-      // Prefer cached server_info if recent, else try server_info, else ledger_current fallback
       let currentLedger = null;
 
       const now = Date.now();
@@ -617,7 +624,6 @@
       window.XRPL.lastLedgerIndex = s.ledgerIndex;
       window.XRPL.lastLedgerTime = Date.now();
 
-      // Refresh server_info best-effort (non-fatal)
       let info = serverInfoHint || null;
       if (!info) {
         const resp = await safeClientRequest({ command: "server_info" }, 9000).catch(() => null);
@@ -658,7 +664,11 @@
     function classify(txType) {
       if (!txType) return "Other";
       if (txType === "Payment") return "Payment";
-      if (txType === "OfferCreate" || txType === "OfferCancel" || (typeof txType === "string" && txType.indexOf("AMM") === 0)) {
+      if (
+        txType === "OfferCreate" ||
+        txType === "OfferCancel" ||
+        (typeof txType === "string" && txType.indexOf("AMM") === 0)
+      ) {
         return "Offer";
       }
       if (typeof txType === "string" && (txType.indexOf("NFToken") === 0 || txType.indexOf("NFT") === 0)) return "NFT";
@@ -792,7 +802,6 @@
 
     client.on("error", function (error) {
       console.warn("🔌 WebSocket error:", error && error.message ? error.message : error);
-      // Do not immediately disconnect; request wrapper / polling will handle if it becomes fatal.
     });
 
     client.on("disconnected", function (code) {
@@ -805,7 +814,6 @@
   // -------------------- DISCONNECTION HANDLING --------------------
   function handleDisconnection(reason) {
     if (!window.XRPL.connected && !window.XRPL.connecting) {
-      // Still schedule a reconnect if we're dead.
       scheduleReconnect(reason || "disconnected");
       return;
     }
@@ -928,7 +936,6 @@
   async function httpRpcRequest(payload, timeoutMs = 15000) {
     if (DISABLE_HTTP_FALLBACK) throw new Error("HTTP fallback disabled");
 
-    // JSON-RPC gateway style: { method: "account_tx", params: [ {...} ] }
     const body = { method: payload.command, params: [{ ...payload }] };
     if (body.params[0].api_version != null) delete body.params[0].api_version;
 
@@ -952,7 +959,6 @@
   window.requestXrpl = async function (payload, { timeoutMs = WS_REQUEST_TIMEOUT_MS } = {}) {
     if (!payload) throw new Error("payload required");
 
-    // Fast path: connected
     if (window.XRPL.client && window.XRPL.connected && typeof window.XRPL.client.request === "function") {
       try {
         return await safeClientRequest(payload, timeoutMs);
@@ -966,12 +972,10 @@
       }
     }
 
-    // Ensure a connect attempt is running
     try {
       connectXRPL();
     } catch (_) {}
 
-    // Wait briefly for WS
     const start = Date.now();
     const intervalMs = 200;
 
@@ -991,7 +995,6 @@
       await sleep(intervalMs);
     }
 
-    // WS never came back — HTTP fallback (if enabled)
     if (!DISABLE_HTTP_FALLBACK) {
       const r = await httpRpcRequest(payload, timeoutMs);
       return { result: r };
