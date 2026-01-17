@@ -1,373 +1,136 @@
 // =======================================================
-// navbar.js – STABLE + MOBILE FRIENDLY + OVERLAY SAFE
-// NO HAMBURGER (removed by request)
-// Keeps core behavior:
-// - Scroll-hide on desktop
-// - Dropdown hover desktop / click toggle mobile
-// - Inspector link injected into Network dropdown
-// - Desktop + floating navbar toggle buttons
-// - Keyboard shortcut: "N" toggles navbar
-// - DOES NOT break fixed navbar (no "position: relative" override)
+// File: js/navbar.js
+// FIXES:
+// - Works with your current HTML (inline onclick buttons + .nav-dropdown)
+// - Removes hamburger dependency
+// - Dropdowns toggle on click (mobile + desktop), close on outside click / ESC
+// - Navbar toggle buttons collapse/expand nav links
 // =======================================================
 
 (function () {
-  "use strict";
-
-  document.addEventListener("DOMContentLoaded", () => {
-    initNavbar();
-    injectNavbarSafetyStyles();
-  });
-
-  /* ------------------------------------------------------
-     INIT NAVBAR
-  ------------------------------------------------------ */
-  function initNavbar() {
-    // Core features
-    setupDesktopAndFloatingToggle();
-    setupScrollHideDesktop();
-    setupDropdownsMobile();
-    setupInspectorInNetworkDropdown();
-    setupGlobalCloseHandlers();
-
-    // Optional: make inline onclick navigation "better" (closes menus, avoids double calls)
-    // ONLY inside navbar/navLinks so it won't touch landing buttons etc.
-    setupInlineSwitchPageInterception();
-
-    console.log("✅ Navbar module loaded (overlay-safe, no-hamburger, toggles enabled)");
+  function $(sel, root = document) {
+    return root.querySelector(sel);
   }
 
-  /* ------------------------------------------------------
-     STATE HELPERS
-  ------------------------------------------------------ */
-  function getUIState() {
-    // Uses your window.UI if present, else fallback internal
-    window.UI = window.UI || {};
-    if (typeof window.UI.navbarLocked !== "boolean") window.UI.navbarLocked = false;
-    if (typeof window.UI.lastScrollY !== "number") window.UI.lastScrollY = window.scrollY || 0;
-    return window.UI;
+  function $all(sel, root = document) {
+    return Array.from(root.querySelectorAll(sel));
   }
 
-  function isTypingContext(el) {
-    if (!el) return false;
-    const tag = (el.tagName || "").toLowerCase();
-    return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
-  }
-
-  /* ------------------------------------------------------
-     NAVBAR TOGGLES (Desktop button + Floating button + Hotkey)
-     - #navbarToggle (in navbar)
-     - #navbarToggleBtn (floating)
-     - "N" hotkey toggles navbar visibility (unless typing)
-  ------------------------------------------------------ */
-  function setupDesktopAndFloatingToggle() {
-    const navbar = document.getElementById("navbar");
-    const btn = document.getElementById("navbarToggle");
-    const floatBtn = document.getElementById("navbarToggleBtn");
-    const floatIcon = floatBtn ? floatBtn.querySelector(".toggle-icon") : null;
-
-    if (!navbar) return;
-
-    function setHidden(hidden) {
-      const ui = getUIState();
-      ui.navbarLocked = true; // when user explicitly toggles, lock it (stops scroll-hide)
-      navbar.classList.toggle("hide", !!hidden);
-
-      // Update floating icon direction if present
-      if (floatIcon) {
-        // If hidden, show ▼ (suggest expand). If shown, show ▲ (suggest collapse).
-        floatIcon.textContent = hidden ? "▼" : "▲";
-      }
-    }
-
-    function toggleHidden() {
-      const hidden = navbar.classList.contains("hide");
-      setHidden(!hidden);
-    }
-
-    // Click toggles
-    if (btn && !btn.__bound) {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleHidden();
-      });
-      btn.__bound = true;
-    }
-
-    if (floatBtn && !floatBtn.__bound) {
-      floatBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleHidden();
-      });
-      floatBtn.__bound = true;
-    }
-
-    // Hotkey: N
-    window.addEventListener("keydown", (e) => {
-      if (e.key.toLowerCase() !== "n") return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTypingContext(document.activeElement)) return;
-
-      // Prevent accidental toggling when user is scrolling with space etc.
-      e.preventDefault();
-      toggleHidden();
+  function closeAllDropdowns(except = null) {
+    $all(".nav-dropdown.open").forEach((d) => {
+      if (except && d === except) return;
+      d.classList.remove("open");
     });
   }
 
-  /* ------------------------------------------------------
-     DESKTOP: Scroll-hide Navbar
-     - Disabled if navbarLocked = true
-     - Only on desktop widths > 992
-  ------------------------------------------------------ */
-  function setupScrollHideDesktop() {
-    const navbar = document.getElementById("navbar");
-    if (!navbar) return;
-
-    const ui = getUIState();
-    ui.lastScrollY = window.scrollY || 0;
-
-    window.addEventListener(
-      "scroll",
-      () => {
-        if (window.innerWidth <= 992) return;
-
-        // If user has locked the navbar (via toggle), do not auto-hide/show
-        if (getUIState().navbarLocked) return;
-
-        const currentY = window.scrollY;
-
-        if (currentY > ui.lastScrollY && currentY > 80) {
-          navbar.classList.add("hide");
-        } else {
-          navbar.classList.remove("hide");
-        }
-
-        ui.lastScrollY = currentY;
-      },
-      { passive: true }
-    );
-  }
-
-  /* ------------------------------------------------------
-     DROPDOWNS (Mobile click-to-toggle)
-     - Desktop remains hover-based via CSS
-     - Mobile uses .active on .nav-dropdown
-  ------------------------------------------------------ */
-  function setupDropdownsMobile() {
-    const toggles = document.querySelectorAll(".dropdown-toggle");
-
-    toggles.forEach((toggle) => {
-      if (toggle.__dropdownBound) return;
+  function initDropdowns() {
+    const dropdowns = $all(".nav-dropdown");
+    dropdowns.forEach((dd) => {
+      const toggle = dd.querySelector(".dropdown-toggle");
+      const menu = dd.querySelector(".dropdown-menu");
+      if (!toggle || !menu) return;
 
       toggle.setAttribute("aria-haspopup", "true");
       toggle.setAttribute("aria-expanded", "false");
 
       toggle.addEventListener("click", (e) => {
-        // On desktop, hover handles it, but click still helps touch laptops
         e.preventDefault();
         e.stopPropagation();
 
-        const parent = toggle.closest(".nav-dropdown");
-        if (!parent) return;
+        const willOpen = !dd.classList.contains("open");
+        closeAllDropdowns(dd);
 
-        const willOpen = !parent.classList.contains("active");
-
-        // Close other dropdowns
-        closeAllDropdowns(parent);
-
-        // Toggle this one
-        parent.classList.toggle("active", willOpen);
+        dd.classList.toggle("open", willOpen);
         toggle.setAttribute("aria-expanded", String(willOpen));
       });
 
-      toggle.__dropdownBound = true;
+      menu.addEventListener("click", (e) => {
+        // allow clicking links without closing immediate if they navigate;
+        // we still close dropdowns for a clean state
+        const target = e.target;
+        if (target && target.closest(".dropdown-item")) {
+          closeAllDropdowns();
+        }
+      });
+    });
+
+    document.addEventListener("click", () => closeAllDropdowns());
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeAllDropdowns();
     });
   }
 
-  function closeAllDropdowns(exceptEl) {
-    document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
-      if (exceptEl && d === exceptEl) return;
-      d.classList.remove("active");
-      const t = d.querySelector(".dropdown-toggle");
-      if (t) t.setAttribute("aria-expanded", "false");
+  function initNavbarHideOnScroll() {
+    const navbar = $("#navbar");
+    if (!navbar) return;
+
+    let lastScrollY = window.scrollY;
+
+    window.addEventListener("scroll", () => {
+      const currentY = window.scrollY;
+      if (currentY > lastScrollY && currentY > 80) navbar.classList.add("hide");
+      else navbar.classList.remove("hide");
+      lastScrollY = currentY;
     });
   }
 
-  /* ------------------------------------------------------
-     GLOBAL CLOSE HANDLERS
-     - Click outside closes dropdowns
-     - Escape closes dropdowns
-  ------------------------------------------------------ */
-  function setupGlobalCloseHandlers() {
-    document.addEventListener("click", (e) => {
-      if (e.target.closest(".nav-dropdown")) return;
-      closeAllDropdowns();
-    });
+  function initNavbarToggles() {
+    const navLinks = $("#navLinks");
+    const toggleBtn = $("#navbarToggle");
+    const floatBtn = $("#navbarToggleBtn");
+    if (!navLinks) return;
+
+    const setCollapsed = (collapsed) => {
+      navLinks.classList.toggle("is-collapsed", collapsed);
+      const icon = $(".toggle-icon");
+      if (icon) icon.textContent = collapsed ? "▼" : "▲";
+      try {
+        localStorage.setItem("naluxrp_nav_collapsed", collapsed ? "1" : "0");
+      } catch (_) {}
+    };
+
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem("naluxrp_nav_collapsed") === "1";
+    } catch (_) {}
+    setCollapsed(collapsed);
+
+    const toggle = () => setCollapsed(!navLinks.classList.contains("is-collapsed"));
+
+    if (toggleBtn) toggleBtn.addEventListener("click", (e) => { e.preventDefault(); toggle(); });
+    if (floatBtn) floatBtn.addEventListener("click", (e) => { e.preventDefault(); toggle(); });
 
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        closeAllDropdowns();
+      if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        toggle();
       }
     });
   }
 
-  /* ------------------------------------------------------
-     INLINE NAVIGATION INTERCEPT (Navbar only)
-     Your HTML uses: onclick="switchPage('dashboard')"
-     This interception:
-     - prevents double calls
-     - ensures dropdowns close after click
-     - does NOT touch anything outside navbar
-  ------------------------------------------------------ */
-  function setupInlineSwitchPageInterception() {
-    const navLinks = document.getElementById("navLinks");
-    const navbar = document.getElementById("navbar");
-    const root = navLinks || navbar;
-    if (!root) return;
-
-    // Capture phase so we can stop the inline onclick from firing if needed
-    root.addEventListener(
-      "click",
-      (e) => {
-        const target = e.target.closest("[onclick], [data-page]");
-        if (!target) return;
-
-        // data-page path
-        const pageFromData = target.getAttribute("data-page");
-        if (pageFromData) {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          safeSwitchPage(pageFromData);
-          closeAllDropdowns();
-          return;
-        }
-
-        // onclick path: parse switchPage('xyz')
-        const raw = target.getAttribute("onclick") || "";
-        const page = extractSwitchPageArg(raw);
-        if (!page) return;
-
-        // stop inline onclick from firing and do it ourselves once
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-
-        safeSwitchPage(page);
-        closeAllDropdowns();
-      },
-      true // capture
-    );
-  }
-
-  function extractSwitchPageArg(onclickText) {
-    // matches: switchPage('dashboard') OR switchPage("dashboard")
-    const m = String(onclickText).match(/switchPage\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
-    return m ? m[1] : null;
-  }
-
-  function safeSwitchPage(pageId) {
-    if (typeof window.switchPage === "function") {
-      window.switchPage(pageId);
-    } else {
-      console.error("❌ switchPage() not found!");
-    }
-  }
-
-  /* ------------------------------------------------------
-     Insert Inspector into Network dropdown (preferred)
-     - Finds the dropdown whose toggle text contains "Network" or "🌐"
-     - Appends a dropdown-item that uses switchPage('inspector')
-  ------------------------------------------------------ */
-  function setupInspectorInNetworkDropdown() {
-    // Avoid duplicates
-    if (document.querySelector(".nav-inspector-item")) return;
-
-    const dropdowns = Array.from(document.querySelectorAll(".nav-dropdown"));
-    let networkDropdown = null;
-
-    for (const d of dropdowns) {
-      const toggle = d.querySelector(".dropdown-toggle");
-      const txt = (toggle ? toggle.textContent : d.textContent) || "";
-      if (/network|🌐/i.test(txt)) {
-        networkDropdown = d;
-        break;
-      }
-    }
-
-    const menu = networkDropdown ? networkDropdown.querySelector(".dropdown-menu") : null;
-
-    // Create item that matches your markup style (you used <a class="dropdown-item" onclick="switchPage('...')">)
-    const item = document.createElement("a");
-    item.className = "dropdown-item nav-inspector-item";
-    item.href = "javascript:void(0)";
-    item.setAttribute("role", "menuitem");
-    item.setAttribute("onclick", "switchPage('inspector')");
-    item.textContent = "🔎 Account Inspector";
-
-    if (menu) {
-      menu.appendChild(item);
-      return;
-    }
-
-    // Fallback: append into navLinks at end
-    const navLinks = document.getElementById("navLinks");
-    if (navLinks) {
-      navLinks.appendChild(item);
-      return;
-    }
-  }
-
-  /* ------------------------------------------------------
-     🔥 OVERLAY / NOTIFICATION SAFETY (FIXED)
-     IMPORTANT: does NOT change navbar positioning
-  ------------------------------------------------------ */
   function injectNavbarSafetyStyles() {
     if (document.getElementById("navbar-safety-styles")) return;
 
     const style = document.createElement("style");
     style.id = "navbar-safety-styles";
     style.textContent = `
-      /* Ensure navbar always remains clickable and above overlays */
-      .navbar,
-      #navbar {
-        z-index: 10000 !important;
-        pointer-events: auto !important;
-      }
-
-      /* Notifications must NEVER block nav interactions */
+      .navbar, #navbar { position: fixed; z-index: 10000; pointer-events: auto; }
       .notification-container,
       .notifications,
       .toast-container,
       .toast-wrapper,
       .toasts,
-      #notifications {
-        pointer-events: none !important;
-        z-index: 9000 !important;
-      }
-
-      /* Allow clicks INSIDE notification cards only */
-      .notification,
-      .toast {
-        pointer-events: auto !important;
-      }
-
-      /* Dropdown menus explicitly interactive */
-      .nav-dropdown,
-      .nav-dropdown * {
-        pointer-events: auto !important;
-      }
-
-      /* Minor visual for injected inspector item */
-      .nav-inspector-item { font-weight: 600; }
+      #notifications { pointer-events: none !important; z-index: 9000 !important; }
+      .notification, .toast { pointer-events: auto !important; }
+      .nav-dropdown, .nav-dropdown * { pointer-events: auto; }
     `;
-
     document.head.appendChild(style);
   }
 
-  /* ------------------------------------------------------
-     EXPORTS
-  ------------------------------------------------------ */
-  window.closeAllDropdowns = closeAllDropdowns;
+  document.addEventListener("DOMContentLoaded", () => {
+    injectNavbarSafetyStyles();
+    initDropdowns();
+    initNavbarHideOnScroll();
+    initNavbarToggles();
+    console.log("✅ Navbar module loaded (dropdown click-toggle, no hamburger dependency)");
+  });
 })();
