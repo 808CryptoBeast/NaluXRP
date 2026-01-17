@@ -1,621 +1,709 @@
-/* =========================================
-   NaluXrp 🌊 — XRPL Connection (ORDERED STREAM RESTORE)
+/* =========================================================
+   xrpl-connection.js — NaluXrp 🌊 (ORDERED LEDGER STREAM + LOW LOAD)
+   ---------------------------------------------------------
    Goals:
-   ✅ Preserve ledger stream order (strict increasing)
-   ✅ Stop "too much load" + ledgerNotFound spam
-   ✅ No concurrent ledger fetch storms
-   ✅ Derive tx-type mix from validated transaction stream (ledger-first, low-load)
-   ✅ Hardened failover + backoff reconnect
-   ✅ Keep same public API/events your UI expects:
-      - window.XRPL
-      - window.setXRPLNetwork(networkId)
-      - window.requestXrpl(payload, opts)
-      - window.XRPL.connected
-      - window.dispatchEvent('xrpl-connection', detail)
-      - window.dispatchEvent('xrpl-ledger', detail)
-   ========================================= */
+   - Keep ledger stream flowing in correct ledger order
+   - Provide per-ledger tx-type breakdown (Payment / Offer / NFT / TrustSet / Other)
+   - Avoid hammering public servers with full-ledger fetches (prevents "too much load" + ledgerNotFound)
+   - Hardened failover + safe requestXrpl wrapper for all modules
 
-(function () {
+   Events:
+   - window dispatches: "xrpl-ledger" with a state snapshot in e.detail
+     Dashboard listens to this.
+   ========================================================= */
+
+(() => {
   "use strict";
 
-  // ---------------------------
-  // Network endpoint sets
-  // ---------------------------
+  const xrpl = window.xrpl;
+  if (!xrpl || !xrpl.Client) {
+    console.error("❌ xrpl library not found. Ensure xrpl-latest-min.js is loaded before xrpl-connection.js");
+    return;
+  }
+
+  // Legacy/global container used across NaluXrp modules
+  // We preserve window.XRPL shape to avoid breaking other files.
+  const LEGACY = (window.XRPL = window.XRPL || {});
+
+  /* =========================
+     CONFIG
+  ========================= */
+
   const NETWORKS = {
     "xrpl-mainnet": {
       label: "XRPL Mainnet",
       endpoints: [
-        "wss://xrplcluster.com/",
-        "wss://s1.ripple.com/",
-        "wss://s2.ripple.com/",
+        // Keep fastest / most stable first
+        "wss://s1.ripple.com",
+        "wss://s2.ripple.com",
+        // Optional community endpoints (can be flaky; keep after Ripple servers)
+        "wss://xrplcluster.com"
       ],
     },
     "xrpl-testnet": {
       label: "XRPL Testnet",
       endpoints: [
-        "wss://s.altnet.rippletest.net:51233/",
+        "wss://s.altnet.rippletest.net:51233"
       ],
     },
-    // Keep Xahau here, but you should confirm your preferred endpoint(s)
-    "xahau-mainnet": {
-      label: "Xahau Mainnet",
+    "xrpl-devnet": {
+      label: "XRPL Devnet",
       endpoints: [
-        // If you have a working Xahau WS endpoint, place it first.
-        // "wss://xahau.network/",
+        "wss://s.devnet.rippletest.net:51233"
       ],
     },
   };
 
   const DEFAULT_NETWORK = "xrpl-mainnet";
 
-  // ---------------------------
-  // Tuning
-  // ---------------------------
-  const KEEPALIVE_MS = 20000;
-  const SERVERINFO_MS = 15000;
+  // How many recent ledgers we keep aggregated in memory
+  const MAX_LEDGER_WINDOW = 50;
 
-  const RECONNECT_BASE_MS = 1200;
-  const RECONNECT_MAX_MS = 15000;
+  // Defer finalize a ledger slightly to capture late-arriving tx messages
+  const LEDGER_FINALIZE_DELAY_MS = 450;
 
-  // We don’t fetch full ledgers each close (that causes load errors).
-  // If we ever need a fallback fetch, we rate limit it hard.
-  const FALLBACK_LEDGER_FETCH_MIN_GAP_MS = 2500;
+  // If ordered flush is blocked by missing ledger(s), skip the gap after this long
+  const ORDER_GAP_TOLERANCE_MS = 3000;
 
-  // How long we keep per-ledger aggregates (by ledgerIndex)
-  const AGG_RETENTION = 120; // ledgers
+  // Keepalive interval (uses rippled "ping" command)
+  const KEEPALIVE_MS = 25000;
 
-  // ---------------------------
-  // Internal state
-  // ---------------------------
-  const State = {
-    networkId: DEFAULT_NETWORK,
+  // Connection timeouts / backoff
+  const CONNECT_TIMEOUT_MS = 12000;
+  const REQUEST_TIMEOUT_MS = 12000;
+  const RECONNECT_BASE_MS = 900;
+  const RECONNECT_MAX_MS = 12000;
+
+  /* =========================
+     STATE
+  ========================= */
+
+  const state = {
+    network: DEFAULT_NETWORK,
     endpoint: null,
 
-    client: null,
+    // connection lifecycle
     connected: false,
-    connecting: false,
+    mode: "offline", // "connecting" | "live" | "offline"
+    lastError: null,
+    startedAt: Date.now(),
 
-    reconnectAttempt: 0,
-    reconnectTimer: null,
+    // live ledger snapshot
+    ledgerIndex: null,
+    ledgerTime: null,
 
-    keepAliveTimer: null,
-    serverInfoTimer: null,
+    // per-ledger summary used by dashboard's conveyor
+    latestLedger: null,
 
-    lastServerInfo: null,
-    lastServerInfoAt: 0,
+    // top-metric values (dashboard uses these)
+    totalTx: 0,
+    successRate: 100,
+    avgFee: 0,
+    txTypes: { payment: 0, offer: 0, nft: 0, trust: 0, other: 0 },
+    txPerLedger: 0,
 
-    // Ledger sequencing
-    lastEmittedLedger: null, // number
-    closedQueue: [],         // ledger indexes (numbers), pending emission in order
-    closedQueueSet: new Set(),
+    // internals
+    _supportsTxStream: false,
+    _client: null,
+    _endpointIndex: 0,
+    _reconnectTimer: null,
+    _keepaliveTimer: null,
 
-    // Per-ledger aggregation from validated transaction stream
-    // ledgerIndex -> { total, success, feeDropsTotal, types: {TxType:count}, closedAtMs }
-    agg: new Map(),
-
-    // Recent ledger close times (ms) for TPS estimate
-    lastClosedAtMs: 0,
-    avgLedgerIntervalSec: 3.8, // rolling estimate
-
-    // Fallback fetch throttling
-    lastFallbackFetchAt: 0,
+    // tx aggregation buffers
+    _agg: new Map(), // ledgerIndex -> agg
+    _finalizeTimers: new Map(), // ledgerIndex -> timerId
+    _readySummaries: new Map(), // ledgerIndex -> summary
+    _lastEmittedLedger: null,
+    _blockedSince: null,
   };
 
-  // ---------------------------
-  // Helpers
-  // ---------------------------
-  const log = (...a) => console.log("%c🌊", "color:#00d4ff;font-weight:700", ...a);
-  const warn = (...a) => console.warn("%c⚠️", "color:#ffb86c;font-weight:700", ...a);
-  const err = (...a) => console.error("%c❌", "color:#ff5555;font-weight:700", ...a);
+  /* =========================
+     HELPERS
+  ========================= */
 
-  function now() { return Date.now(); }
+  function nowMs() { return Date.now(); }
 
-  function safeNumber(x) {
-    const n = Number(x);
-    return Number.isFinite(n) ? n : null;
+  // Ripple Epoch starts 2000-01-01T00:00:00Z, which is 946684800 seconds after Unix epoch
+  function rippleTimeToDate(rippleSeconds) {
+    if (typeof rippleSeconds !== "number") return null;
+    return new Date((rippleSeconds + 946684800) * 1000);
+  }
+
+  function clamp(n, lo, hi) {
+    return Math.max(lo, Math.min(hi, n));
   }
 
   function dropsToXrp(drops) {
-    const n = safeNumber(drops);
-    if (n == null) return 0;
-    return n / 1_000_000;
+    const v = typeof drops === "string" ? Number(drops) : (typeof drops === "number" ? drops : 0);
+    if (!Number.isFinite(v)) return 0;
+    return v / 1_000_000;
   }
 
-  function normalizeTxType(tx) {
-    // XRPL tx object has TransactionType
-    const t = tx && (tx.TransactionType || tx.transaction?.TransactionType);
-    if (!t) return "Other";
-
-    // Collapse into the buckets your dashboard expects
-    if (t === "Payment") return "Payment";
-    if (t === "TrustSet") return "TrustSet";
-
-    // Offer families
-    if (t === "OfferCreate" || t === "OfferCancel") return "Offer";
-
-    // NFT families
-    if (t === "NFTokenMint" || t === "NFTokenBurn" || t === "NFTokenCreateOffer" || t === "NFTokenCancelOffer") return "NFT";
-
-    return "Other";
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
-  function dominantBucket(bucketCounts) {
-    const keys = ["Payment", "Offer", "NFT", "TrustSet", "Other"];
-    let best = "Other";
-    let bestV = -1;
-    for (const k of keys) {
-      const v = safeNumber(bucketCounts[k]) || 0;
-      if (v > bestV) { bestV = v; best = k; }
-    }
-    return best;
+  function withTimeout(promise, ms, label = "timeout") {
+    let t;
+    const timeout = new Promise((_, reject) => {
+      t = setTimeout(() => reject(new Error(label)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
   }
 
-  function computeBackoffMs(attempt) {
-    const jitter = 0.75 + Math.random() * 0.6;
-    const ms = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(1.6, attempt)) * jitter;
-    return Math.floor(ms);
+  function safeClone(obj) {
+    // structuredClone is ideal but not universal; fallback to JSON
+    try {
+      if (typeof structuredClone === "function") return structuredClone(obj);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(obj));
   }
 
-  function emitConnection(detail) {
-    window.dispatchEvent(new CustomEvent("xrpl-connection", { detail }));
-  }
+  function syncLegacyXRPL() {
+    try {
+      LEGACY.client = state._client || null;
+      LEGACY.connected = !!state.connected;
+      LEGACY.connecting = state.mode === "connecting";
+      LEGACY.network = state.network;
+      LEGACY.server = state.endpoint ? { url: state.endpoint, name: state.endpoint.replace(/^wss:\/\//, "") } : null;
+      LEGACY.mode = state.mode;
+      LEGACY.modeReason = state.lastError || "";
 
-  function emitLedger(detail) {
-    window.dispatchEvent(new CustomEvent("xrpl-ledger", { detail }));
-  }
+      LEGACY.lastLedgerTime = Date.now();
+      LEGACY.lastLedgerIndex = state.ledgerIndex || LEGACY.lastLedgerIndex || 0;
 
-  function updateGlobalXRPL() {
-    window.XRPL = window.XRPL || {};
-    window.XRPL.connected = State.connected;
-    window.XRPL.networkId = State.networkId;
-    window.XRPL.endpoint = State.endpoint;
-    window.XRPL.mode = State.connected ? "live" : (State.connecting ? "connecting" : "disconnected");
-  }
+      // Keep a compatible 'state' bag for consumers that read window.XRPL.state.*
+      LEGACY.state = LEGACY.state || {};
+      LEGACY.state.ledgerIndex = state.ledgerIndex || 0;
+      LEGACY.state.ledgerTime = state.ledgerTime ? new Date(state.ledgerTime) : null;
+      LEGACY.state.txPerLedger = state.txPerLedger || 0;
+      LEGACY.state.feeAvg = state.avgFee || 0;
+      LEGACY.state.loadFee = LEGACY.state.loadFee || 1.0;
+      LEGACY.state.validators = LEGACY.state.validators || 0;
 
-  // ---------------------------
-  // Aggregation
-  // ---------------------------
-  function ensureAgg(ledgerIndex) {
-    if (!State.agg.has(ledgerIndex)) {
-      State.agg.set(ledgerIndex, {
-        total: 0,
-        success: 0,
-        feeDropsTotal: 0,
-        // bucketed counts your dashboard uses
-        buckets: { Payment: 0, Offer: 0, NFT: 0, TrustSet: 0, Other: 0 },
-        // raw type counts (optional, kept small)
-        rawTypes: Object.create(null),
-        closedAtMs: 0,
-      });
-    }
-    return State.agg.get(ledgerIndex);
-  }
-
-  function pruneAgg() {
-    // Keep only last AGG_RETENTION ledgers by index
-    if (State.agg.size <= AGG_RETENTION) return;
-    const keys = Array.from(State.agg.keys()).sort((a, b) => b - a); // newest-first
-    const keep = new Set(keys.slice(0, AGG_RETENTION));
-    for (const k of State.agg.keys()) {
-      if (!keep.has(k)) State.agg.delete(k);
-    }
-  }
-
-  // ---------------------------
-  // Queue emission in strict order
-  // ---------------------------
-  function queueClosedLedger(li, closedAtMs) {
-    if (!Number.isFinite(li)) return;
-    if (State.closedQueueSet.has(li)) return;
-    State.closedQueueSet.add(li);
-    State.closedQueue.push({ li, t: closedAtMs || now() });
-    // Keep queue sorted by ledger index
-    State.closedQueue.sort((a, b) => a.li - b.li);
-  }
-
-  function canEmitNext() {
-    if (State.closedQueue.length === 0) return false;
-    const next = State.closedQueue[0].li;
-
-    // If first emission, emit the smallest we have (start point)
-    if (State.lastEmittedLedger == null) return true;
-
-    // Normal strict sequence: must be next = last + 1
-    if (next === State.lastEmittedLedger + 1) return true;
-
-    // If there is a gap (missed some ledger events), don’t stall forever:
-    // after a short grace window, emit anyway but keep the gap visible in UI.
-    const oldestAgeMs = now() - State.closedQueue[0].t;
-    if (oldestAgeMs > 2500) return true;
-
-    return false;
-  }
-
-  function drainClosedQueue() {
-    while (canEmitNext()) {
-      const item = State.closedQueue.shift();
-      if (!item) break;
-      State.closedQueueSet.delete(item.li);
-
-      const li = item.li;
-      State.lastEmittedLedger = li;
-
-      const agg = ensureAgg(li);
-
-      // Build a ledger summary compatible with your dashboard
-      const total = agg.total || 0;
-      const successRate = total ? (agg.success / total) * 100 : 100.0;
-      const avgFeeXrp = total ? dropsToXrp(agg.feeDropsTotal / total) : 0;
-
-      const dom = dominantBucket(agg.buckets);
-
-      const closeTime = new Date(item.t);
-
-      // TPS: estimate from rolling ledger interval
-      const interval = Math.max(0.5, State.avgLedgerIntervalSec || 3.8);
-      const tps = total / interval;
-
-      // Load factor / validators from lastServerInfo (if available)
-      const si = State.lastServerInfo || {};
-      const loadFactor =
-        safeNumber(si?.info?.load_factor) ??
-        safeNumber(si?.info?.load_factor_server) ??
-        safeNumber(si?.info?.load_factor_cluster) ??
-        null;
-
-      const validatorsTotal =
-        safeNumber(si?.info?.validation_quorum) ??
-        safeNumber(si?.info?.validated_ledger?.validation_quorum) ??
-        null;
-
-      const detail = {
-        // Top-level legacy fields your dashboard checks
-        ledgerIndex: li,
-        ledgerTime: closeTime,
-        txPerLedger: total,
-        txTypes: { ...agg.buckets }, // already bucketed into Payment/Offer/NFT/TrustSet/Other
-        avgFee: avgFeeXrp,
-
-        // Some optional UX fields used in your dashboard.js
-        tps: tps,
-        tpsTrend: "Live",
-        ledgerAge: "0s",
-        validators: validatorsTotal != null ? { total: validatorsTotal, healthy: validatorsTotal } : null,
-        loadFactor: loadFactor != null ? loadFactor : 1.0,
-
-        // The "latestLedger" object your dashboard prefers (see your dashboard listener)  :contentReference[oaicite:1]{index=1}
-        latestLedger: {
-          ledgerIndex: li,
-          closeTime,
-          totalTx: total,
-          txTypes: { ...agg.buckets },
-          avgFee: avgFeeXrp,
-          successRate,
-          dominantType: dom,
-        },
+      const tt = state.txTypes || { payment: 0, offer: 0, nft: 0, trust: 0, other: 0 };
+      LEGACY.state.transactionTypes = {
+        Payment: tt.payment || 0,
+        Offer: tt.offer || 0,
+        NFT: tt.nft || 0,
+        TrustSet: tt.trust || 0,
+        Other: tt.other || 0,
       };
 
-      emitLedger(detail);
+      LEGACY.state.recentLedgers = LEGACY.state.recentLedgers || [];
+      LEGACY.state.recentTransactions = LEGACY.state.recentTransactions || [];
+    } catch (_) {
+      // never hard-fail on legacy sync
     }
   }
 
-  // ---------------------------
-  // XRPL client lifecycle
-  // ---------------------------
-  async function disconnect(reason) {
-    if (State.reconnectTimer) {
-      clearTimeout(State.reconnectTimer);
-      State.reconnectTimer = null;
-    }
-    if (State.keepAliveTimer) {
-      clearInterval(State.keepAliveTimer);
-      State.keepAliveTimer = null;
-    }
-    if (State.serverInfoTimer) {
-      clearInterval(State.serverInfoTimer);
-      State.serverInfoTimer = null;
-    }
+  function emitState() {
+    syncLegacyXRPL();
 
-    const c = State.client;
-    State.client = null;
-    State.connected = false;
-    State.connecting = false;
-    updateGlobalXRPL();
+    const snapshot = safeClone({
+      network: state.network,
+      endpoint: state.endpoint,
+      connected: state.connected,
+      mode: state.mode,
+      lastError: state.lastError,
+      startedAt: state.startedAt,
 
-    emitConnection({
-      connected: false,
-      server: State.endpoint || "unknown",
-      modeReason: reason || "disconnected",
+      ledgerIndex: state.ledgerIndex,
+      ledgerTime: state.ledgerTime,
+
+      // metrics
+      totalTx: state.totalTx,
+      successRate: state.successRate,
+      avgFee: state.avgFee,
+      txTypes: state.txTypes,
+      txPerLedger: state.txPerLedger,
+
+      // stream
+      latestLedger: state.latestLedger,
     });
 
-    try {
-      if (c) {
-        c.removeAllListeners?.();
-        if (c.isConnected?.()) await c.disconnect();
-      }
-    } catch (e) {
-      // ignore
+    window.dispatchEvent(new CustomEvent("xrpl-ledger", { detail: snapshot }));
+  }
+
+  function updateNavStatusBadge() {
+    const dot = document.getElementById("statusDot");
+    const txt = document.getElementById("connectionStatus");
+    if (!dot || !txt) return;
+
+    if (state.connected) {
+      dot.classList.add("active");
+      txt.textContent = "Connected";
+    } else if (state.mode === "connecting") {
+      dot.classList.remove("active");
+      txt.textContent = "Connecting...";
+    } else {
+      dot.classList.remove("active");
+      txt.textContent = "Disconnected";
     }
   }
 
-  function scheduleReconnect(reason) {
-    if (State.reconnectTimer) return;
+  /* =========================
+     TX TYPE NORMALIZATION
+  ========================= */
 
-    State.reconnectAttempt += 1;
-    const waitMs = computeBackoffMs(State.reconnectAttempt);
-    warn("Reconnecting in", waitMs, "ms", reason || "");
+  function normalizeTxType(txType) {
+    const t = String(txType || "").toLowerCase();
 
-    emitConnection({
-      connected: false,
-      server: State.endpoint || "unknown",
-      modeReason: reason || "reconnecting",
-    });
+    if (t === "payment") return "payment";
+    if (t === "trustset") return "trust";
 
-    State.reconnectTimer = setTimeout(() => {
-      State.reconnectTimer = null;
-      connect().catch((e) => err("Reconnect failed:", e));
-    }, waitMs);
+    // Offers
+    if (t === "offercreate" || t === "offercancel") return "offer";
+
+    // NFT family
+    if (
+      t === "nftokenmint" ||
+      t === "nftokenburn" ||
+      t === "nftokencreateoffer" ||
+      t === "nftokencanceloffer" ||
+      t === "nftokenacceptoffer"
+    ) return "nft";
+
+    return "other";
   }
 
-  function attachClientHandlers(client) {
-    // Ledger close events: drive strict ordering
-    client.on("ledgerClosed", (evt) => {
-      try {
-        const li = safeNumber(evt?.ledger_index ?? evt?.ledgerIndex);
-        if (!Number.isFinite(li)) return;
+  function emptyAgg(ledgerIndex) {
+    return {
+      ledgerIndex,
+      closeTime: null,      // Date
+      totalTx: 0,
+      successCount: 0,
+      feeSumXrp: 0,
+      txTypes: { payment: 0, offer: 0, nft: 0, trust: 0, other: 0 },
+      _seenTx: 0,
+    };
+  }
 
-        const t = now();
-        // rolling interval estimate
-        if (State.lastClosedAtMs) {
-          const dtSec = Math.max(0.5, (t - State.lastClosedAtMs) / 1000);
-          // gentle EMA
-          State.avgLedgerIntervalSec = 0.85 * State.avgLedgerIntervalSec + 0.15 * dtSec;
+  function getAgg(ledgerIndex) {
+    if (!state._agg.has(ledgerIndex)) {
+      state._agg.set(ledgerIndex, emptyAgg(ledgerIndex));
+      // prune oldest
+      if (state._agg.size > MAX_LEDGER_WINDOW) {
+        const keys = Array.from(state._agg.keys()).sort((a, b) => a - b);
+        while (state._agg.size > MAX_LEDGER_WINDOW) {
+          const k = keys.shift();
+          state._agg.delete(k);
+          const tid = state._finalizeTimers.get(k);
+          if (tid) {
+            clearTimeout(tid);
+            state._finalizeTimers.delete(k);
+          }
+          state._readySummaries.delete(k);
         }
-        State.lastClosedAtMs = t;
-
-        // mark closed time in agg
-        const agg = ensureAgg(li);
-        agg.closedAtMs = t;
-
-        queueClosedLedger(li, t);
-        drainClosedQueue();
-        pruneAgg();
-      } catch (e) {
-        err("ledgerClosed handler error:", e);
       }
-    });
-
-    // Validated tx stream: build per-ledger aggregates without fetching entire ledgers
-    client.on("transaction", (evt) => {
-      try {
-        // evt.transaction + evt.validated (xrpl.js)
-        const validated = evt?.validated === true || evt?.transaction?.validated === true;
-        if (!validated) return;
-
-        const li = safeNumber(evt?.ledger_index ?? evt?.ledgerIndex ?? evt?.transaction?.ledger_index);
-        if (!Number.isFinite(li)) return;
-
-        const tx = evt?.transaction || evt;
-        const agg = ensureAgg(li);
-
-        agg.total += 1;
-
-        // success
-        const result =
-          evt?.meta?.TransactionResult ||
-          evt?.transaction?.meta?.TransactionResult ||
-          evt?.engine_result;
-
-        if (result === "tesSUCCESS") agg.success += 1;
-
-        // fee
-        const feeDrops =
-          safeNumber(tx?.Fee) ??
-          safeNumber(evt?.transaction?.Fee) ??
-          0;
-
-        agg.feeDropsTotal += feeDrops;
-
-        // bucket + raw type
-        const raw = tx?.TransactionType || "Other";
-        agg.rawTypes[raw] = (agg.rawTypes[raw] || 0) + 1;
-
-        const bucket = normalizeTxType({ TransactionType: raw });
-        agg.buckets[bucket] = (agg.buckets[bucket] || 0) + 1;
-      } catch (e) {
-        // don’t spam console
-      }
-    });
-
-    client.on("disconnected", (code) => {
-      warn("WebSocket disconnected (code)", code);
-      State.connected = false;
-      State.connecting = false;
-      updateGlobalXRPL();
-      scheduleReconnect("ws_disconnected");
-    });
-
-    client.on("error", (e) => {
-      warn("Client error:", e?.message || e);
-      // If we’re connected, let keepalive decide. If not connected, reconnect.
-      if (!State.connected) scheduleReconnect("client_error");
-    });
+    }
+    return state._agg.get(ledgerIndex);
   }
 
-  async function connect() {
-    if (State.connecting || State.connected) return;
+  /* =========================
+     ORDERED EMIT PIPELINE
+  ========================= */
 
-    const net = NETWORKS[State.networkId] || NETWORKS[DEFAULT_NETWORK];
-    const endpoints = (net.endpoints || []).filter(Boolean);
+  function queueFinalizeLedger(ledgerIndex, closeTimeDate, txnCountFromLedgerStream) {
+    const agg = getAgg(ledgerIndex);
+    if (closeTimeDate) agg.closeTime = closeTimeDate;
 
-    if (!endpoints.length) {
-      err("No endpoints configured for network:", State.networkId);
+    // If we have txn_count but haven't seen tx stream (or missed), keep totalTx at least that
+    if (typeof txnCountFromLedgerStream === "number" && txnCountFromLedgerStream >= 0) {
+      agg.totalTx = Math.max(agg.totalTx, txnCountFromLedgerStream);
+    }
+
+    // debounce finalize
+    if (state._finalizeTimers.has(ledgerIndex)) return;
+
+    const timerId = setTimeout(() => {
+      state._finalizeTimers.delete(ledgerIndex);
+      finalizeLedger(ledgerIndex);
+    }, LEDGER_FINALIZE_DELAY_MS);
+
+    state._finalizeTimers.set(ledgerIndex, timerId);
+  }
+
+  function finalizeLedger(ledgerIndex) {
+    const agg = state._agg.get(ledgerIndex);
+    if (!agg) return;
+
+    const total = agg.totalTx || 0;
+    const successRate = total > 0 ? (agg.successCount / total) * 100 : 100;
+    const avgFee = total > 0 ? (agg.feeSumXrp / total) : 0;
+
+    const summary = {
+      ledgerIndex: agg.ledgerIndex,
+      closeTime: agg.closeTime ? agg.closeTime.toISOString() : null,
+      totalTx: total,
+      successRate: clamp(successRate, 0, 100),
+      avgFee,
+      txTypes: agg.txTypes,
+    };
+
+    state._readySummaries.set(ledgerIndex, summary);
+    flushOrderedSummaries();
+  }
+
+  function flushOrderedSummaries() {
+    // Decide next ledger to emit
+    const readyKeys = Array.from(state._readySummaries.keys()).sort((a, b) => a - b);
+    if (!readyKeys.length) return;
+
+    const emitOne = (ledgerIndex) => {
+      const summary = state._readySummaries.get(ledgerIndex);
+      if (!summary) return;
+
+      state._readySummaries.delete(ledgerIndex);
+
+      state.latestLedger = summary;
+      state.ledgerIndex = summary.ledgerIndex;
+      state.ledgerTime = summary.closeTime;
+
+      state.totalTx = summary.totalTx;
+      state.successRate = summary.successRate;
+      state.avgFee = summary.avgFee;
+      state.txTypes = summary.txTypes;
+      state.txPerLedger = summary.totalTx;
+
+      state._lastEmittedLedger = summary.ledgerIndex;
+      state._blockedSince = null;
+
+      emitState();
+    };
+
+    // First emit: pick smallest key
+    if (state._lastEmittedLedger == null) {
+      emitOne(readyKeys[0]);
       return;
     }
 
-    State.connecting = true;
-    updateGlobalXRPL();
+    // If we have the immediate next ledger, emit it (and continue)
+    let expected = state._lastEmittedLedger + 1;
+    while (state._readySummaries.has(expected)) {
+      emitOne(expected);
+      expected = state._lastEmittedLedger + 1;
+    }
 
-    emitConnection({
-      connected: false,
-      server: net.label,
-      modeReason: "connecting",
-    });
+    // If blocked by a gap, tolerate after ORDER_GAP_TOLERANCE_MS
+    const smallest = readyKeys[0];
+    if (smallest > expected) {
+      if (!state._blockedSince) state._blockedSince = nowMs();
+      const blockedFor = nowMs() - state._blockedSince;
 
-    // Try endpoints in order
-    for (const ep of endpoints) {
+      if (blockedFor >= ORDER_GAP_TOLERANCE_MS) {
+        // Skip the missing ledger(s) to keep conveyor moving, but preserve local order.
+        emitOne(smallest);
+      }
+    }
+  }
+
+  /* =========================
+     CONNECTION MANAGEMENT
+  ========================= */
+
+  async function connect(networkKey = state.network) {
+    state.network = NETWORKS[networkKey] ? networkKey : DEFAULT_NETWORK;
+
+    const cfg = NETWORKS[state.network];
+    const endpoints = cfg.endpoints;
+
+    clearTimers();
+
+    // prevent parallel connects
+    if (state.mode === "connecting") return;
+    state.mode = "connecting";
+    state.connected = false;
+    state.lastError = null;
+    updateNavStatusBadge();
+    emitState();
+
+    // dispose previous client
+    if (state._client) {
+      try { state._client.removeAllListeners(); } catch (_) {}
+      try { await state._client.disconnect(); } catch (_) {}
+      state._client = null;
+    }
+
+    // Try endpoints in order, starting from current index
+    const startIndex = state._endpointIndex % endpoints.length;
+
+    for (let i = 0; i < endpoints.length; i++) {
+      const idx = (startIndex + i) % endpoints.length;
+      const endpoint = endpoints[idx];
+
+      state.endpoint = endpoint;
+      state._endpointIndex = idx;
+      state.lastError = null;
+      updateNavStatusBadge();
+      emitState();
+
+      const client = new xrpl.Client(endpoint);
+
       try {
-        log("Connecting to", ep);
-        State.endpoint = ep;
-
-        const client = new window.xrpl.Client(ep, {
-          connectionTimeout: 9000,
-        });
-
-        // Important: set client before connecting so handlers can reference it
-        State.client = client;
-        attachClientHandlers(client);
-
-        await client.connect();
-
-        // Subscribe: ledger + validated transactions
-        await client.request({
-          command: "subscribe",
-          streams: ["ledger", "transactions"],
-        });
-
-        State.connected = true;
-        State.connecting = false;
-        State.reconnectAttempt = 0;
-        updateGlobalXRPL();
-
-        emitConnection({
-          connected: true,
-          server: ep,
-          modeReason: "connected",
-        });
-
-        log("Connected ✅", ep);
-
-        startKeepAlive();
-        startServerInfoPoll();
-
-        // Prime server_info once
-        fetchServerInfo().catch(() => {});
-
-        return; // stop after first success
-      } catch (e) {
-        warn("Endpoint failed:", ep, e?.message || e);
-        // clean up failed client
-        try { await disconnect("endpoint_failed"); } catch (_) {}
+        await withTimeout(client.connect(), CONNECT_TIMEOUT_MS, "connect_timeout");
+      } catch (err) {
+        state.lastError = `Connect failed: ${err && err.message ? err.message : String(err)}`;
+        try { await client.disconnect(); } catch (_) {}
         continue;
       }
-    }
 
-    // All failed
-    State.connecting = false;
-    State.connected = false;
-    updateGlobalXRPL();
-    scheduleReconnect("all_endpoints_failed");
-  }
+      // Connected: install handlers
+      state._client = client;
+      state.connected = true;
+      state.mode = "live";
+      state.lastError = null;
+      updateNavStatusBadge();
 
-  // ---------------------------
-  // Requests + keepalive
-  // ---------------------------
-  async function requestXrpl(payload, opts) {
-    const timeoutMs = (opts && opts.timeoutMs) || 10000;
+      attachClientHandlers(client);
 
-    const c = State.client;
-    if (!c || !State.connected || !c.isConnected?.()) {
-      throw new Error("XRPL not connected");
-    }
-
-    // xrpl.js will throw if socket is closing; guard here
-    try {
-      const p = c.request(payload);
-      const t = new Promise((_, rej) => setTimeout(() => rej(new Error("request_timeout")), timeoutMs));
-      return await Promise.race([p, t]);
-    } catch (e) {
-      // If request fails due to WS closing, reconnect
-      const msg = (e && e.message) ? e.message : String(e);
-      if (/CLOSING|CLOSED|websocket/i.test(msg)) {
-        scheduleReconnect("request_failed_ws");
-      }
-      throw e;
-    }
-  }
-
-  async function fetchServerInfo() {
-    // throttle
-    if (!State.connected) return;
-    const t = now();
-    if (t - State.lastServerInfoAt < 2500) return;
-
-    State.lastServerInfoAt = t;
-
-    try {
-      const res = await requestXrpl({ command: "server_info" }, { timeoutMs: 9000 });
-      State.lastServerInfo = res;
-      return res;
-    } catch (e) {
-      // don’t spam; keepalive will handle
-    }
-  }
-
-  function startKeepAlive() {
-    if (State.keepAliveTimer) clearInterval(State.keepAliveTimer);
-    State.keepAliveTimer = setInterval(async () => {
-      if (!State.connected) return;
       try {
-        await requestXrpl({ command: "ping" }, { timeoutMs: 7000 });
+        await subscribeStreams(client);
+      } catch (err) {
+        console.warn("⚠️ Subscribe failed; will continue without tx stream.", err);
+      }
+
+      startKeepalive();
+
+      console.log("[SUCCESS] ✅ Connected to XRPL:", cfg.label, "via", endpoint);
+      emitState();
+      return;
+    }
+
+    // Failed all endpoints
+    state.connected = false;
+    state.mode = "offline";
+    state.lastError = "All XRPL endpoints failed";
+    updateNavStatusBadge();
+    emitState();
+
+    scheduleReconnect();
+  }
+
+  function attachClientHandlers(client) {
+    // Hardened disconnect handling
+    client.on("disconnected", (code) => {
+      console.warn("🔌 XRPL disconnected:", code);
+      handleDisconnect(`disconnected:${code}`);
+    });
+
+    // XRPL.js exposes "error" events
+    client.on("error", (err) => {
+      console.warn("❌ XRPL client error:", err);
+      // don't immediately disconnect unless we are already offline
+    });
+
+    // Ledger closed (from "ledger" stream)
+    client.on("ledgerClosed", (msg) => {
+      // msg shape: { ledger_index, ledger_time, txn_count, ... }
+      const ledgerIndex = Number(msg.ledger_index);
+      if (!Number.isFinite(ledgerIndex)) return;
+
+      const rippleSeconds = (typeof msg.ledger_time === "number") ? msg.ledger_time : null;
+      const closeDate = rippleSeconds != null ? rippleTimeToDate(rippleSeconds) : null;
+
+      // Update the current ledger index for UI, even before finalization
+      state.ledgerIndex = ledgerIndex;
+      state.ledgerTime = closeDate ? closeDate.toISOString() : null;
+
+      // Queue a finalize for this ledger
+      const txnCount = typeof msg.txn_count === "number" ? msg.txn_count : null;
+      queueFinalizeLedger(ledgerIndex, closeDate, txnCount);
+    });
+
+    // Validated transaction stream
+    client.on("transaction", (ev) => {
+      if (!ev || ev.validated !== true) return;
+
+      const ledgerIndex = Number(ev.ledger_index);
+      if (!Number.isFinite(ledgerIndex)) return;
+
+      state._supportsTxStream = true;
+
+      const tx = ev.transaction || {};
+      const meta = ev.meta || {};
+
+      const agg = getAgg(ledgerIndex);
+
+      // Total tx count: if we only see tx stream, totalTx increments from seen
+      agg._seenTx += 1;
+      agg.totalTx = Math.max(agg.totalTx, agg._seenTx);
+
+      // Fee
+      agg.feeSumXrp += dropsToXrp(tx.Fee);
+
+      // Success
+      const result = meta.TransactionResult;
+      if (result === "tesSUCCESS") agg.successCount += 1;
+
+      // Type
+      const bucket = normalizeTxType(tx.TransactionType);
+      agg.txTypes[bucket] = (agg.txTypes[bucket] || 0) + 1;
+    });
+  }
+
+  async function subscribeStreams(client) {
+    // Subscribe to ledger AND transactions
+    await requestOnClient(client, { command: "subscribe", streams: ["ledger", "transactions"] });
+  }
+
+  function handleDisconnect(reason) {
+    clearTimers();
+
+    state.connected = false;
+    state.mode = "offline";
+    state.lastError = reason || "disconnected";
+    updateNavStatusBadge();
+    emitState();
+
+    // Attempt reconnect with failover
+    scheduleReconnect();
+  }
+
+  function clearTimers() {
+    if (state._reconnectTimer) {
+      clearTimeout(state._reconnectTimer);
+      state._reconnectTimer = null;
+    }
+    if (state._keepaliveTimer) {
+      clearInterval(state._keepaliveTimer);
+      state._keepaliveTimer = null;
+    }
+  }
+
+  function scheduleReconnect() {
+    if (state._reconnectTimer) return;
+
+    const jitter = Math.floor(Math.random() * 300);
+    const attemptMs = clamp(RECONNECT_BASE_MS + jitter, 600, RECONNECT_MAX_MS);
+    state._reconnectTimer = setTimeout(async () => {
+      state._reconnectTimer = null;
+
+      // Rotate to next endpoint on each reconnect attempt
+      const endpoints = NETWORKS[state.network]?.endpoints || NETWORKS[DEFAULT_NETWORK].endpoints;
+      state._endpointIndex = (state._endpointIndex + 1) % endpoints.length;
+
+      try {
+        await connect(state.network);
       } catch (e) {
-        warn("Keep-alive failed, reconnecting…");
-        scheduleReconnect("keepalive_failed");
+        console.warn("Reconnect failed:", e);
+      }
+    }, attemptMs);
+  }
+
+  function startKeepalive() {
+    if (state._keepaliveTimer) return;
+    state._keepaliveTimer = setInterval(async () => {
+      if (!state._client || !state.connected) return;
+      try {
+        await requestOnClient(state._client, { command: "ping" }, 6000);
+      } catch (err) {
+        console.warn("Keepalive failed; reconnecting:", err && err.message ? err.message : err);
+        try { await state._client.disconnect(); } catch (_) {}
+        handleDisconnect("keepalive_failed");
       }
     }, KEEPALIVE_MS);
   }
 
-  function startServerInfoPoll() {
-    if (State.serverInfoTimer) clearInterval(State.serverInfoTimer);
-    State.serverInfoTimer = setInterval(() => {
-      fetchServerInfo().catch(() => {});
-    }, SERVERINFO_MS);
+  /* =========================
+     REQUEST WRAPPER
+  ========================= */
+
+  async function requestOnClient(client, cmdObj, timeoutMs = REQUEST_TIMEOUT_MS) {
+    const payload = (typeof cmdObj === "string") ? { command: cmdObj } : cmdObj;
+    if (!payload || !payload.command) throw new Error("Invalid XRPL request payload");
+
+    const req = client.request(payload);
+    const res = await withTimeout(req, timeoutMs, "request_timeout");
+    return res && res.result ? res.result : res;
   }
 
-  // ---------------------------
-  // Public API
-  // ---------------------------
-  async function setXRPLNetwork(networkId) {
-    if (!NETWORKS[networkId]) {
-      warn("Unknown network:", networkId, "— keeping", State.networkId);
-      return;
+  async function requestXrpl(cmdObj, opts = {}) {
+    const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : REQUEST_TIMEOUT_MS;
+
+    if (state._client && state.connected) {
+      try {
+        return await requestOnClient(state._client, cmdObj, timeoutMs);
+      } catch (err) {
+        // If request fails, try reconnect once
+        console.warn("requestXrpl failed; attempting reconnect:", err);
+        try { await state._client.disconnect(); } catch (_) {}
+        handleDisconnect("request_failed");
+      }
     }
 
-    if (State.networkId === networkId) return;
+    // Not connected: attempt connect and retry once
+    await connect(state.network);
+    if (state._client && state.connected) {
+      return await requestOnClient(state._client, cmdObj, timeoutMs);
+    }
 
-    log("Switching network:", State.networkId, "→", networkId);
-
-    State.networkId = networkId;
-
-    // Reset sequencing + agg so UI doesn’t mix networks
-    State.lastEmittedLedger = null;
-    State.closedQueue = [];
-    State.closedQueueSet = new Set();
-    State.agg = new Map();
-
-    await disconnect("Network switched");
-    await connect();
+    throw new Error("XRPL not connected");
   }
 
-  // expose globals
-  window.XRPL = window.XRPL || {};
-  window.XRPL.connected = false;
+  /* =========================
+     PUBLIC API (window.*)
+     - Keep both old names and new names
+  ========================= */
 
-  window.setXRPLNetwork = setXRPLNetwork;
+  // Shared request wrapper used by multiple modules
   window.requestXrpl = requestXrpl;
 
-  // Boot
-  updateGlobalXRPL();
-  log("XRPL Connection module loaded (ordered stream restore)");
-  connect().catch((e) => err("Initial connect failed:", e));
+  // Common aliases used elsewhere in NaluXrp
+  window.connectXRPL = () => connect(state.network);
+  window.reconnectXRPL = () => {
+    const endpoints = NETWORKS[state.network]?.endpoints || NETWORKS[DEFAULT_NETWORK].endpoints;
+    state._endpointIndex = (state._endpointIndex + 1) % endpoints.length;
+    return connect(state.network);
+  };
+
+  window.setXRPLNetwork = (networkKey) => connect(networkKey);
+  window.setXrplNetwork = window.setXRPLNetwork;
+
+  window.getXRPLState = () => safeClone({
+    network: state.network,
+    endpoint: state.endpoint,
+    connected: state.connected,
+    mode: state.mode,
+    lastError: state.lastError,
+    ledgerIndex: state.ledgerIndex,
+    ledgerTime: state.ledgerTime,
+    totalTx: state.totalTx,
+    successRate: state.successRate,
+    avgFee: state.avgFee,
+    txTypes: state.txTypes,
+    txPerLedger: state.txPerLedger,
+    latestLedger: state.latestLedger,
+  });
+
+  window.getXrplState = window.getXRPLState;
+
+  window.isXRPLConnected = () => !!state.connected;
+
+  // Also attach a small method set on the legacy container
+  LEGACY.requestXrpl = requestXrpl;
+  LEGACY.connect = window.connectXRPL;
+  LEGACY.reconnect = window.reconnectXRPL;
+  LEGACY.setNetwork = window.setXRPLNetwork;
+
+  /* =========================
+     BOOT
+  ========================= */
+
+  // Auto-connect on load
+  (async () => {
+    try {
+      await connect(DEFAULT_NETWORK);
+
+      setTimeout(() => {
+        if (!state._supportsTxStream) {
+          console.warn("⚠️ No validated transaction stream observed yet. If your ledger cards show 0 types, ensure streams include 'transactions'.");
+        }
+      }, 30000);
+    } catch (e) {
+      console.error("XRPL initial connect failed:", e);
+    }
+  })();
+
+  console.log("🌊 XRPL Connection module loaded (ordered ledger stream + low-load tx aggregation)");
 })();
