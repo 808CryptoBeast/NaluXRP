@@ -1,31 +1,28 @@
+// =======================================================
+// File: css/navbar.css
+// FIXES:
+// - Remove hamburger dependency (menu stays usable on mobile)
+// - Dropdowns use .open class (JS toggles), not hover-only
+// - Nav links wrap nicely instead of becoming unreachable
+// =======================================================
+
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css) - NO HAMBURGER
-   Fixes:
-   - Keeps navbar fixed (no JS overriding position)
-   - Touch-friendly dropdowns via :focus-within + JS .active
-   - Responsive without hamburger: wrap + horizontal scroll fallback
+   NaluXrp 🌊 – Navbar (navbar.css)
    ========================================= */
 
 .navbar {
   position: fixed;
   top: 0; left: 0; right: 0;
   background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
   border-bottom: 2px solid var(--accent-primary);
   box-shadow: 0 5px 30px var(--glow-color);
-  z-index: 10000;
+  z-index: 1000;
   transform: translateY(0);
   transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
 }
 
-@supports (backdrop-filter: blur(20px)) {
-  .navbar {
-    backdrop-filter: blur(20px);
-  }
-}
-
-.navbar.hide {
-  transform: translateY(-100%);
-}
+.navbar.hide { transform: translateY(-100%); }
 
 .nav-content {
   max-width: 1800px;
@@ -38,13 +35,11 @@
   gap: 16px;
 }
 
-/* Logo */
 .nav-logo {
   display: flex;
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  user-select: none;
 }
 
 .logo-text {
@@ -61,17 +56,19 @@
   color: var(--text-secondary);
 }
 
-/* Links row */
 .nav-links {
   display: flex;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
   flex: 1;
-  min-width: 0;
+  flex-wrap: wrap;
 }
 
-/* Buttons */
+.nav-links.is-collapsed {
+  display: none;
+}
+
 .nav-btn,
 .dropdown-toggle {
   padding: 9px 14px;
@@ -98,15 +95,9 @@
   transform: translateY(-2px);
 }
 
-.nav-icon {
-  font-size: 1.1rem;
-}
+.nav-icon { font-size: 1.1rem; }
+.nav-label { display: inline-block; }
 
-.nav-label {
-  display: inline-block;
-}
-
-/* Dropdowns */
 .nav-dropdown {
   position: relative;
   display: inline-block;
@@ -125,19 +116,10 @@
   flex-direction: column;
   box-shadow: 0 10px 30px rgba(0,0,0,0.7);
   animation: slideDown 0.2s ease;
-  z-index: 10002;
+  z-index: 1002;
 }
 
-/* Desktop hover open */
-@media (min-width: 993px) {
-  .nav-dropdown:hover .dropdown-menu {
-    display: flex;
-  }
-}
-
-/* Keyboard/touch friendly open */
-.nav-dropdown:focus-within .dropdown-menu,
-.nav-dropdown.active .dropdown-menu {
+.nav-dropdown.open .dropdown-menu {
   display: flex;
 }
 
@@ -150,8 +132,8 @@
   transition: 0.2s ease;
   text-align: left;
   font-weight: 600;
-  background: transparent;
-  border: 0;
+  display: block;
+  text-decoration: none;
 }
 
 .dropdown-item:hover {
@@ -159,12 +141,6 @@
   transform: translateX(4px);
 }
 
-.dropdown-item:focus {
-  outline: 2px solid var(--accent-secondary);
-  outline-offset: 2px;
-}
-
-/* Connection status */
 .status-badge {
   display: flex;
   align-items: center;
@@ -174,7 +150,6 @@
   border-radius: 999px;
   border: 1px solid var(--accent-tertiary);
   font-size: 0.8rem;
-  white-space: nowrap;
 }
 
 .status-dot {
@@ -190,7 +165,6 @@
   box-shadow: 0 0 10px #50fa7b;
 }
 
-/* Desktop navbar toggle */
 .navbar-toggle {
   margin-left: 6px;
   padding: 6px 10px;
@@ -201,7 +175,6 @@
   cursor: pointer;
 }
 
-/* Floating toggle button */
 .navbar-toggle-btn {
   position: fixed;
   right: 16px;
@@ -212,69 +185,36 @@
   background: rgba(0,0,0,0.6);
   color: var(--accent-secondary);
   cursor: pointer;
-  z-index: 9999;
+  z-index: 999;
 }
 
-.toggle-icon {
-  display: inline-block;
-}
+.toggle-icon { display: inline-block; }
 
-/* Hamburger removed */
-.hamburger {
-  display: none !important;
-}
-
-/* =========================================
-   Mobile / small screens (NO hamburger)
-   - wrap nav
-   - allow horizontal scroll if crowded
-   ========================================= */
+/* Hamburger removed: safe-hide if it still exists in HTML */
+.hamburger { display: none !important; }
 
 @media (max-width: 992px) {
-  .nav-content {
-    padding: 0 12px;
-    flex-wrap: wrap;
-    row-gap: 10px;
-  }
+  .nav-content { padding: 0 12px; flex-wrap: wrap; }
+  .nav-logo .logo-slogan { display: none; }
 
-  .nav-logo .logo-slogan {
-    display: none;
-  }
-
-  /* Nav links always visible, wrap + scroll fallback */
   .nav-links {
     width: 100%;
-    justify-content: flex-start;
-    flex-wrap: wrap;
+    justify-content: center;
     gap: 10px;
-    padding-bottom: 6px;
+    padding-bottom: 10px;
   }
 
-  /* If you prefer one-line scroll instead of wrap, swap these:
-     flex-wrap: nowrap;
-     overflow-x: auto;
-     -webkit-overflow-scrolling: touch;
-  */
-
-  .nav-btn,
-  .dropdown-toggle {
-    padding: 11px 12px;
-  }
-
-  /* Mobile dropdown positioning: anchored */
   .dropdown-menu {
     right: auto;
     left: 0;
-    min-width: 220px;
-  }
-
-  .navbar-toggle {
-    display: none;
   }
 }
 
 @media (max-width: 480px) {
-  .nav-label {
-    font-size: 0.85rem;
+  .nav-btn, .dropdown-toggle {
+    padding: 10px 12px;
+    font-size: 0.88rem;
   }
+  .nav-label { font-size: 0.85rem; }
 }
+
