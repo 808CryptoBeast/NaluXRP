@@ -1,29 +1,32 @@
-// =======================================================
-// File: css/navbar.css
-// FIXES:
-// - Remove hamburger dependency (menu stays usable on mobile)
-// - Dropdowns use .open class (JS toggles), not hover-only
-// - Nav links wrap nicely instead of becoming unreachable
-// =======================================================
+/* =======================================================
+   File: css/navbar.css
+   NaluXrp 🌊 – Navbar (Responsive + Mobile Friendly + Stable)
+   - Desktop: inline links + hover dropdowns
+   - Mobile: hamburger opens slide-down panel + accordion dropdowns
+   - Overlay-safe: toasts/notifications can't block clicks
+   ======================================================= */
 
-/* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css)
-   ========================================= */
-
-.navbar {
+/* Navbar base */
+.navbar,
+#navbar {
   position: fixed;
   top: 0; left: 0; right: 0;
   background: var(--bg-secondary);
   backdrop-filter: blur(20px);
   border-bottom: 2px solid var(--accent-primary);
   box-shadow: 0 5px 30px var(--glow-color);
-  z-index: 1000;
+  z-index: 10000;
   transform: translateY(0);
   transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+  pointer-events: auto;
 }
 
-.navbar.hide { transform: translateY(-100%); }
+.navbar.hide,
+#navbar.hide {
+  transform: translateY(-100%);
+}
 
+/* Layout */
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
@@ -35,40 +38,46 @@
   gap: 16px;
 }
 
+/* Logo */
 .nav-logo {
   display: flex;
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
+  min-width: 170px;
 }
 
 .logo-text {
   font-size: 1.5em;
-  font-weight: 700;
+  font-weight: 800;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: 2px;
+  line-height: 1.1;
 }
 
 .logo-slogan {
-  font-size: 0.7em;
+  font-size: 0.72em;
   color: var(--text-secondary);
+  line-height: 1.1;
 }
 
+/* Links row (desktop) */
 .nav-links {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   justify-content: flex-end;
   flex: 1;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.nav-links.is-collapsed {
-  display: none;
+.nav-links > * {
+  flex-shrink: 0;
 }
 
+/* Buttons */
 .nav-btn,
 .dropdown-toggle {
   padding: 9px 14px;
@@ -77,13 +86,14 @@
   border: 2px solid var(--accent-tertiary);
   color: var(--accent-tertiary);
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.9rem;
+  font-weight: 700;
+  font-size: 0.92rem;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   transition: all 0.25s ease;
+  user-select: none;
 }
 
 .nav-btn:hover,
@@ -95,44 +105,56 @@
   transform: translateY(-2px);
 }
 
-.nav-icon { font-size: 1.1rem; }
+.nav-icon { font-size: 1.05rem; }
 .nav-label { display: inline-block; }
 
+/* Dropdowns */
 .nav-dropdown {
   position: relative;
   display: inline-block;
 }
 
+/* Desktop hover activation (kept) */
+@media (min-width: 993px) {
+  .nav-dropdown:hover .dropdown-menu {
+    display: flex;
+  }
+}
+
+/* click-open fallback (JS toggles .open on any screen) */
+.nav-dropdown.open .dropdown-menu {
+  display: flex;
+}
+
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 14px);
   right: 0;
   background: var(--bg-tertiary);
   border-radius: 12px;
   border: 2px solid var(--accent-primary);
-  min-width: 200px;
+  min-width: 220px;
   padding: 8px;
   display: none;
   flex-direction: column;
   box-shadow: 0 10px 30px rgba(0,0,0,0.7);
-  animation: slideDown 0.2s ease;
-  z-index: 1002;
-}
-
-.nav-dropdown.open .dropdown-menu {
-  display: flex;
+  animation: slideDown 0.18s ease;
+  z-index: 10002;
 }
 
 .dropdown-item {
   padding: 10px 14px;
   border-radius: 8px;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   color: var(--text-primary);
   cursor: pointer;
   transition: 0.2s ease;
   text-align: left;
-  font-weight: 600;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
   display: block;
+  width: 100%;
   text-decoration: none;
 }
 
@@ -141,6 +163,12 @@
   transform: translateX(4px);
 }
 
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Connection badge */
 .status-badge {
   display: flex;
   align-items: center;
@@ -149,7 +177,8 @@
   background: rgba(0,0,0,0.4);
   border-radius: 999px;
   border: 1px solid var(--accent-tertiary);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  flex-shrink: 0;
 }
 
 .status-dot {
@@ -165,6 +194,7 @@
   box-shadow: 0 0 10px #50fa7b;
 }
 
+/* Desktop navbar toggle */
 .navbar-toggle {
   margin-left: 6px;
   padding: 6px 10px;
@@ -173,48 +203,153 @@
   background: rgba(0,0,0,0.4);
   color: var(--text-primary);
   cursor: pointer;
+  flex-shrink: 0;
 }
 
+/* Floating toggle */
 .navbar-toggle-btn {
   position: fixed;
   right: 16px;
   bottom: 16px;
   border-radius: 999px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--accent-secondary);
   background: rgba(0,0,0,0.6);
   color: var(--accent-secondary);
   cursor: pointer;
-  z-index: 999;
+  z-index: 9999;
 }
 
 .toggle-icon { display: inline-block; }
 
-/* Hamburger removed: safe-hide if it still exists in HTML */
-.hamburger { display: none !important; }
+/* Hamburger (mobile) */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  cursor: pointer;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
+}
 
+.hamburger span {
+  width: 24px;
+  height: 3px;
+  background: var(--accent-secondary);
+  border-radius: 2px;
+  transition: all 0.25s ease;
+}
+
+.hamburger.active span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+.hamburger.active span:nth-child(2) { opacity: 0; }
+.hamburger.active span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* =========================================
+   Mobile / small screens
+   ========================================= */
 @media (max-width: 992px) {
-  .nav-content { padding: 0 12px; flex-wrap: wrap; }
-  .nav-logo .logo-slogan { display: none; }
+  .nav-content {
+    padding: 0 12px;
+  }
 
+  .nav-logo {
+    min-width: auto;
+  }
+
+  .nav-logo .logo-slogan {
+    display: none;
+  }
+
+  .navbar-toggle {
+    display: none;
+  }
+
+  .hamburger {
+    display: flex;
+  }
+
+  /* Slide-down panel */
   .nav-links {
-    width: 100%;
-    justify-content: center;
+    position: fixed;
+    top: 75px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-secondary);
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    padding: 16px;
     gap: 10px;
-    padding-bottom: 10px;
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+    overflow-y: auto;
+    z-index: 10001;
+  }
+
+  .nav-links.show {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .nav-btn,
+  .dropdown-toggle {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+
+  /* Dropdowns become accordion style */
+  .nav-dropdown:hover .dropdown-menu {
+    display: none; /* disable hover activation on mobile */
   }
 
   .dropdown-menu {
-    right: auto;
-    left: 0;
+    position: static;
+    margin-top: 6px;
+    min-width: 100%;
+    border-width: 1px;
+    display: none;
+  }
+
+  .nav-dropdown.open .dropdown-menu {
+    display: flex;
   }
 }
 
+/* Very small screens */
 @media (max-width: 480px) {
-  .nav-btn, .dropdown-toggle {
-    padding: 10px 12px;
-    font-size: 0.88rem;
+  .logo-text {
+    font-size: 1.25em;
   }
-  .nav-label { font-size: 0.85rem; }
+  .nav-label {
+    font-size: 0.9rem;
+  }
 }
 
+/* =========================================
+   Overlay safety (toasts never block clicks)
+   ========================================= */
+.notification-container,
+.notifications,
+.toast-container,
+.toast-wrapper,
+.toasts,
+#notifications {
+  pointer-events: none !important;
+  z-index: 9000 !important;
+}
+
+.notification,
+.toast {
+  pointer-events: auto !important;
+}
