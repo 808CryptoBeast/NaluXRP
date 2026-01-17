@@ -1,5 +1,11 @@
 /* =========================================
-   NaluXrp 🌊 — Dashboard V2 Styles
+   File: css/dashboard.css
+   NaluXrp 🌊 — Dashboard V2 Styles (FIXED)
+   Fixes:
+   - Ensure ledger aura/glow is visible even if base card sets overflow:hidden
+   - Consistent per-type palette across aura + bars + heat tiles
+   - Define --glow-color per dominant class (used by text-shadow)
+   - Optional: color dominant tag pill
    ========================================= */
 
 /* Base container for dashboard page */
@@ -153,8 +159,6 @@
   font-size: 1.5em;
 }
 
-/* Use the centralized .card/.widget-card for widget visuals; keep widget-specific layout here */
-
 /* Widget header/body */
 .widget-header {
   display: flex;
@@ -256,15 +260,9 @@
   opacity: 0.6;
 }
 
-.latency-segment.fast {
-  background: #00e676;
-}
-.latency-segment.medium {
-  background: #ffb86c;
-}
-.latency-segment.slow {
-  background: #ff6e6e;
-}
+.latency-segment.fast { background: #00e676; }
+.latency-segment.medium { background: #ffb86c; }
+.latency-segment.slow { background: #ff6e6e; }
 
 /* =========================================
    Neon Ledger Conveyor & Cards
@@ -289,6 +287,7 @@
   gap: 18px;
   white-space: nowrap;
   will-change: transform;
+  align-items: stretch;
 }
 
 /* Apply animation class (keyframes are defined in components/animations.css) */
@@ -320,18 +319,26 @@
   animation: ledgerParticleDrift linear infinite;
 }
 
-/* Ledger cards — base properties moved to components/card.css; keep ledger-specific extras below */
+/* Ledger cards — ensure aura can render even if base card.css clips it */
 .ledger-card {
   position: relative;
   transform: translateZ(0);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
   z-index: 1;
+  overflow: visible; /* FIX: allow ::before aura to extend outside card */
 }
 
 .ledger-card:hover {
   transform: translateY(-6px);
   filter: saturate(1.15);
 }
+
+/* Dominant-type variables (FIX: makes text-shadow consistent) */
+.ledger-card--payment { --glow-color: #00d4ff; }
+.ledger-card--offer   { --glow-color: #bd93f9; }
+.ledger-card--nft     { --glow-color: #ffb86c; }
+.ledger-card--trust   { --glow-color: #00e6a8; }
+.ledger-card--other   { --glow-color: #f1fa8c; }
 
 /* Inner content */
 .ledger-card-inner {
@@ -340,6 +347,8 @@
     linear-gradient(135deg, rgba(0,0,0,0.7), rgba(0,0,0,0.8));
   border-radius: 16px;
   padding: 14px 18px 16px;
+  position: relative;
+  z-index: 2;
 }
 
 /* Aura underlay */
@@ -349,8 +358,9 @@
   inset: -35%;
   opacity: 0.0;
   filter: blur(32px);
-  z-index: 0;
+  z-index: 1;
   mix-blend-mode: screen;
+  pointer-events: none;
 }
 
 @keyframes ledgerAuraPulse {
@@ -358,6 +368,7 @@
   50%      { opacity: 0.85; transform: scale(1.05); }
 }
 
+/* Aura palettes */
 .ledger-card--payment::before {
   background: radial-gradient(circle at 0 0,
     rgba(80,184,255,0.75),
@@ -375,7 +386,7 @@
 .ledger-card--nft::before {
   background: radial-gradient(circle at 50% 0,
     rgba(255,159,67,0.8),
-    rgba(255,111,0,0.25),
+    rgba(255,63,129,0.25),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
@@ -405,7 +416,7 @@
   font-weight: 700;
   font-size: 1.05rem;
   color: var(--accent-secondary);
-  text-shadow: 0 0 10px var(--glow-color);
+  text-shadow: 0 0 10px var(--glow-color, var(--accent-secondary));
 }
 
 .ledger-meta {
@@ -426,6 +437,13 @@
   background: rgba(0,0,0,0.6);
   border: 1px solid rgba(255,255,255,0.2);
 }
+
+/* Optional: dominant tag pill color (nice UX) */
+.ledger-card--payment .ledger-tag { border-color: #00d4ff; color: #00d4ff; }
+.ledger-card--offer   .ledger-tag { border-color: #bd93f9; color: #bd93f9; }
+.ledger-card--nft     .ledger-tag { border-color: #ffb86c; color: #ffb86c; }
+.ledger-card--trust   .ledger-tag { border-color: #00e6a8; color: #00e6a8; }
+.ledger-card--other   .ledger-tag { border-color: #f1fa8c; color: #f1fa8c; }
 
 /* Stats row */
 .ledger-main-row {
@@ -486,26 +504,26 @@
   box-shadow: 0 0 12px currentColor;
 }
 
-/* Type colors */
+/* Type colors (FIX: Offer now matches purple aura; NFT keeps orange/pink) */
 .type-payment {
-  background: linear-gradient(90deg,#40a9ff,#00d4ff);
-  color:#00d4ff;
+  background: linear-gradient(90deg, #40a9ff, #00d4ff);
+  color: #00d4ff;
 }
 .type-offer {
-  background: linear-gradient(90deg,#ff9f43,#ff6b1a);
-  color:#ff9f43;
+  background: linear-gradient(90deg, #bd93f9, #7b2cff);
+  color: #bd93f9;
 }
 .type-nft {
-  background: linear-gradient(90deg,#ff9f43,#ff3f81);
-  color:#ff9f43;
+  background: linear-gradient(90deg, #ff9f43, #ff3f81);
+  color: #ff9f43;
 }
 .type-trust {
-  background: linear-gradient(90deg,#00e6a8,#00b894);
-  color:#00e6a8;
+  background: linear-gradient(90deg, #00e6a8, #00b894);
+  color: #00e6a8;
 }
 .type-other {
-  background: linear-gradient(90deg,#f1fa8c,#ffe66d);
-  color:#f1fa8c;
+  background: linear-gradient(90deg, #f1fa8c, #ffe66d);
+  color: #f1fa8c;
 }
 
 .ledger-type-count {
@@ -623,30 +641,30 @@
     rgba(0, 212, 255, 0.9));
 }
 
-/* Optional per-type hues */
+/* Optional per-type hues (FIX: align with ledger palette) */
 .tx-heat-tile.heat-payment::before {
   background: radial-gradient(circle at 0 0,
-    rgba(80,250,123, calc(var(--heat, 0.5) * 0.7)),
+    rgba(0, 212, 255, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
 .tx-heat-tile.heat-offer::before {
   background: radial-gradient(circle at 0 0,
-    rgba(189,147,249, calc(var(--heat, 0.5) * 0.7)),
+    rgba(189, 147, 249, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
 .tx-heat-tile.heat-nft::before {
   background: radial-gradient(circle at 0 0,
-    rgba(255,184,108, calc(var(--heat, 0.5) * 0.7)),
+    rgba(255, 184, 108, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
 .tx-heat-tile.heat-trust::before {
   background: radial-gradient(circle at 0 0,
-    rgba(139,233,253, calc(var(--heat, 0.5) * 0.7)),
+    rgba(0, 230, 168, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
 .tx-heat-tile.heat-other::before {
   background: radial-gradient(circle at 0 0,
-    rgba(255,121,198, calc(var(--heat, 0.5) * 0.7)),
+    rgba(241, 250, 140, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
 
@@ -734,4 +752,19 @@
 @keyframes fadeSlideIn {
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .ledger-stream-animate {
+    animation: none !important;
+  }
+  .ledger-particle {
+    animation: none !important;
+  }
+  .ledger-card,
+  .ledger-card:hover {
+    transition: none !important;
+    transform: none !important;
+  }
 }
