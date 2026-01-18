@@ -1,75 +1,44 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css) — UPDATED FULL
-   - Mobile + desktop friendly
-   - Touch-friendly dropdowns (supports .nav-dropdown.active)
-   - Better spacing on big screens
-   - Smooth dropdown animation
-   - Works with enhanced navbar.js (active states, locked, progress bar)
+   NaluXrp 🌊 – Navbar (navbar.css) (FULL)
+   - Fixed layout across all screen sizes
+   - Mobile overlay menu works
+   - Dropdowns: hover desktop, accordion mobile
+   - Active state styling + better effects
    ========================================= */
 
-/* Give the app content space under fixed navbar */
-.container {
-  padding-top: 92px;
-}
-
-/* -----------------------------
-   NAVBAR SHELL
------------------------------ */
 .navbar {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-
-  background: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+  top: 0; left: 0; right: 0;
+  background: rgba(10, 10, 20, 0.75);
   backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-
   border-bottom: 2px solid var(--accent-primary);
-  box-shadow: 0 10px 35px var(--glow-color);
-
+  box-shadow: 0 10px 35px rgba(0,0,0,0.55);
   z-index: 10000;
   transform: translateY(0);
-  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), box-shadow 0.25s ease;
 }
 
 .navbar.hide {
-  transform: translateY(-110%);
+  transform: translateY(-100%);
 }
 
-/* navbar.js can apply this to prevent hiding */
-.navbar.navbar-locked {
-  transform: translateY(0) !important;
+/* Optional manual collapse */
+body.navbar-collapsed .navbar {
+  transform: translateY(-100%);
 }
 
-/* -----------------------------
-   INNER LAYOUT
------------------------------ */
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
   padding: 0 18px;
-
-  min-height: 78px;
+  min-height: 75px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-
   gap: 14px;
-  position: relative; /* for progress bar */
 }
 
-/* Big screens: slightly roomier */
-@media (min-width: 1600px) {
-  .nav-content {
-    padding: 0 26px;
-    min-height: 82px;
-  }
-}
-
-/* -----------------------------
-   LOGO
------------------------------ */
+/* Logo */
 .nav-logo {
   display: flex;
   flex-direction: column;
@@ -80,14 +49,13 @@
 }
 
 .logo-text {
-  font-size: 1.55em;
+  font-size: 1.45em;
   font-weight: 800;
-  letter-spacing: 1.6px;
-
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 18px rgba(0, 212, 255, 0.18);
 }
 
 .logo-slogan {
@@ -96,102 +64,64 @@
   opacity: 0.95;
 }
 
-/* -----------------------------
-   LINKS ROW
------------------------------ */
+/* Links row */
 .nav-links {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   flex: 1;
   min-width: 0;
 }
 
-/* Allow wrapping if you ever add more buttons */
-@media (min-width: 1100px) {
-  .nav-links {
-    flex-wrap: wrap;
-  }
-}
-
-/* -----------------------------
-   BUTTONS (nav + dropdown toggle)
------------------------------ */
+/* Buttons */
 .nav-btn,
 .dropdown-toggle {
-  appearance: none;
-  -webkit-appearance: none;
-
-  padding: 9px 14px;
+  padding: 9px 13px;
+  background: linear-gradient(135deg, rgba(0,0,0,0.35), rgba(0,0,0,0.55));
   border-radius: 12px;
-
-  border: 2px solid var(--accent-tertiary);
-  background: linear-gradient(135deg, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.62));
-
-  color: var(--accent-tertiary);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-primary);
   cursor: pointer;
-
   font-weight: 700;
   font-size: 0.92rem;
-  line-height: 1;
-
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease,
-    color 0.2s ease, background 0.2s ease, filter 0.2s ease;
+  gap: 7px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  box-shadow: 0 0 0 rgba(0,0,0,0);
+  user-select: none;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover {
-  border-color: var(--accent-primary);
-  background: linear-gradient(135deg, var(--glow-color), var(--glow-color-light));
-  color: var(--accent-secondary);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  border-color: rgba(0, 212, 255, 0.45);
+  box-shadow: 0 10px 22px rgba(0, 212, 255, 0.08);
   transform: translateY(-2px);
-  filter: saturate(1.05);
 }
 
-.nav-btn:active,
-.dropdown-toggle:active {
-  transform: translateY(0px);
+/* Active page indicator */
+.nav-btn.is-active {
+  border-color: rgba(0, 212, 255, 0.65);
+  box-shadow: 0 0 0 1px rgba(0,212,255,0.25), 0 12px 26px rgba(0,212,255,0.10);
 }
 
-.nav-btn:focus-visible,
-.dropdown-toggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-secondary) 70%, transparent);
-  outline-offset: 2px;
-}
-
-/* Icon + label */
 .nav-icon {
   font-size: 1.05rem;
-  display: inline-flex;
-  align-items: center;
 }
 
 .nav-label {
   display: inline-block;
 }
 
-/* Theme button a little tighter (if you keep it) */
-.nav-btn.theme-btn {
-  padding: 9px 11px;
-}
-
-/* -----------------------------
-   DROPDOWNS
------------------------------ */
+/* Dropdowns */
 .nav-dropdown {
   position: relative;
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
 }
 
-/* Hover bridge so menu doesn’t vanish when moving mouse down */
+/* Hover spacer so menu doesn't close while moving cursor */
 .nav-dropdown::after {
   content: "";
   position: absolute;
@@ -202,238 +132,159 @@
   background: transparent;
 }
 
-/* Menu base */
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 14px);
   right: 0;
-
-  min-width: 220px;
-  padding: 10px;
-
-  background: color-mix(in srgb, var(--bg-tertiary) 88%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-
+  background: rgba(10, 10, 20, 0.92);
   border-radius: 14px;
-  border: 2px solid var(--accent-primary);
-
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  min-width: 210px;
+  padding: 8px;
   display: none;
   flex-direction: column;
-  gap: 6px;
-
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.70);
-  transform-origin: top right;
-  animation: naluDropIn 160ms ease-out;
-
+  box-shadow: 0 18px 38px rgba(0,0,0,0.75);
+  animation: navDropIn 0.16s ease;
   z-index: 10002;
 }
 
-@keyframes naluDropIn {
-  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* Desktop hover opens */
+/* Desktop open via hover */
 .nav-dropdown:hover .dropdown-menu {
   display: flex;
 }
 
-/* Touch/mobile click opens (navbar.js toggles .active) */
-.nav-dropdown.active .dropdown-menu {
+/* Desktop open via click (force-open class added by JS) */
+.nav-dropdown.force-open .dropdown-menu {
   display: flex;
 }
 
-/* Dropdown items: supports <a>, <button>, etc. */
-.dropdown-item {
-  display: block;
-  width: 100%;
-  text-align: left;
+@keyframes navDropIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
+.dropdown-item {
   padding: 10px 12px;
   border-radius: 10px;
-
-  border: 0;
-  background: transparent;
-
   font-size: 0.92rem;
-  font-weight: 700;
-
   color: var(--text-primary);
   cursor: pointer;
-
+  transition: background 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+  text-align: left;
+  font-weight: 700;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.02);
   text-decoration: none;
-  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
+  display: block;
 }
 
 .dropdown-item:hover {
-  background: color-mix(in srgb, var(--glow-color) 80%, transparent);
+  background: rgba(0, 212, 255, 0.10);
+  border-color: rgba(0, 212, 255, 0.30);
   transform: translateX(4px);
-  color: var(--accent-secondary);
 }
 
-.dropdown-item:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-secondary) 70%, transparent);
-  outline-offset: 2px;
+.dropdown-item.is-active {
+  background: rgba(0, 212, 255, 0.14);
+  border-color: rgba(0, 212, 255, 0.42);
 }
 
-/* If navbar.js marks active links */
-.dropdown-item.is-active,
-.nav-btn.is-active {
-  border-color: var(--accent-primary) !important;
-}
-
-/* -----------------------------
-   CONNECTION STATUS (right side badge)
------------------------------ */
+/* Connection status */
 .status-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-
-  padding: 6px 12px;
+  gap: 7px;
+  padding: 6px 10px;
+  background: rgba(0,0,0,0.35);
   border-radius: 999px;
-
-  background: rgba(0, 0, 0, 0.38);
-  border: 1px solid var(--accent-tertiary);
-
+  border: 1px solid rgba(255,255,255,0.12);
   font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text-primary);
-
-  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
 }
 
 .status-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-
   background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255, 184, 108, 0.65);
+  box-shadow: 0 0 10px rgba(255,184,108,0.6);
 }
 
 .status-dot.active {
   background: #50fa7b;
-  box-shadow: 0 0 14px rgba(80, 250, 123, 0.65);
+  box-shadow: 0 0 12px rgba(80,250,123,0.75);
 }
 
-/* -----------------------------
-   DESKTOP NAVBAR TOGGLE (optional)
------------------------------ */
+/* Desktop navbar toggle */
 .navbar-toggle {
-  margin-left: 6px;
+  margin-left: 8px;
   padding: 7px 10px;
-
   border-radius: 10px;
-  border: 1px solid var(--accent-tertiary);
-
-  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
   color: var(--text-primary);
   cursor: pointer;
-
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
-.navbar-toggle:hover {
-  border-color: var(--accent-primary);
-  background: rgba(0, 0, 0, 0.55);
-  transform: translateY(-1px);
-}
-
-.navbar-toggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-secondary) 70%, transparent);
-  outline-offset: 2px;
-}
-
-/* Floating toggle button (optional) */
+/* Floating toggle button */
 .navbar-toggle-btn {
   position: fixed;
   right: 16px;
   bottom: 16px;
-
   border-radius: 999px;
-  padding: 10px 12px;
-
-  border: 1px solid var(--accent-secondary);
-  background: rgba(0, 0, 0, 0.60);
+  padding: 9px 11px;
+  border: 1px solid rgba(0, 212, 255, 0.45);
+  background: rgba(0,0,0,0.6);
   color: var(--accent-secondary);
-
   cursor: pointer;
   z-index: 9999;
-
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
-  transition: transform 0.18s ease, filter 0.18s ease;
-}
-
-.navbar-toggle-btn:hover {
-  transform: translateY(-2px);
-  filter: saturate(1.05);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.45);
 }
 
 .toggle-icon {
   display: inline-block;
-  font-weight: 900;
 }
 
-/* -----------------------------
-   HAMBURGER (mobile)
------------------------------ */
+/* Hamburger */
 .hamburger {
   display: none;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding: 10px;
   cursor: pointer;
-  border-radius: 12px;
-
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.18);
-
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
-}
-
-.hamburger:hover {
-  border-color: var(--accent-primary);
-  background: rgba(0, 0, 0, 0.30);
-  transform: translateY(-1px);
+  user-select: none;
 }
 
 .hamburger span {
-  width: 26px;
+  width: 24px;
   height: 3px;
   background: var(--accent-secondary);
   border-radius: 2px;
-  transition: transform 0.22s ease, opacity 0.22s ease;
+  transition: transform 0.25s ease, opacity 0.25s ease;
 }
 
 .hamburger.active span:nth-child(1) {
-  transform: translateY(8px) rotate(45deg);
+  transform: translateY(7px) rotate(45deg);
 }
-
 .hamburger.active span:nth-child(2) {
   opacity: 0;
 }
-
 .hamburger.active span:nth-child(3) {
-  transform: translateY(-8px) rotate(-45deg);
+  transform: translateY(-7px) rotate(-45deg);
 }
 
-/* -----------------------------
-   MOBILE / SMALL SCREENS
------------------------------ */
+/* =========================================
+   Mobile / small screens
+   ========================================= */
 @media (max-width: 992px) {
-  .container {
-    padding-top: 86px;
-  }
-
   .nav-content {
     padding: 0 12px;
-    min-height: 72px;
+    gap: 10px;
   }
 
   .nav-logo {
-    min-width: 0;
+    min-width: auto;
   }
 
   .nav-logo .logo-slogan {
@@ -448,34 +299,27 @@
     display: flex;
   }
 
-  /* Full-screen slide-in panel */
+  /* Full-screen mobile menu overlay */
   .nav-links {
     position: fixed;
-    top: 72px;
+    top: 75px;
     left: 0;
     right: 0;
     bottom: 0;
-
-    padding: 16px;
-    gap: 12px;
-
-    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-
+    background: rgba(10, 10, 20, 0.94);
+    backdrop-filter: blur(12px);
     flex-direction: column;
     align-items: stretch;
     justify-content: flex-start;
+    padding: 16px;
+    gap: 10px;
 
-    transform: translateX(-110%);
+    transform: translateX(-100%);
     opacity: 0;
     pointer-events: none;
-
-    transition: transform 0.24s ease, opacity 0.24s ease;
+    transition: transform 0.25s ease, opacity 0.25s ease;
     overflow-y: auto;
-    z-index: 9999;
-
-    box-shadow: 25px 0 60px rgba(0, 0, 0, 0.55);
+    z-index: 10001;
   }
 
   .nav-links.show {
@@ -488,74 +332,37 @@
   .dropdown-toggle {
     width: 100%;
     justify-content: flex-start;
-    padding: 13px 14px;
-    font-size: 0.98rem;
+    padding: 12px 14px;
+    font-size: 1rem;
   }
 
-  /* Dropdowns become accordion: disable hover open */
+  /* Dropdowns become accordion sections */
   .nav-dropdown:hover .dropdown-menu {
     display: none;
   }
 
-  .dropdown-menu {
+  .nav-dropdown .dropdown-menu {
     position: static;
-    min-width: 0;
-
-    border-width: 1px;
-    border-radius: 12px;
-
-    padding: 8px;
     margin-top: 6px;
-
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
-    animation: none;
+    border-radius: 12px;
   }
 
-  /* accordion open state */
   .nav-dropdown.active .dropdown-menu {
     display: flex;
   }
 
-  .dropdown-item {
-    padding: 12px 12px;
-    font-size: 0.96rem;
-  }
-
-  /* Status badge stays visible in header row */
+  /* Hide status badge on tiny screens if it crowds */
   .status-badge {
-    padding: 6px 10px;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
+    padding: 5px 9px;
   }
 }
 
-/* Very small screens */
 @media (max-width: 480px) {
-  .container {
-    padding-top: 82px;
-  }
-
   .logo-text {
-    font-size: 1.35em;
-    letter-spacing: 1.1px;
+    font-size: 1.25em;
   }
-
-  .status-badge span {
-    max-width: 150px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .status-badge {
+    display: none;
   }
-}
-
-/* -----------------------------
-   Scroll progress bar (inserted by navbar.js)
------------------------------ */
-.nalu-scroll-progress {
-  position: absolute;
-  left: 0;
-  bottom: -2px;
-  height: 2px;
-  width: 0%;
-  background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
-  box-shadow: 0 0 18px rgba(0, 212, 255, 0.35);
-  opacity: 0.9;
 }
