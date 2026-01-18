@@ -4,19 +4,7 @@
 
    ✅ Kept EXACT: Ledger Overview (metrics) + Ledger Stream cards (design/markup)
    ✅ Kept: Network selector + connection box + patterns/dominance panel
-   ❌ Removed: old right-side widgets + all their logic (validators/amm/etc)
-   ➕ Added (real-data):
-      - Wallet Flow Breadcrumbs (repeated sender/receiver sets across ledgers)
-      - Drain-pattern detection heuristics (fan-out / routing / ping-pong)
-      - Confidence scoring (breadcrumb stability)
-      - Cluster inference (graph-based grouping, no identity)
-      - Cluster persistence scoring (how persistent a cluster is across ledgers)
-      - Flow-window sensitivity (5 / 20 / 50 ledgers)
-      - Alert thresholds (e.g., fingerprint ≥ 3)
-      - Visual trace drill-down (click breadcrumb → highlight ledgers)
-      - Ledger-to-Ledger Delta Narratives (“Payments collapsed, Offers surged”)
-      - Replay Timeline Slider (rewind within captured history)
-      - Exportable Forensic Report (JSON / CSV snapshot)
+   ➕ Forensics additions (real-data)
 
    ✅ FIXES ADDED:
       - Ledger stream ordering is canonical by ledgerIndex (dedupe + sort)
@@ -26,6 +14,13 @@
       - Smooth continuous right→left scroll via RAF (no animation reset)
       - Continuity checks (gap detection)
       - Notifications do NOT block navbar/dropdowns (pointer-events fix)
+
+   ✅ NEW FIX (this patch):
+      - Forensics alerts are NON-BLOCKING by default:
+        "Alerts Tray" inside Forensics Toolkit
+      - Alert modes: Tray (default) / Toast (rate-limited) / Off
+      - Clear alerts button
+      - Toasts are heavily rate-limited + only for higher-signal alerts
    ========================================= */
 
 (function () {
@@ -36,6 +31,13 @@
 
   // Stream motion tuning (px/sec). “a little faster” than slow, but stable.
   const STREAM_SCROLL_PX_PER_SEC = 52;
+
+  // Alerts
+  const DEFAULT_ALERT_MODE = "tray";      // "tray" | "toast" | "off"
+  const MAX_ALERT_LOG = 60;
+  const TOAST_RATE_LIMIT_MS = 9000;       // at most 1 toast / 9s
+  const TOAST_MIN_CONFIDENCE = 75;        // only toast if confidence high (prevents spam)
+  const TOAST_MIN_REPEATS_EXTRA = 1;      // require repeats >= (min + extra) for toast
 
   const Dashboard = {
     charts: {},
@@ -55,8 +57,13 @@
     alertFingerprintMin: DEFAULT_ALERT_FINGERPRINT_MIN,
     replayIndex: null, // ledgerIndex selected for replay (null = live)
 
+    // Alerts (NEW)
+    alertMode: DEFAULT_ALERT_MODE, // "tray" | "toast" | "off"
+    alertsLog: [],                // newest-first
+    lastToastAt: 0,               // ms timestamp for rate-limit
+    lastAlerts: new Set(),        // dedupe key set
+
     // Derived / UI state
-    lastAlerts: new Set(),
     selectedTraceLedgers: new Set(),
 
     // Stream animation state (RAF-based to prevent jumps)
@@ -242,9 +249,36 @@
                     </div>
                   </div>
 
-                  <div class="widget-row" style="margin-top:12px;">
-                    <span class="widget-label">Status</span>
-                    <span class="widget-label" id="d2-forensics-status" style="text-align:right;">Waiting for ledgers…</span>
+                  <!-- NEW: Alert Mode -->
+                  <div class="widget-row" style="margin-top:12px; align-items:flex-start;">
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Alerts Mode</div>
+                      <div class="orderbook-row" id="d2-alert-mode-buttons" style="gap:8px;">
+                        <span class="widget-pill" data-alertmode="tray">Tray</span>
+                        <span class="widget-pill" data-alertmode="toast">Toast</span>
+                        <span class="widget-pill" data-alertmode="off">Off</span>
+                        <span class="widget-pill" id="d2-alert-clear">Clear</span>
+                      </div>
+                      <div class="d2-alert-hint" id="d2-alert-hint">Non-blocking tray is active.</div>
+                    </div>
+
+                    <div style="flex:1;">
+                      <div class="widget-label" style="margin-bottom:6px;">Status</div>
+                      <div class="widget-row" style="gap:10px;">
+                        <span class="widget-label" id="d2-forensics-status" style="text-align:right; width:100%;">Waiting for ledgers…</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- NEW: Alerts Tray (non-blocking) -->
+                  <div class="d2-alert-tray" id="d2-alert-tray">
+                    <div class="d2-alert-tray-head">
+                      <div class="widget-label">🚨 Alerts</div>
+                      <div class="d2-alert-count" id="d2-alert-count">0</div>
+                    </div>
+                    <div class="d2-alert-feed" id="d2-alert-feed">
+                      <div class="widget-label">No alerts yet.</div>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -313,6 +347,10 @@
       // ✅ Start smooth stream animation (prevents jump/reset)
       this.startStreamAnimation();
 
+      // Alert UI init
+      this.applyAlertModeUI();
+      this.renderAlertsTray();
+
       this.initialized = true;
       console.log("✅ Dashboard rendered - waiting for real XRPL data");
     },
@@ -321,6 +359,7 @@
        FIX STYLES:
        - notifications not blocking navbar
        - stream smoother (hint browser)
+       - broaden toast selectors (more libraries)
        ========================= */
     injectFixStyles() {
       if (document.getElementById("d2-fix-style")) return;
@@ -333,7 +372,13 @@
         .notification-container,
         .toast-container,
         .toast-wrapper,
-        .toasts {
+        .toasts,
+        .Toastify__toast-container,
+        .notyf,
+        .notyf__wrapper,
+        .iziToast-wrapper,
+        .izitoast-wrapper,
+        .swal2-container {
           pointer-events: none !important;
           z-index: 9999 !important;
         }
@@ -342,14 +387,15 @@
         .notification-container .notification,
         .toast-container .toast,
         .toast-wrapper .toast,
-        .toasts .toast {
+        .toasts .toast,
+        .Toastify__toast,
+        .notyf__toast,
+        .iziToast {
           pointer-events: auto !important;
         }
 
         /* Stream perf */
-        #ledgerStreamTrack {
-          will-change: transform;
-        }
+        #ledgerStreamTrack { will-change: transform; }
       `;
       document.head.appendChild(style);
     },
@@ -361,13 +407,105 @@
       style.textContent = `
         .widget-pill { cursor: pointer; user-select:none; }
         .widget-pill.is-active { outline: 2px solid rgba(255,255,255,0.20); }
+
         .ledger-card.is-trace {
           box-shadow: 0 0 0 2px rgba(255, 204, 102, 0.65), 0 0 22px rgba(255, 204, 102, 0.15);
           transform: translateY(-1px);
         }
+
         .d2-bc-item { cursor:pointer; }
         .d2-bc-sub { opacity: 0.85; font-size: 12px; margin-top: 3px; }
         .d2-bc-row { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+
+        /* Alerts tray (non-blocking) */
+        .d2-alert-tray {
+          margin-top: 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(0,0,0,0.18);
+          overflow: hidden;
+        }
+        .d2-alert-tray-head {
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          padding: 10px 12px;
+          border-bottom: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.03);
+        }
+        .d2-alert-count {
+          font-size: 12px;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(0,0,0,0.22);
+          color: inherit;
+        }
+        .d2-alert-feed {
+          max-height: 160px;
+          overflow: auto;
+          padding: 10px 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .d2-alert-item {
+          border-radius: 12px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(0,0,0,0.18);
+          padding: 10px 10px;
+        }
+        .d2-alert-top {
+          display:flex;
+          justify-content:space-between;
+          align-items:flex-start;
+          gap: 10px;
+        }
+        .d2-alert-title {
+          font-weight: 700;
+          font-size: 13px;
+          line-height: 1.25;
+        }
+        .d2-alert-meta {
+          opacity: 0.85;
+          font-size: 12px;
+          margin-top: 3px;
+        }
+        .d2-alert-badges {
+          display:flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        .d2-alert-badge {
+          font-size: 11px;
+          padding: 3px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.04);
+          white-space: nowrap;
+        }
+        .d2-alert-actions {
+          display:flex;
+          gap: 8px;
+          margin-top: 8px;
+          justify-content: flex-end;
+        }
+        .d2-alert-btn {
+          font-size: 12px;
+          padding: 6px 10px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(0,0,0,0.20);
+          color: inherit;
+          cursor: pointer;
+        }
+        .d2-alert-btn:hover { filter: brightness(1.08); }
+        .d2-alert-hint {
+          margin-top: 6px;
+          font-size: 12px;
+          opacity: 0.85;
+        }
       `;
       document.head.appendChild(style);
     },
@@ -447,6 +585,51 @@
 
       const btnClear = document.getElementById("d2-clear-trace");
       if (btnClear) btnClear.addEventListener("click", () => this.clearTrace());
+
+      // NEW: alert modes
+      const modeWrap = document.getElementById("d2-alert-mode-buttons");
+      if (modeWrap) {
+        const pills = modeWrap.querySelectorAll(".widget-pill[data-alertmode]");
+        const setActive = () => {
+          pills.forEach((p) => p.classList.toggle("is-active", p.getAttribute("data-alertmode") === this.alertMode));
+        };
+        setActive();
+
+        pills.forEach((p) => {
+          p.addEventListener("click", () => {
+            const m = p.getAttribute("data-alertmode");
+            if (!m) return;
+            this.alertMode = m;
+            this.applyAlertModeUI();
+            setActive();
+          });
+        });
+
+        const clearBtn = document.getElementById("d2-alert-clear");
+        if (clearBtn) {
+          clearBtn.addEventListener("click", () => this.clearAlerts());
+        }
+      }
+    },
+
+    applyAlertModeUI() {
+      const hint = document.getElementById("d2-alert-hint");
+      const tray = document.getElementById("d2-alert-tray");
+      if (hint) {
+        hint.textContent =
+          this.alertMode === "tray" ? "Non-blocking tray is active." :
+          this.alertMode === "toast" ? "Toasts are ON (rate-limited, high-signal only)." :
+          "Alerts are OFF.";
+      }
+      if (tray) {
+        tray.style.display = (this.alertMode === "tray") ? "block" : "none";
+      }
+      this.renderAlertsTray();
+    },
+
+    clearAlerts() {
+      this.alertsLog = [];
+      this.renderAlertsTray();
     },
 
     /* =========================
@@ -650,7 +833,6 @@
       if (this.replayIndex == null) {
         this.ledgerStream = this.replayHistory.slice(0, MAX_STREAM_LEDGERS);
       } else {
-        // keep replay viewport stable but update store
         const pos = this.replayHistory.findIndex((x) => x.ledgerIndex === this.replayIndex);
         this.ledgerStream = pos >= 0
           ? this.replayHistory.slice(pos, pos + MAX_STREAM_LEDGERS)
@@ -733,7 +915,6 @@
             <header class="ledger-card-header">
               <div class="ledger-id">#${card.ledgerIndex.toLocaleString()}</div>
               <div class="ledger-meta">
-                <!-- ✅ removed timestamp entirely -->
                 <span class="ledger-tag">${card.dominantType}</span>
               </div>
             </header>
@@ -828,13 +1009,12 @@
 
       const step = (ts) => {
         if (!this._streamLastTS) this._streamLastTS = ts;
-        const dt = Math.min(0.05, (ts - this._streamLastTS) / 1000); // clamp to prevent big leaps
+        const dt = Math.min(0.05, (ts - this._streamLastTS) / 1000);
         this._streamLastTS = ts;
 
         const track = document.getElementById("ledgerStreamTrack");
         if (track) {
           if (this._streamNeedsMeasure) {
-            // track contains duplicated content: width/2 is one loop
             const full = track.scrollWidth || 0;
             this._streamLoopWidth = Math.max(1, Math.floor(full / 2));
             this._streamOffsetX = this._streamOffsetX % this._streamLoopWidth;
@@ -855,7 +1035,6 @@
 
       this._streamRAF = requestAnimationFrame(step);
 
-      // Re-measure on resize without resetting
       window.addEventListener("resize", () => {
         this._streamNeedsMeasure = true;
       });
@@ -865,11 +1044,9 @@
        Continuity checks (gap detection)
        ========================= */
     checkContinuity() {
-      // We care about the newest chunk for user-facing continuity
       const slice = this.replayHistory.slice(0, 25).map(x => x.ledgerIndex);
       if (slice.length < 3) return;
 
-      // replayHistory is newest-first; check consecutive descending
       let gap = null;
       for (let i = 0; i < slice.length - 1; i++) {
         const a = slice[i];
@@ -885,13 +1062,18 @@
         const msg = `Continuity gap: missing ${gap.missing} ledger(s) between #${gap.to.toLocaleString()} → #${gap.from.toLocaleString()}`;
         if (status) status.textContent = `⚠️ ${msg}`;
 
-        // Optional: one-time toast (won’t spam)
         const key = `gap|${gap.from}|${gap.to}`;
         if (!this.lastAlerts.has(key)) {
           this.lastAlerts.add(key);
-          if (typeof window.showNotification === "function") {
-            window.showNotification(`⚠️ ${msg}`, "warn", 4500);
-          }
+          // NOTE: continuity warnings go to tray only (non-blocking)
+          this.pushAlert({
+            title: "Continuity gap",
+            message: msg,
+            kind: "Continuity",
+            repeats: gap.missing,
+            confidence: 100,
+            ledgers: [gap.to, gap.from]
+          }, { allowToast: false });
         }
       }
     },
@@ -908,7 +1090,6 @@
 
       if (!typeEl || !scoreEl || !barEl || !flagsEl || !explainEl) return;
 
-      // Use newest-first for analysis (not display order)
       const recent = this.ledgerStream.slice().sort((a, b) => b.ledgerIndex - a.ledgerIndex).slice(0, 6);
 
       if (recent.length < 3) {
@@ -1013,10 +1194,9 @@
       this.renderClusters(clusters);
       this.renderNarratives(narratives);
 
-      // Alerts can still fire, but stream will not jump because animation is RAF-based
+      // Alerts (now non-blocking by default)
       this.emitAlerts(breadcrumbs);
 
-      // If continuity gap exists, checkContinuity() may override this text with warning (fine)
       status.textContent = `Live signals: ${breadcrumbs.length} • clusters: ${clusters.length}`;
     },
 
@@ -1504,28 +1684,176 @@
       });
     },
 
+    /* =========================
+       🔥 NEW: Non-blocking Alerts System
+       ========================= */
+
+    formatAlertMessage(b) {
+      const conf = Number(b.confidence || 0);
+      const rep = Number(b.repeats || 0);
+      const led = Array.isArray(b.ledgers) ? b.ledgers.slice(0, 8).map((x) => `#${x}`).join(", ") : "—";
+
+      // Example:
+      // Drain / Fan-out • rpr6g5…ujpo ⇢ 326 wallets
+      // repeats: 6 • confidence: 54% • ledgers: #101… #101…
+      return {
+        title: `${b.kind}: ${b.key}`,
+        message: `${b.details || ""}`.trim() || "Signal detected.",
+        meta: `repeats: ${rep} • confidence: ${conf}% • ledgers: ${led}${Array.isArray(b.ledgers) && b.ledgers.length > 8 ? "…" : ""}`
+      };
+    },
+
+    pushAlert(alertObj, { allowToast = true } = {}) {
+      // alertObj: {title, message, kind, repeats, confidence, ledgers}
+      if (!alertObj) return;
+
+      // Off = do nothing
+      if (this.alertMode === "off") return;
+
+      const now = Date.now();
+
+      // log newest-first
+      this.alertsLog.unshift({
+        id: `${now}-${Math.random().toString(16).slice(2)}`,
+        ts: now,
+        ...alertObj
+      });
+
+      if (this.alertsLog.length > MAX_ALERT_LOG) {
+        this.alertsLog = this.alertsLog.slice(0, MAX_ALERT_LOG);
+      }
+
+      if (this.alertMode === "tray") {
+        this.renderAlertsTray(true);
+        return;
+      }
+
+      // Toast mode: rate-limited and only for higher-signal alerts
+      if (this.alertMode === "toast" && allowToast) {
+        const conf = Number(alertObj.confidence || 0);
+        const rep = Number(alertObj.repeats || 0);
+        const min = Number(this.alertFingerprintMin || DEFAULT_ALERT_FINGERPRINT_MIN);
+
+        const highSignal = (conf >= TOAST_MIN_CONFIDENCE) && (rep >= (min + TOAST_MIN_REPEATS_EXTRA));
+        const rateOk = (now - this.lastToastAt) >= TOAST_RATE_LIMIT_MS;
+
+        if (highSignal && rateOk && typeof window.showNotification === "function") {
+          this.lastToastAt = now;
+          window.showNotification(`🚨 ${alertObj.title} • ${rep} repeats • ${conf}%`, "warn", 3800);
+        }
+      }
+    },
+
+    renderAlertsTray(keepScroll = false) {
+      const feed = document.getElementById("d2-alert-feed");
+      const countEl = document.getElementById("d2-alert-count");
+      if (!feed || !countEl) return;
+
+      countEl.textContent = String(this.alertsLog.length);
+
+      if (this.alertMode !== "tray") return;
+
+      const prevScroll = feed.scrollTop;
+
+      if (!this.alertsLog.length) {
+        feed.innerHTML = `<div class="widget-label">No alerts yet.</div>`;
+        return;
+      }
+
+      feed.innerHTML = this.alertsLog
+        .slice(0, 20) // show last 20, keep log bigger
+        .map((a) => {
+          const conf = Number(a.confidence || 0);
+          const rep = Number(a.repeats || 0);
+
+          const badge1 = `<span class="d2-alert-badge">${rep} repeats</span>`;
+          const badge2 = `<span class="d2-alert-badge">${conf}% conf</span>`;
+          const badge3 = Array.isArray(a.ledgers) && a.ledgers.length
+            ? `<span class="d2-alert-badge">${a.ledgers.length} ledgers</span>`
+            : `<span class="d2-alert-badge">—</span>`;
+
+          const ledStr = Array.isArray(a.ledgers) ? a.ledgers.slice(0, 8).map((x) => `#${x}`).join(", ") : "";
+          const copyText = `ALERT: ${a.title}\n${a.message}\n${a.meta || ""}\nLedgers: ${ledStr}`;
+
+          return `
+            <div class="d2-alert-item" data-alert-id="${a.id}">
+              <div class="d2-alert-top">
+                <div style="min-width:0; flex:1;">
+                  <div class="d2-alert-title">${escapeHtml(a.title || "Alert")}</div>
+                  <div class="d2-alert-meta">${escapeHtml(a.message || "")}</div>
+                  <div class="d2-alert-meta">${escapeHtml(a.meta || "")}</div>
+                </div>
+                <div class="d2-alert-badges">
+                  ${badge1}${badge2}${badge3}
+                </div>
+              </div>
+              <div class="d2-alert-actions">
+                <button class="d2-alert-btn" data-copy="${escapeAttr(copyText)}">Copy</button>
+                <button class="d2-alert-btn" data-trace="${escapeAttr((Array.isArray(a.ledgers) ? a.ledgers.join(",") : ""))}">Trace</button>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      // Bind tray buttons
+      feed.querySelectorAll(".d2-alert-btn[data-copy]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const text = btn.getAttribute("data-copy") || "";
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.textContent = "Copied";
+            setTimeout(() => (btn.textContent = "Copy"), 900);
+          } catch (e) {
+            console.warn("Clipboard copy failed", e);
+          }
+        });
+      });
+
+      feed.querySelectorAll(".d2-alert-btn[data-trace]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const raw = btn.getAttribute("data-trace") || "";
+          const parts = raw.split(",").map((x) => Number(x)).filter((n) => Number.isFinite(n));
+          this.selectTraceLedgers(new Set(parts));
+        });
+      });
+
+      // keep scroll position unless new alert pushes user around
+      if (keepScroll) {
+        feed.scrollTop = prevScroll;
+      }
+    },
+
     emitAlerts(breadcrumbs) {
       if (!Array.isArray(breadcrumbs) || breadcrumbs.length === 0) return;
 
       const min = this.alertFingerprintMin;
+
       for (const b of breadcrumbs) {
         if ((b.repeats || 0) < min) continue;
 
-        const key = `${b.kind}|${b.key}|${b.repeats}`;
+        // Stronger dedupe: kind + key + repeats + window size (prevents spam across small changes)
+        const key = `${b.kind}|${b.key}|${b.repeats}|w${this.flowWindowSize}`;
         if (this.lastAlerts.has(key)) continue;
         this.lastAlerts.add(key);
 
-        if (this.lastAlerts.size > 80) {
-          this.lastAlerts = new Set(Array.from(this.lastAlerts).slice(-60));
+        // Limit dedupe set growth
+        if (this.lastAlerts.size > 120) {
+          this.lastAlerts = new Set(Array.from(this.lastAlerts).slice(-90));
         }
 
-        const msg = `🚨 Forensics Alert: ${b.kind} (${b.key}) repeated in ${b.repeats} ledgers • ${b.confidence}% confidence`;
-        if (typeof window.showNotification === "function") {
-          // Stream won’t jump now because we aren’t toggling CSS animation
-          window.showNotification(msg, "warn", 4500);
-        } else {
-          console.warn(msg);
-        }
+        const fmt = this.formatAlertMessage(b);
+
+        // Push non-blocking alert
+        this.pushAlert({
+          kind: b.kind,
+          title: fmt.title,
+          message: fmt.message,
+          meta: fmt.meta,
+          repeats: b.repeats,
+          confidence: b.confidence,
+          ledgers: b.ledgers || []
+        }, { allowToast: true });
       }
     },
 
@@ -1691,6 +2019,20 @@
     },
   };
 
+  // Simple safe escaping for alert tray
+  function escapeHtml(s) {
+    const str = String(s ?? "");
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/\n/g, " ");
+  }
+
   // Expose dashboard renderer + API
   window.renderDashboard = () => Dashboard.render();
   window.NaluDashboard = {
@@ -1726,5 +2068,5 @@
     }
   });
 
-  console.log("📊 NaluXrp Dashboard V2 FORENSICS loaded (stream preserved, ordering fixed, time removed, smooth flow)");
+  console.log("📊 NaluXrp Dashboard V2 FORENSICS loaded (alerts tray enabled, non-blocking)");
 })();
