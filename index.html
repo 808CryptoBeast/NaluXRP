@@ -39,65 +39,73 @@
     <div class="nav-content">
 
       <!-- Logo -->
-      <div class="nav-logo" onclick="switchPage('dashboard')">
+      <div class="nav-logo" onclick="switchPage('dashboard')" role="button" tabindex="0">
         <div class="logo-text">🌊 <strong>NaluXrp</strong></div>
         <small class="logo-slogan">Riding The Ledger Waves</small>
       </div>
 
       <!-- Hamburger (mobile) -->
-      <div class="hamburger" id="hamburger">
+      <div class="hamburger" id="hamburger" aria-label="Toggle menu" role="button" tabindex="0">
         <span></span><span></span><span></span>
       </div>
 
       <!-- Navigation Links -->
       <div class="nav-links" id="navLinks">
 
-        <button class="nav-btn" onclick="switchPage('dashboard')">
+        <button class="nav-btn" onclick="switchPage('dashboard')" type="button">
           <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
         </button>
 
+        <!-- ✅ Account Inspector button (VISIBLE in navbar) -->
+        <button class="nav-btn" onclick="switchPage('inspector')" type="button" title="Account Inspector">
+          <span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>
+        </button>
+
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">
+          <button class="nav-btn dropdown-toggle" type="button">
             <span class="nav-icon">🌐</span><span class="nav-label">Network</span>
           </button>
           <div class="dropdown-menu">
-            <a class="dropdown-item" onclick="switchPage('validators')">🛡️ Validators</a>
-            <a class="dropdown-item" onclick="switchPage('analytics')">📈 Analytics</a>
-            <a class="dropdown-item" onclick="switchPage('explorer')">🔍 Explorer</a>
+            <button class="dropdown-item" type="button" onclick="switchPage('validators')">🛡️ Validators</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('analytics')">📈 Analytics</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('explorer')">🔍 Explorer</button>
+
+            <!-- ✅ Inspector also available in dropdown (optional but nice) -->
+            <button class="dropdown-item" type="button" onclick="switchPage('inspector')">🔎 Account Inspector</button>
           </div>
         </div>
 
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">
+          <button class="nav-btn dropdown-toggle" type="button">
             <span class="nav-icon">💰</span><span class="nav-label">DeFi</span>
           </button>
           <div class="dropdown-menu">
-            <a class="dropdown-item" onclick="switchPage('tokens')">🪙 Tokens</a>
-            <a class="dropdown-item" onclick="switchPage('amm')">💧 AMM Pools</a>
-            <a class="dropdown-item" onclick="switchPage('nfts')">🎨 NFTs</a>
+            <button class="dropdown-item" type="button" onclick="switchPage('tokens')">🪙 Tokens</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('amm')">💧 AMM Pools</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('nfts')">🎨 NFTs</button>
           </div>
         </div>
 
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle">
+          <button class="nav-btn dropdown-toggle" type="button">
             <span class="nav-icon">📚</span><span class="nav-label">Resources</span>
           </button>
           <div class="dropdown-menu">
-            <a class="dropdown-item" onclick="switchPage('news')">📰 News</a>
-            <a class="dropdown-item" onclick="switchPage('history')">📜 History</a>
-            <a class="dropdown-item" onclick="switchPage('about')">ℹ️ About</a>
+            <button class="dropdown-item" type="button" onclick="switchPage('news')">📰 News</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('history')">📜 History</button>
+            <button class="dropdown-item" type="button" onclick="switchPage('about')">ℹ️ About</button>
           </div>
         </div>
 
-        <button class="nav-btn" onclick="switchPage('profile')">
+        <button class="nav-btn" onclick="switchPage('profile')" type="button">
           <span class="nav-icon">👤</span><span class="nav-label">Profile</span>
         </button>
 
-        <button class="nav-btn" onclick="switchPage('settings')">
+        <button class="nav-btn" onclick="switchPage('settings')" type="button">
           <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
         </button>
 
-        <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme">
+        <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme" type="button">
           🎨
         </button>
       </div>
@@ -109,12 +117,12 @@
       </div>
 
       <!-- Navbar Toggle (desktop) -->
-      <button class="navbar-toggle" id="navbarToggle" title="Toggle Navbar (N)">☰</button>
+      <button class="navbar-toggle" id="navbarToggle" title="Toggle Navbar (N)" type="button">☰</button>
     </div>
   </nav>
 
   <!-- Secondary floating toggle -->
-  <button class="navbar-toggle-btn" id="navbarToggleBtn" title="Toggle Navbar (Press N)">
+  <button class="navbar-toggle-btn" id="navbarToggleBtn" title="Toggle Navbar (Press N)" type="button">
     <span class="toggle-icon">▲</span>
   </button>
 
@@ -138,6 +146,9 @@
     <section id="history" class="page-section"></section>
     <section id="settings" class="page-section"></section>
     <section id="about" class="page-section"></section>
+
+    <!-- ✅ Add missing Inspector section -->
+    <section id="inspector" class="page-section"></section>
   </div>
 
   <!-- JS (order matters) -->
@@ -166,9 +177,15 @@
   <script src="js/news.js"></script>
   <script src="js/history.js"></script>
   <script src="js/settings.js"></script>
+
+  <!-- ✅ About -->
   <script src="js/about.js"></script>
+
+  <!-- ✅ Account Inspector (must exist if you're switching pages to it) -->
+  <script src="js/account-inspector.js"></script>
+
+  <!-- Navbar LAST -->
   <script src="js/navbar.js"></script>
 
 </body>
 </html>
-
