@@ -1,17 +1,21 @@
 // =======================================================
-// navbar.js — FULL (NO HAMBURGER) + WORKING NAV BUTTONS + DROPDOWNS
-// Fixes:
-// ✅ Wires ALL nav buttons + dropdown items (onclick OR data-page)
-// ✅ Dropdowns: hover (desktop) + click/tap (touch/mobile)
-// ✅ Guarantees only ONE Account Inspector button (dedupe)
-// ✅ Closes dropdowns on outside click / ESC / navigation
-// ✅ Dynamic --nav-offset so navbar doesn't cover content
-// ✅ Updates connection badge via xrpl-connection events
+// navbar.js — FIXED (PORTAL DROPDOWNS) + HOVER + MOBILE TAP
+// - Dropdown menus are "portaled" to <body> so they are never clipped by overflow containers
+// - Hover opens on desktop (hover-capable devices)
+// - Tap/click toggles on mobile/touch
+// - Outside click + ESC closes
+// - Wires ALL nav buttons and dropdown items (data-page or onclick="switchPage('x')")
+// - Ensures ONLY ONE Account Inspector button
+// - Updates connection badge via xrpl-connection events
+// - Sets --nav-offset so navbar doesn't cover top content
 // =======================================================
 
 (function () {
-  if (window.__NALU_NAVBAR_V4__) return;
-  window.__NALU_NAVBAR_V4__ = true;
+  if (window.__NALU_NAVBAR_V5__) return;
+  window.__NALU_NAVBAR_V5__ = true;
+
+  const PORTAL_CLASS = "dropdown-menu--portal";
+  const OPEN_CLASS = "open";
 
   const INSPECTOR_SELECTOR = [
     '[data-page="inspector"]',
@@ -23,30 +27,21 @@
     'a[onclick*="switchPage(\\"inspector\\")"]'
   ].join(",");
 
+  // Tracks portal state for each menu
+  const menuHome = new WeakMap(); // menu -> { parent, nextSibling }
+  const ddState = new WeakMap();  // dropdown -> { isOpen, closeTimer, onScroll }
+
   document.addEventListener("DOMContentLoaded", () => {
     injectNavbarSafetyStyles();
+    hideLegacyHamburgerAndToggles();
     applyNavOffset();
 
-    // Remove hamburger if it exists in DOM (some older HTML still includes it)
-    const hamburger = document.getElementById("hamburger");
-    if (hamburger) hamburger.style.display = "none";
+    wireAllNavTargets();            // bind Dashboard/Profile/Settings/etc + dropdown items
+    setupDropdownsWithPortal();      // makes dropdowns actually appear (not clipped)
+    ensureSingleInspectorButton();   // de-dupe + normalize
+    wireAllNavTargets();            // rebind after inspector normalization
 
-    // 1) Wire navigation everywhere (this makes all buttons work)
-    wireAllNavTargets();
-
-    // 2) Fix dropdown behavior (desktop hover + click/tap)
-    setupDropdowns();
-
-    // 3) Ensure only one Inspector button exists, and make it a proper nav button
-    ensureSingleInspectorButton();
-
-    // 4) Wire again (in case inspector was created/normalized)
-    wireAllNavTargets();
-
-    // 5) Connection badge updates
     bindConnectionBadge();
-
-    // Active state sync
     hookSwitchPageForActiveState();
     setTimeout(syncActiveFromCurrentSection, 0);
 
@@ -57,57 +52,47 @@
   });
 
   // ------------------------------------------------------
-  // NAV WIRING (CRITICAL): supports:
+  // NAV WIRING: supports:
   // - data-page="..."
-  // - onclick="switchPage('...')"
-  // - dropdown <a> items with onclick
+  // - onclick="switchPage('xyz')"
   // ------------------------------------------------------
   function wireAllNavTargets() {
     const navRoot = document.getElementById("navbar") || document;
     const candidates = navRoot.querySelectorAll("button, a");
 
     candidates.forEach((el) => {
-      // If it's a dropdown toggle, skip (handled separately)
       if (el.classList.contains("dropdown-toggle")) return;
 
-      // Determine intended page
       const page = getPageFromElement(el);
       if (!page) return;
 
-      // Avoid double-binding
       if (el.__naluNavBound) return;
 
-      // Remove inline onclick to prevent double-fires
+      // Remove inline onclick to prevent double / inconsistent behavior
       if (el.getAttribute("onclick")) el.removeAttribute("onclick");
 
-      // Normalize anchor usability
-      if (el.tagName.toLowerCase() === "a") {
-        // If no href, prevent jumping
-        if (!el.getAttribute("href")) el.setAttribute("href", "#");
+      // anchors should not navigate away
+      if (el.tagName.toLowerCase() === "a" && !el.getAttribute("href")) {
+        el.setAttribute("href", "#");
       }
 
       el.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-
         safeSwitchPage(page);
         setActiveNav(page);
         closeAllDropdowns();
       });
 
-      // Store dataset for highlighting
       el.dataset.page = page;
-
       el.__naluNavBound = true;
     });
   }
 
   function getPageFromElement(el) {
-    // Prefer data-page
     const dp = el.getAttribute("data-page");
     if (dp) return dp;
 
-    // Parse onclick="switchPage('xyz')"
     const oc = el.getAttribute("onclick") || "";
     const m = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
     if (m && m[1]) return m[1];
@@ -116,9 +101,9 @@
   }
 
   // ------------------------------------------------------
-  // DROPDOWNS: open on hover for desktop, click/tap for touch
+  // DROPDOWNS (PORTAL): hover desktop + tap mobile
   // ------------------------------------------------------
-  function setupDropdowns() {
+  function setupDropdownsWithPortal() {
     const dropdowns = document.querySelectorAll(".nav-dropdown");
     const isHoverDevice = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
@@ -127,97 +112,211 @@
       const menu = dd.querySelector(".dropdown-menu");
       if (!toggle || !menu) return;
 
-      // Avoid double-binding
       if (toggle.__naluDropdownBound) return;
 
-      // Click/tap toggles (works everywhere)
+      // Initialize state
+      ddState.set(dd, { isOpen: false, closeTimer: null, onScroll: null });
+
+      // Toggle click works for ALL devices (mobile + desktop)
       toggle.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-
-        // Close other dropdowns
-        document.querySelectorAll(".nav-dropdown.open").forEach((x) => {
-          if (x !== dd) x.classList.remove("open");
-        });
-
-        dd.classList.toggle("open");
-        ensureDropdownInViewport(dd);
+        if (isDropdownOpen(dd)) closeDropdown(dd);
+        else openDropdown(dd);
       });
 
-      // Desktop hover support (only on hover-capable devices)
+      // Desktop hover behavior (only on hover-capable devices)
       if (isHoverDevice) {
-        let closeTimer = null;
-
         dd.addEventListener("mouseenter", () => {
-          if (closeTimer) clearTimeout(closeTimer);
-
-          // Close others
-          document.querySelectorAll(".nav-dropdown.open").forEach((x) => {
-            if (x !== dd) x.classList.remove("open");
-          });
-
-          dd.classList.add("open");
-          ensureDropdownInViewport(dd);
+          openDropdown(dd);
         });
 
         dd.addEventListener("mouseleave", () => {
-          if (closeTimer) clearTimeout(closeTimer);
-          closeTimer = setTimeout(() => dd.classList.remove("open"), 180);
+          // Delay close slightly so pointer can move toward menu
+          scheduleClose(dd, 180);
         });
       }
+
+      // Prevent inside click from bubbling to outside-close listener
+      dd.addEventListener("click", (e) => e.stopPropagation());
 
       toggle.__naluDropdownBound = true;
     });
 
     // Outside click closes
-    document.addEventListener("click", (e) => {
-      if (e.target.closest(".nav-dropdown")) return;
-      closeAllDropdowns();
-    });
+    document.addEventListener("click", () => closeAllDropdowns());
 
     // ESC closes
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeAllDropdowns();
     });
+  }
 
-    // Click inside menu closes after selection (wired nav handler will navigate)
-    document.querySelectorAll(".nav-dropdown .dropdown-menu").forEach((menu) => {
-      if (menu.__naluMenuBound) return;
-      menu.addEventListener("click", () => {
-        // navigation handler closes too, but this helps if a click doesn't navigate
-        setTimeout(closeAllDropdowns, 0);
-      });
-      menu.__naluMenuBound = true;
+  function isDropdownOpen(dd) {
+    const st = ddState.get(dd);
+    return !!st?.isOpen;
+  }
+
+  function openDropdown(dd) {
+    // Close others
+    document.querySelectorAll(".nav-dropdown").forEach((x) => {
+      if (x !== dd && isDropdownOpen(x)) closeDropdown(x);
     });
+
+    const toggle = dd.querySelector(".dropdown-toggle");
+    const menu = dd.querySelector(".dropdown-menu");
+    if (!toggle || !menu) return;
+
+    clearCloseTimer(dd);
+
+    // Portal menu to body to avoid overflow clipping
+    portalMenu(dd, menu);
+
+    // Show and position
+    menu.style.display = "flex";
+    positionPortalMenu(toggle, menu);
+
+    dd.classList.add(OPEN_CLASS);
+    toggle.setAttribute("aria-expanded", "true");
+
+    // Keep it open when hovering menu itself (desktop)
+    const isHoverDevice = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    if (isHoverDevice) {
+      menu.addEventListener("mouseenter", menu.__naluEnter || (menu.__naluEnter = () => clearCloseTimer(dd)));
+      menu.addEventListener("mouseleave", menu.__naluLeave || (menu.__naluLeave = () => scheduleClose(dd, 180)));
+    }
+
+    // Reposition on scroll while open
+    const st = ddState.get(dd) || {};
+    if (!st.onScroll) {
+      st.onScroll = () => {
+        if (!isDropdownOpen(dd)) return;
+        positionPortalMenu(toggle, menu);
+      };
+      window.addEventListener("scroll", st.onScroll, true);
+      window.addEventListener("resize", st.onScroll);
+      ddState.set(dd, st);
+    }
+
+    st.isOpen = true;
+    ddState.set(dd, st);
+  }
+
+  function closeDropdown(dd) {
+    const toggle = dd.querySelector(".dropdown-toggle");
+    const menu = dd.querySelector(".dropdown-menu");
+    if (!toggle || !menu) return;
+
+    clearCloseTimer(dd);
+
+    // Hide
+    menu.style.display = "none";
+
+    // Return menu to original location
+    unportalMenu(menu);
+
+    dd.classList.remove(OPEN_CLASS);
+    toggle.setAttribute("aria-expanded", "false");
+
+    const st = ddState.get(dd);
+    if (st?.onScroll) {
+      window.removeEventListener("scroll", st.onScroll, true);
+      window.removeEventListener("resize", st.onScroll);
+      st.onScroll = null;
+    }
+
+    if (st) {
+      st.isOpen = false;
+      ddState.set(dd, st);
+    }
   }
 
   function closeAllDropdowns() {
-    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
+    document.querySelectorAll(".nav-dropdown").forEach((dd) => {
+      if (isDropdownOpen(dd)) closeDropdown(dd);
+    });
   }
 
-  function ensureDropdownInViewport(dropdown) {
-    const menu = dropdown.querySelector(".dropdown-menu");
-    if (!menu) return;
+  function scheduleClose(dd, ms) {
+    const st = ddState.get(dd);
+    if (!st) return;
 
-    // Reset tweaks
-    menu.style.left = "";
-    menu.style.right = "";
-    menu.style.maxWidth = "";
+    clearCloseTimer(dd);
+    st.closeTimer = setTimeout(() => {
+      closeDropdown(dd);
+    }, ms);
 
-    const pad = 10;
-    const r = menu.getBoundingClientRect();
+    ddState.set(dd, st);
+  }
 
-    if (r.right > window.innerWidth - pad) {
-      menu.style.right = "0";
-      menu.style.left = "auto";
-      menu.style.maxWidth = `calc(100vw - ${pad * 2}px)`;
+  function clearCloseTimer(dd) {
+    const st = ddState.get(dd);
+    if (!st) return;
+    if (st.closeTimer) clearTimeout(st.closeTimer);
+    st.closeTimer = null;
+    ddState.set(dd, st);
+  }
+
+  // ------------------------------------------------------
+  // PORTAL HELPERS
+  // ------------------------------------------------------
+  function portalMenu(dd, menu) {
+    if (menu.classList.contains(PORTAL_CLASS)) return;
+
+    // Save original location once
+    if (!menuHome.has(menu)) {
+      menuHome.set(menu, { parent: menu.parentNode, nextSibling: menu.nextSibling });
     }
 
-    const r2 = menu.getBoundingClientRect();
-    if (r2.left < pad) {
-      menu.style.left = "0";
-      menu.style.right = "auto";
-      menu.style.maxWidth = `calc(100vw - ${pad * 2}px)`;
+    // Move to body
+    document.body.appendChild(menu);
+    menu.classList.add(PORTAL_CLASS);
+
+    // Stop click propagation so outside click doesn't instantly close before navigation
+    if (!menu.__naluMenuClickBound) {
+      menu.addEventListener("click", (e) => e.stopPropagation());
+      menu.__naluMenuClickBound = true;
+    }
+
+    // After any selection, close (navigation handler also closes, this is backup)
+    if (!menu.__naluMenuSelectBound) {
+      menu.addEventListener("click", () => setTimeout(closeAllDropdowns, 0));
+      menu.__naluMenuSelectBound = true;
+    }
+  }
+
+  function unportalMenu(menu) {
+    if (!menu.classList.contains(PORTAL_CLASS)) return;
+    const home = menuHome.get(menu);
+    if (!home || !home.parent) return;
+
+    menu.classList.remove(PORTAL_CLASS);
+    if (home.nextSibling && home.nextSibling.parentNode === home.parent) {
+      home.parent.insertBefore(menu, home.nextSibling);
+    } else {
+      home.parent.appendChild(menu);
+    }
+  }
+
+  function positionPortalMenu(toggle, menu) {
+    const pad = 10;
+    const rect = toggle.getBoundingClientRect();
+
+    menu.style.position = "fixed";
+    menu.style.top = `${Math.round(rect.bottom + 10)}px`;
+
+    // Default align right edge with toggle right edge
+    let left = rect.right - menu.offsetWidth;
+    if (!Number.isFinite(left)) left = rect.left;
+
+    // Clamp to viewport
+    left = Math.max(pad, Math.min(left, window.innerWidth - pad - menu.offsetWidth));
+    menu.style.left = `${Math.round(left)}px`;
+
+    // Prevent going off bottom: if needed, place above
+    const mRect = menu.getBoundingClientRect();
+    if (mRect.bottom > window.innerHeight - pad && rect.top > mRect.height + pad) {
+      menu.style.top = `${Math.round(rect.top - 10 - mRect.height)}px`;
     }
   }
 
@@ -229,23 +328,19 @@
     if (!navLinks) return;
 
     const found = Array.from(document.querySelectorAll(INSPECTOR_SELECTOR));
-
-    // Prefer one inside navLinks
     let keeper = found.find((n) => navLinks.contains(n)) || found[0] || null;
 
-    // Remove duplicates
     found.forEach((n) => {
       if (n !== keeper) n.remove();
     });
 
-    // Create if missing
     if (!keeper) {
       keeper = document.createElement("button");
       keeper.type = "button";
       navLinks.appendChild(keeper);
     }
 
-    // Normalize
+    // Normalize to button
     if (keeper.tagName.toLowerCase() !== "button") {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -261,15 +356,13 @@
     keeper.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
     keeper.title = "Account Inspector";
 
-    // Position after Dashboard if possible
-    const dash = navLinks.querySelector('[data-page="dashboard"]');
-    if (dash && dash.nextElementSibling !== keeper) {
-      dash.insertAdjacentElement("afterend", keeper);
-    }
+    // Place after Dashboard when possible
+    const dash = navLinks.querySelector('[data-page="dashboard"]') || navLinks.querySelector('button.nav-btn');
+    if (dash && dash.nextElementSibling !== keeper) dash.insertAdjacentElement("afterend", keeper);
   }
 
   // ------------------------------------------------------
-  // Connection badge (statusDot + connectionStatus)
+  // Connection badge
   // ------------------------------------------------------
   function bindConnectionBadge() {
     const dot = document.getElementById("statusDot");
@@ -278,7 +371,6 @@
 
     setBadge("connecting", "Connecting…");
 
-    // initial (if available)
     try {
       if (typeof window.getXRPLState === "function") {
         const s = window.getXRPLState();
@@ -301,27 +393,6 @@
       else if (state === "connecting") dot.classList.add("connecting");
       else dot.classList.add("down");
       label.textContent = text;
-    }
-  }
-
-  // ------------------------------------------------------
-  // Navbar offset so it doesn't cover top-of-page content
-  // ------------------------------------------------------
-  function applyNavOffset() {
-    const navbar = document.getElementById("navbar");
-    if (!navbar) return;
-
-    const h = Math.max(70, Math.round(navbar.getBoundingClientRect().height));
-    document.documentElement.style.setProperty("--nav-offset", `${h}px`);
-
-    if (!document.getElementById("nav-offset-style")) {
-      const style = document.createElement("style");
-      style.id = "nav-offset-style";
-      style.textContent = `
-        .container { padding-top: var(--nav-offset, 78px) !important; }
-        .page-section { scroll-margin-top: var(--nav-offset, 78px); }
-      `;
-      document.head.appendChild(style);
     }
   }
 
@@ -352,10 +423,7 @@
     const navLinks = document.getElementById("navLinks");
     if (!navLinks) return;
 
-    navLinks.querySelectorAll(".nav-btn.is-active, .dropdown-item.is-active").forEach((n) => {
-      n.classList.remove("is-active");
-    });
-
+    navLinks.querySelectorAll(".is-active").forEach((n) => n.classList.remove("is-active"));
     navLinks.querySelectorAll(`[data-page="${pageId}"]`).forEach((n) => n.classList.add("is-active"));
   }
 
@@ -365,7 +433,28 @@
   }
 
   // ------------------------------------------------------
-  // Overlay safety: alerts/toasts should not block navbar
+  // Navbar offset
+  // ------------------------------------------------------
+  function applyNavOffset() {
+    const navbar = document.getElementById("navbar");
+    if (!navbar) return;
+
+    const h = Math.max(70, Math.round(navbar.getBoundingClientRect().height));
+    document.documentElement.style.setProperty("--nav-offset", `${h}px`);
+
+    if (!document.getElementById("nav-offset-style")) {
+      const style = document.createElement("style");
+      style.id = "nav-offset-style";
+      style.textContent = `
+        .container { padding-top: var(--nav-offset, 78px) !important; }
+        .page-section { scroll-margin-top: var(--nav-offset, 78px); }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+
+  // ------------------------------------------------------
+  // Safety: toasts can't block navbar
   // ------------------------------------------------------
   function injectNavbarSafetyStyles() {
     if (document.getElementById("navbar-safety-styles")) return;
@@ -383,5 +472,15 @@
       .notification, .toast { pointer-events: auto !important; }
     `;
     document.head.appendChild(style);
+  }
+
+  function hideLegacyHamburgerAndToggles() {
+    const hamburger = document.getElementById("hamburger");
+    if (hamburger) hamburger.style.display = "none";
+
+    const t1 = document.getElementById("navbarToggle");
+    const t2 = document.getElementById("navbarToggleBtn");
+    if (t1) t1.style.display = "none";
+    if (t2) t2.style.display = "none";
   }
 })();
