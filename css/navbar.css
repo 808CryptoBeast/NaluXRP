@@ -1,55 +1,44 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css) — V3
-   Darker buttons, readable dropdown items,
-   fixes "navbar covering top content", mobile friendly.
+   NaluXrp 🌊 – Navbar (navbar.css)
+   FIXES:
+   ✅ Prevents overlap at ~1068px (grid layout + scroll rail)
+   ✅ Dropdown items readable without hover
+   ✅ Inspector button: styled same as others
+   ✅ Connection badge supports connecting/connected/disconnected
+   ✅ Mobile drawer still works (≤ 992px)
    ========================================= */
 
 :root {
-  --navbar-height: 78px;
-  --nav-btn-bg: rgba(0, 0, 0, 0.62);            /* darker */
-  --nav-btn-bg-2: rgba(0, 0, 0, 0.78);          /* darker */
-  --nav-btn-border: rgba(255, 255, 255, 0.14);
-  --nav-menu-bg: rgba(10, 10, 18, 0.92);
-  --nav-menu-border: rgba(255, 255, 255, 0.18);
-  --nav-text-strong: rgba(255, 255, 255, 0.92);
-  --nav-text-soft: rgba(255, 255, 255, 0.78);
+  --nav-height: 78px;
+  --nav-offset: 78px; /* JS updates this dynamically */
 }
 
-/* ✅ CRITICAL: prevent fixed navbar from covering page content */
-.container {
-  padding-top: var(--navbar-height);
-}
-
-/* Also help anchor jumps / scrollIntoView */
-.page-section {
-  scroll-margin-top: calc(var(--navbar-height) + 12px);
-}
-
+/* Navbar shell */
 .navbar {
   position: fixed;
   top: 0; left: 0; right: 0;
-  height: var(--navbar-height);
-  background: color-mix(in srgb, var(--bg-secondary) 85%, rgba(0,0,0,0.6));
+  background: var(--bg-secondary);
   backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--nav-btn-border);
-  box-shadow: 0 10px 35px rgba(0,0,0,0.55);
-  z-index: 10000;
+  border-bottom: 2px solid var(--accent-primary);
+  box-shadow: 0 5px 30px var(--glow-color);
+  z-index: 1000;
   transform: translateY(0);
-  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
 .navbar.hide {
   transform: translateY(-100%);
 }
 
+/* Grid-based layout prevents overlap */
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
   padding: 0 18px;
-  height: 100%;
-  display: flex;
+  min-height: var(--nav-height);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  justify-content: space-between;
   gap: 14px;
 }
 
@@ -59,227 +48,225 @@
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  user-select: none;
-  flex: 0 0 auto;
+  min-width: 220px; /* ensures logo doesn’t get crushed by links */
 }
 
 .logo-text {
-  font-size: 1.35em;
+  font-size: 1.45em;
   font-weight: 800;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: 1.5px;
-  line-height: 1.05;
+  line-height: 1.1;
 }
 
 .logo-slogan {
   font-size: 0.72em;
   color: var(--text-secondary);
-  opacity: 0.9;
+  opacity: 0.95;
 }
 
-/* Links row */
+/* Links “rail” (no wrap -> no overlap) */
 .nav-links {
   display: flex;
-  gap: 8px;
   align-items: center;
-  justify-content: center;
-  flex: 1 1 auto;
+  gap: 8px;
+  justify-content: flex-start;
+  flex-wrap: nowrap;             /* critical: prevents wrapping into logo/status */
+  overflow-x: auto;              /* rail scroll if too many buttons */
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;         /* Firefox hide */
   min-width: 0;
+  padding: 6px 2px;
+}
+
+.nav-links::-webkit-scrollbar {
+  display: none; /* Chrome/Safari hide */
+}
+
+/* Optional subtle fade edges so users know it scrolls */
+.nav-links {
+  mask-image: linear-gradient(90deg, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
 }
 
 /* Buttons */
 .nav-btn,
 .dropdown-toggle {
-  padding: 9px 14px;
-  background: linear-gradient(135deg, var(--nav-btn-bg), var(--nav-btn-bg-2));
-  border-radius: 12px;
-  border: 1px solid var(--nav-btn-border);
-  color: var(--nav-text-soft);
+  padding: 9px 13px;
+  background: rgba(0,0,0,0.55);               /* darker by default */
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.16);
+  color: rgba(255,255,255,0.92);
   cursor: pointer;
-  font-weight: 700;
+  font-weight: 750;
   font-size: 0.92rem;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, color 0.18s ease;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover {
-  border-color: rgba(0, 212, 255, 0.35);
-  color: var(--nav-text-strong);
-  box-shadow: 0 10px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,212,255,0.12);
-  transform: translateY(-1px);
+  border-color: var(--accent-secondary);
+  background: rgba(0,0,0,0.72);
+  box-shadow: 0 10px 18px rgba(0,0,0,0.55);
+  transform: translateY(-2px);
 }
 
-.nav-btn:active,
-.dropdown-toggle:active {
-  transform: translateY(0px) scale(0.99);
+/* Active page highlight */
+.nav-btn.is-active,
+.dropdown-item.is-active {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px rgba(0,212,255,0.18), 0 12px 24px rgba(0,0,0,0.55);
+  background:
+    radial-gradient(circle at 0 0, rgba(0,212,255,0.16), transparent 55%),
+    rgba(0,0,0,0.70);
 }
 
 .nav-icon {
-  font-size: 1.05rem;
+  font-size: 1.08rem;
+  line-height: 1;
 }
 
 .nav-label {
   display: inline-block;
 }
 
-/* Inspector button (if you add it as a normal nav button) */
-.nav-btn.inspector-btn {
-  border-color: rgba(255, 204, 102, 0.25);
-}
-.nav-btn.inspector-btn:hover {
-  border-color: rgba(255, 204, 102, 0.55);
-}
-
-/* Dropdowns */
+/* Dropdown container */
 .nav-dropdown {
   position: relative;
   display: inline-block;
 }
 
-/* Hover gap safe-zone */
-.nav-dropdown::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 0;
-  width: 100%;
-  height: 16px;
-  background: transparent;
-}
-
 /* Dropdown menu */
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 16px);
+  top: calc(100% + 12px);
   right: 0;
-  background: var(--nav-menu-bg);
-  border-radius: 14px;
-  border: 1px solid var(--nav-menu-border);
-  min-width: 220px;
+  background: rgba(0,0,0,0.86);
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.16);
+  min-width: 210px;
   padding: 8px;
   display: none;
   flex-direction: column;
-  box-shadow: 0 18px 45px rgba(0,0,0,0.70);
-  animation: slideDown 0.16s ease;
-  z-index: 10020;
-  backdrop-filter: blur(16px);
+  box-shadow: 0 14px 30px rgba(0,0,0,0.75);
+  z-index: 1002;
+  backdrop-filter: blur(14px);
 }
 
-/* Desktop hover open */
+/* Desktop hover */
 .nav-dropdown:hover .dropdown-menu {
   display: flex;
 }
 
-/* ✅ CRITICAL READABILITY FIX: dropdown items must be readable even unhovered */
+/* JS-opened state */
+.nav-dropdown.open .dropdown-menu {
+  display: flex;
+}
+
+/* Dropdown items (readable without hover) */
 .dropdown-item {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.92rem;
-  font-weight: 700;
-  color: var(--nav-text-strong) !important;
-  opacity: 1 !important;
+  color: rgba(255,255,255,0.92);   /* FIX: readable by default */
   cursor: pointer;
-  transition: 0.16s ease;
+  transition: transform 0.15s ease, background 0.15s ease;
   text-align: left;
+  font-weight: 750;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
   text-decoration: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  user-select: none;
-  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
-}
-
-/* If your dropdown items are <a> tags, also cover link states */
-.dropdown-menu a.dropdown-item:link,
-.dropdown-menu a.dropdown-item:visited {
-  color: var(--nav-text-strong) !important;
-  opacity: 1 !important;
 }
 
 .dropdown-item:hover {
-  background: rgba(0, 212, 255, 0.12);
-  transform: translateX(2px);
-  color: #ffffff !important;
+  background: rgba(0,212,255,0.12);
+  transform: translateX(3px);
 }
 
-.dropdown-item + .dropdown-item {
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-
-/* Connection status bubble (top right) */
+/* Connection status group (right column) */
 .status-badge {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 7px 12px;
-  background: rgba(0,0,0,0.50);
+  background: rgba(0,0,0,0.45);
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  font-size: 0.84rem;
-  color: var(--nav-text-strong);
-  box-shadow: 0 10px 25px rgba(0,0,0,0.25);
-  flex: 0 0 auto;
-  max-width: 220px;
+  border: 1px solid rgba(255,255,255,0.16);
+  font-size: 0.88rem;
+  color: rgba(255,255,255,0.92);
+  white-space: nowrap;
 }
 
 .status-dot {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
+  border-radius: 999px;
+  background: #ff6e6e; /* default red */
+  box-shadow: 0 0 10px rgba(255,110,110,0.45);
+}
+
+.status-dot.connecting {
   background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255,184,108,0.85);
+  box-shadow: 0 0 12px rgba(255,184,108,0.55);
+  animation: navPulse 1.1s ease-in-out infinite;
 }
 
 .status-dot.active {
   background: #50fa7b;
-  box-shadow: 0 0 12px rgba(80,250,123,0.9);
+  box-shadow: 0 0 12px rgba(80,250,123,0.55);
+  animation: none;
 }
 
-/* Desktop navbar toggle */
+@keyframes navPulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+
+/* Optional desktop navbar toggle (if you still use it) */
 .navbar-toggle {
-  margin-left: 6px;
-  padding: 7px 10px;
+  margin-left: 8px;
+  padding: 6px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.16);
   background: rgba(0,0,0,0.45);
-  color: var(--nav-text-strong);
+  color: rgba(255,255,255,0.92);
   cursor: pointer;
-  flex: 0 0 auto;
 }
 
-/* Floating toggle button */
+/* Floating toggle button (if present in HTML) */
 .navbar-toggle-btn {
   position: fixed;
   right: 16px;
   bottom: 16px;
   border-radius: 999px;
   padding: 9px 11px;
-  border: 1px solid rgba(0,212,255,0.35);
+  border: 1px solid rgba(255,255,255,0.18);
   background: rgba(0,0,0,0.65);
   color: var(--accent-secondary);
   cursor: pointer;
-  z-index: 9999;
+  z-index: 999;
 }
 
 .toggle-icon {
   display: inline-block;
 }
 
-/* Hamburger (mobile) */
+/* Hamburger (mobile only) */
 .hamburger {
   display: none;
   flex-direction: column;
   gap: 4px;
   padding: 10px;
   cursor: pointer;
-  flex: 0 0 auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.45);
 }
 
 .hamburger span {
@@ -294,44 +281,32 @@
 .hamburger.active span:nth-child(2) { opacity: 0; }
 .hamburger.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
-/* ========= Mid-size layout fix (your 1068x873 case) ========= */
-/* Prevent the logo + status bubble from being covered by buttons */
-@media (max-width: 1120px) {
-  .nav-content {
-    gap: 10px;
-  }
-
-  .logo-text { font-size: 1.25em; }
-
-  .nav-links {
-    justify-content: flex-end;
-  }
-
-  .status-badge {
-    max-width: 180px;
-    padding: 6px 10px;
-    font-size: 0.8rem;
-  }
+/* ===== Compact mode (prevents crowding around ~1068px) ===== */
+@media (max-width: 1180px) {
+  .logo-slogan { display: none; }
+  .nav-btn, .dropdown-toggle { padding: 8px 11px; }
+  .nav-label { display: none; } /* icons-only */
+  .nav-logo { min-width: 200px; }
 }
 
-/* ========= Mobile ========= */
+/* ===== Mobile drawer ===== */
 @media (max-width: 992px) {
-  :root { --navbar-height: 74px; }
-
-  .nav-content { padding: 0 12px; }
-
-  .nav-logo .logo-slogan { display: none; }
-  .navbar-toggle { display: none; }
+  .nav-content {
+    grid-template-columns: auto auto auto;
+    gap: 10px;
+    padding: 0 12px;
+  }
 
   .hamburger { display: flex; }
 
   .nav-links {
     position: fixed;
-    top: var(--navbar-height);
+    top: var(--nav-offset);
     left: 0;
     right: 0;
     bottom: 0;
-    background: color-mix(in srgb, var(--bg-secondary) 88%, rgba(0,0,0,0.7));
+    background: rgba(0,0,0,0.88);
+    backdrop-filter: blur(18px);
     flex-direction: column;
     align-items: stretch;
     padding: 16px;
@@ -341,13 +316,13 @@
     pointer-events: none;
     transition: transform 0.22s ease, opacity 0.22s ease;
     overflow-y: auto;
-    z-index: 10005;
+    mask-image: none;
   }
 
   .nav-links.show {
     transform: translateX(0);
     opacity: 1;
-    pointer-events: all;
+    pointer-events: auto;
   }
 
   .nav-btn,
@@ -355,34 +330,24 @@
     width: 100%;
     justify-content: flex-start;
     padding: 12px 14px;
-    font-size: 1rem;
   }
 
-  /* Mobile dropdowns become accordion */
+  /* dropdowns become accordion-style */
   .nav-dropdown:hover .dropdown-menu { display: none; }
-
   .nav-dropdown .dropdown-menu {
     position: static;
     margin-top: 6px;
     border-width: 1px;
     min-width: 100%;
   }
+  .nav-dropdown.open .dropdown-menu { display: flex; }
 
-  .nav-dropdown.active .dropdown-menu {
-    display: flex;
-  }
-
-  .status-badge {
-    max-width: 160px;
-  }
+  .navbar-toggle,
+  .navbar-toggle-btn { display: none; }
 }
 
+/* Very small screens */
 @media (max-width: 480px) {
-  .nav-label { font-size: 0.92rem; }
-}
-
-/* Simple dropdown animation */
-@keyframes slideDown {
-  0% { opacity: 0; transform: translateY(-6px); }
-  100% { opacity: 1; transform: translateY(0); }
+  .nav-logo { min-width: 170px; }
+  .logo-text { font-size: 1.25em; }
 }
