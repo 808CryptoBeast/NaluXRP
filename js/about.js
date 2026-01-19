@@ -1,15 +1,19 @@
 /* =========================================================
    about.js — NaluXrp 🌊 About Page (Futuristic + Explainable)
-   - Renders About page into #about
-   - Tabs: Algorithms | Visual Patterns | Glossary | Limits
-   - Accordions + Glossary search + Expand/Collapse all
-   - No external deps
+   FIXED FOR YOUR APP:
+   - Some page switchers clear section HTML when switching.
+   - This file auto-renders on:
+       ✅ DOMContentLoaded
+       ✅ switchPage('about')
+       ✅ #about becomes .active (MutationObserver)
+   - Includes safe fallback error UI so it never looks "blank"
    ========================================================= */
 
 (function () {
   const About = {
     initialized: false,
     activeTab: "algorithms",
+    lastRenderAt: 0,
 
     glossaryItems: [
       {
@@ -86,21 +90,60 @@
       },
     ],
 
+    // --------------------------------------------------
+    // RENDER ENTRYPOINTS
+    // --------------------------------------------------
+    ensureRendered(force = false) {
+      const root = document.getElementById("about");
+      if (!root) return;
+
+      // If the page switcher clears content, root can be empty.
+      // Re-render if empty OR not initialized OR forced.
+      const isEmpty = !root.firstElementChild || root.innerHTML.trim().length < 20;
+
+      // Avoid spam rendering if something triggers rapidly
+      const now = Date.now();
+      const tooSoon = now - this.lastRenderAt < 150;
+
+      if (!force && tooSoon) return;
+
+      if (force || !this.initialized || isEmpty) {
+        this.render();
+      }
+    },
+
     render() {
       const root = document.getElementById("about");
       if (!root) return;
 
-      // Render once; keep content stable
-      root.innerHTML = this.buildHtml();
-      this.bind();
-      this.initialized = true;
+      try {
+        root.innerHTML = this.buildHtml();
+        this.bind();
+        this.initialized = true;
+        this.lastRenderAt = Date.now();
 
-      // Default tab
-      this.setTab(this.activeTab);
+        // Default tab
+        this.setTab(this.activeTab);
 
-      console.log("ℹ️ About module loaded (about@2.0.0-futuristic)");
+        console.log("ℹ️ About module loaded (about@2.0.1-futuristic-fixed)");
+      } catch (err) {
+        console.error("❌ About render failed:", err);
+        root.innerHTML = `
+          <div class="about-page">
+            <div class="about-error">
+              <div class="about-error-title">About page failed to render</div>
+              <div class="about-error-body">
+                Check console for details. Error: <code>${this.escapeHtml(err?.message || String(err))}</code>
+              </div>
+            </div>
+          </div>
+        `;
+      }
     },
 
+    // --------------------------------------------------
+    // HTML BUILDERS
+    // --------------------------------------------------
     buildHtml() {
       return `
         <div class="about-page">
@@ -131,6 +174,7 @@
                   It highlights patterns used in cybersecurity-style analysis: anomaly cues,
                   persistence, fingerprinting, and graph structure.
                 </p>
+
                 <div class="about-callouts">
                   <div class="about-callout">
                     <div class="about-callout-icon">🔐</div>
@@ -298,19 +342,23 @@
             </div>
 
             <div class="about-benign-grid">
-              ${this.benignCard("🏦 Exchanges / Service wallets",
+              ${this.benignCard(
+                "🏦 Exchanges / Service wallets",
                 "High fan-in/out, hubs, and dense clusters are normal around exchanges. Look for consistent patterns and strong persistence.",
                 ["Hot wallet hubs", "Batch deposits/withdrawals", "Consolidation of dust"]
               )}
-              ${this.benignCard("🏷️ Issuers / Trustline operations",
+              ${this.benignCard(
+                "🏷️ Issuers / Trustline operations",
                 "TrustSet bursts, issuer-centric hubs, and distribution fan-outs can be legitimate token operations.",
                 ["Trustline churn", "Treasury distribution", "Market maker interactions"]
               )}
-              ${this.benignCard("💧 DEX / AMM activity",
+              ${this.benignCard(
+                "💧 DEX / AMM activity",
                 "OfferCreate/Cancel surges and loop-like patterns can be market-making, arbitrage, or liquidity operations.",
                 ["Offer spikes", "Rapid cancels", "Routing via pools"]
               )}
-              ${this.benignCard("🤖 Automation & testing",
+              ${this.benignCard(
+                "🤖 Automation & testing",
                 "Uniform amounts, strict periodicity, and repeated pairs can be scripts (especially on testnet).",
                 ["Uniform sizes", "Regular intervals", "Same counterparties"]
               )}
@@ -370,7 +418,7 @@
           </section>
 
           <footer class="about-footer">
-            <div class="about-footer-left">NaluXrp • about@2.0.0-futuristic</div>
+            <div class="about-footer-left">NaluXrp • about@2.0.1-futuristic-fixed</div>
             <div class="about-footer-right">Built for explainability: patterns are signals, not accusations.</div>
           </footer>
         </div>
@@ -494,6 +542,9 @@
       `;
     },
 
+    // --------------------------------------------------
+    // EVENTS / BINDING
+    // --------------------------------------------------
     bind() {
       const root = document.getElementById("about");
       if (!root) return;
@@ -521,18 +572,14 @@
 
       // Glossary search
       const search = document.getElementById("aboutGlossarySearch");
-      if (search) {
-        search.addEventListener("input", () => this.filterGlossary(search.value));
-      }
+      if (search) search.addEventListener("input", () => this.filterGlossary(search.value));
 
       // Expand / collapse all
       const expandAll = document.getElementById("aboutExpandAll");
       const collapseAll = document.getElementById("aboutCollapseAll");
-
       if (expandAll) expandAll.addEventListener("click", () => this.setAllGlossary(true));
       if (collapseAll) collapseAll.addEventListener("click", () => this.setAllGlossary(false));
 
-      // Count label
       this.updateGlossaryCount();
     },
 
@@ -542,14 +589,12 @@
 
       this.activeTab = tabId;
 
-      // Buttons
       root.querySelectorAll(".about-tab[data-tab-btn]").forEach((b) => {
         const on = b.getAttribute("data-tab-btn") === tabId;
         b.classList.toggle("is-active", on);
         b.setAttribute("aria-selected", on ? "true" : "false");
       });
 
-      // Panels
       root.querySelectorAll(".about-section[data-tab]").forEach((sec) => {
         const on = sec.getAttribute("data-tab") === tabId;
         sec.classList.toggle("is-active", on);
@@ -583,6 +628,7 @@
         const body = document.querySelector(`[data-glossary-body="${id}"]`);
         const item = document.querySelector(`[data-glossary-item="${id}"]`);
         if (!body || !item) return;
+
         btn.setAttribute("aria-expanded", open ? "true" : "false");
         item.classList.toggle("is-open", open);
         body.classList.toggle("is-open", open);
@@ -601,11 +647,7 @@
         const tags = (node.querySelector(".about-glossary-tags")?.textContent || "").toLowerCase();
         const body = (node.querySelector(".about-glossary-body")?.textContent || "").toLowerCase();
 
-        const match =
-          !query ||
-          term.includes(query) ||
-          tags.includes(query) ||
-          body.includes(query);
+        const match = !query || term.includes(query) || tags.includes(query) || body.includes(query);
 
         node.style.display = match ? "" : "none";
         if (match) visible += 1;
@@ -619,14 +661,13 @@
       if (!countEl) return;
 
       const total = this.glossaryItems.length;
-      const visible =
-        typeof overrideVisible === "number"
-          ? overrideVisible
-          : document.querySelectorAll(".about-glossary-item").length;
-
+      const visible = typeof overrideVisible === "number" ? overrideVisible : total;
       countEl.textContent = `${visible}/${total}`;
     },
 
+    // --------------------------------------------------
+    // UTILS
+    // --------------------------------------------------
     safeId(s) {
       return String(s || "")
         .toLowerCase()
@@ -634,16 +675,76 @@
         .replace(/^_+|_+$/g, "")
         .slice(0, 60);
     },
+
+    escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    },
   };
 
-  // Render on load (works with your current "sections" architecture)
+  // --------------------------------------------------
+  // HOOK: switchPage('about') -> ensureRendered()
+  // --------------------------------------------------
+  function hookSwitchPage() {
+    if (typeof window.switchPage !== "function") return;
+
+    // avoid double-hooking
+    if (window.switchPage.__aboutHooked) return;
+
+    const original = window.switchPage;
+
+    const wrapped = function (pageId, ...args) {
+      const res = original.call(this, pageId, ...args);
+      if (String(pageId).toLowerCase() === "about") {
+        setTimeout(() => About.ensureRendered(true), 0);
+      }
+      return res;
+    };
+
+    wrapped.__aboutHooked = true;
+
+    // keep any properties if needed
+    Object.keys(original).forEach((k) => {
+      try { wrapped[k] = original[k]; } catch (e) {}
+    });
+
+    window.switchPage = wrapped;
+  }
+
+  // --------------------------------------------------
+  // OBSERVE: when #about becomes active -> ensureRendered()
+  // --------------------------------------------------
+  function observeAboutActive() {
+    const aboutSection = document.getElementById("about");
+    if (!aboutSection || typeof MutationObserver === "undefined") return;
+
+    const obs = new MutationObserver(() => {
+      if (aboutSection.classList.contains("active")) {
+        About.ensureRendered(false);
+      }
+    });
+
+    obs.observe(aboutSection, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  // --------------------------------------------------
+  // INIT
+  // --------------------------------------------------
   document.addEventListener("DOMContentLoaded", () => {
-    About.render();
+    // render once
+    About.ensureRendered(false);
+
+    // hook page switching and active observer
+    hookSwitchPage();
+    observeAboutActive();
   });
 
-  // Optional external trigger if your UI re-mounts pages
-  window.renderAbout = () => About.render();
-
-  // Export for debugging
+  // external API
+  window.renderAbout = () => About.ensureRendered(true);
   window.NaluAbout = About;
 })();
+
