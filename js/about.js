@@ -1,750 +1,733 @@
 /* =========================================================
-   about.js — NaluXrp 🌊 About Page (Futuristic + Explainable)
-   FIXED FOR YOUR APP:
-   - Some page switchers clear section HTML when switching.
-   - This file auto-renders on:
-       ✅ DOMContentLoaded
-       ✅ switchPage('about')
-       ✅ #about becomes .active (MutationObserver)
-   - Includes safe fallback error UI so it never looks "blank"
+   about.css — NaluXrp 🌊 About Page (Futuristic)
+   Includes safety rules so page cannot "disappear"
    ========================================================= */
 
-(function () {
-  const About = {
-    initialized: false,
-    activeTab: "algorithms",
-    lastRenderAt: 0,
-
-    glossaryItems: [
-      {
-        key: "Dominant Type",
-        tags: ["metrics", "dashboard"],
-        body:
-          "The transaction category with the highest count inside a ledger (Payment, Offers, NFT, TrustSet, Other). Used to color-code the ledger stream card and summarize what the network is doing most in that moment.",
-      },
-      {
-        key: "Dominance Strength",
-        tags: ["metrics", "dashboard"],
-        body:
-          "How concentrated the transaction mix is toward the dominant category. High dominance means one activity is taking up most of the ledger’s transaction volume.",
-      },
-      {
-        key: "Mix Compression (Concentration)",
-        tags: ["analytics"],
-        body:
-          "A measure of how ‘compressed’ the transaction mix is. High compression means fewer categories account for most activity, which can happen during bursts, maintenance, market-maker cycles, or network stress.",
-      },
-      {
-        key: "Breadcrumb (Flow Fingerprint)",
-        tags: ["forensics"],
-        body:
-          "A repeated movement pattern across multiple ledgers (e.g., repeated sender→receiver pairs, fan-out, fan-in). Breadcrumbs are meant as pivots for investigation, not proof.",
-      },
-      {
-        key: "Fan-out",
-        tags: ["forensics", "cybersecurity"],
-        body:
-          "One source sends to many destinations across a short window. Can be normal (airdrops/payouts/exchange withdrawals) or a risk cue (drain-style dispersion, scripting, smurfing).",
-      },
-      {
-        key: "Fan-in",
-        tags: ["forensics", "cybersecurity"],
-        body:
-          "Many sources send into one destination. Can be normal (exchange deposits/merchant aggregation) or a risk cue (coordinated funneling, consolidation before laundering).",
-      },
-      {
-        key: "Hub Model",
-        tags: ["forensics", "graph"],
-        body:
-          "A central connector node that links many wallets and routes flow. Often a service hot wallet (exchange/bridge/issuer), sometimes a coordinator. Context is critical.",
-      },
-      {
-        key: "Cluster",
-        tags: ["forensics", "graph"],
-        body:
-          "A connected component in the interaction graph built from observed flows. Clusters do not imply identity; they indicate that addresses are related by activity in the window.",
-      },
-      {
-        key: "Cluster Persistence",
-        tags: ["forensics", "graph"],
-        body:
-          "An explainable stability estimate: how consistently a cluster appears across the selected ledger window. Higher persistence suggests a stable structure (service network, recurring campaign, market-making group).",
-      },
-      {
-        key: "Ping-pong",
-        tags: ["forensics"],
-        body:
-          "Bidirectional transfers between two accounts across multiple ledgers. Can be normal (rebalancing, market-making, internal operations) or a risk cue (looping/layering behavior).",
-      },
-      {
-        key: "Continuity Gap",
-        tags: ["network", "quality"],
-        body:
-          "A missing range of ledgers inside the local capture window. Can be caused by reconnects, server load limits, throttling, or fetch failures. Gaps can distort short-window analysis.",
-      },
-      {
-        key: "Account Inspector",
-        tags: ["inspector"],
-        body:
-          "A pivot tool for a single account or issuer set. Used to expand outward and visualize relationships. Inspector results depend on node availability and rate limits.",
-      },
-    ],
-
-    // --------------------------------------------------
-    // RENDER ENTRYPOINTS
-    // --------------------------------------------------
-    ensureRendered(force = false) {
-      const root = document.getElementById("about");
-      if (!root) return;
-
-      // If the page switcher clears content, root can be empty.
-      // Re-render if empty OR not initialized OR forced.
-      const isEmpty = !root.firstElementChild || root.innerHTML.trim().length < 20;
-
-      // Avoid spam rendering if something triggers rapidly
-      const now = Date.now();
-      const tooSoon = now - this.lastRenderAt < 150;
-
-      if (!force && tooSoon) return;
-
-      if (force || !this.initialized || isEmpty) {
-        this.render();
-      }
-    },
-
-    render() {
-      const root = document.getElementById("about");
-      if (!root) return;
-
-      try {
-        root.innerHTML = this.buildHtml();
-        this.bind();
-        this.initialized = true;
-        this.lastRenderAt = Date.now();
-
-        // Default tab
-        this.setTab(this.activeTab);
-
-        console.log("ℹ️ About module loaded (about@2.0.1-futuristic-fixed)");
-      } catch (err) {
-        console.error("❌ About render failed:", err);
-        root.innerHTML = `
-          <div class="about-page">
-            <div class="about-error">
-              <div class="about-error-title">About page failed to render</div>
-              <div class="about-error-body">
-                Check console for details. Error: <code>${this.escapeHtml(err?.message || String(err))}</code>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-    },
-
-    // --------------------------------------------------
-    // HTML BUILDERS
-    // --------------------------------------------------
-    buildHtml() {
-      return `
-        <div class="about-page">
-          <header class="about-hero">
-            <div class="about-hero-left">
-              <div class="about-kicker">NaluXrp 🌊 • XRPL Forensics • Explainable Signals</div>
-              <h1 class="about-title">About</h1>
-              <p class="about-subtitle">
-                A real-time XRPL analysis suite focused on <strong>explainable heuristics</strong>:
-                dominance, flow fingerprints, graph clusters, and replayable forensic snapshots.
-              </p>
-
-              <div class="about-chip-row" aria-label="highlights">
-                <span class="about-chip">Real ledger data</span>
-                <span class="about-chip">Stream + replay</span>
-                <span class="about-chip">Flow fingerprints</span>
-                <span class="about-chip">Cluster inference</span>
-                <span class="about-chip">Export snapshots</span>
-              </div>
-            </div>
-
-            <div class="about-hero-right">
-              <div class="about-hero-card">
-                <div class="about-hero-card-title">What this app is</div>
-                <div class="about-hero-card-tag">Futuristic • Explainable • Practical</div>
-                <p class="about-hero-card-text">
-                  NaluXrp helps you observe XRPL behavior in motion — not just raw data.
-                  It highlights patterns used in cybersecurity-style analysis: anomaly cues,
-                  persistence, fingerprinting, and graph structure.
-                </p>
-
-                <div class="about-callouts">
-                  <div class="about-callout">
-                    <div class="about-callout-icon">🔐</div>
-                    <div>
-                      <div class="about-callout-title">Cybersecurity mindset</div>
-                      <div class="about-callout-text">
-                        Treat the ledger as a high-volume event stream. We look for stable fingerprints,
-                        bursts, routing behaviors, and persistent clusters.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="about-callout warn">
-                    <div class="about-callout-icon">⚠️</div>
-                    <div>
-                      <div class="about-callout-title">Interpretation warning</div>
-                      <div class="about-callout-text">
-                        Many suspicious-looking patterns are normal for exchanges, issuers, and market makers.
-                        Use signals as starting points — not conclusions.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="about-callout neutral">
-                    <div class="about-callout-icon">🧾</div>
-                    <div>
-                      <div class="about-callout-title">No identity claims</div>
-                      <div class="about-callout-text">
-                        NaluXrp does not attribute identity. It surfaces explainable signals and gives you tools
-                        to pivot into deeper inspection and documentation.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <nav class="about-tabs" role="tablist" aria-label="About navigation">
-            ${this.tabButton("algorithms", "🧠 Algorithms")}
-            ${this.tabButton("patterns", "🧩 Visual Patterns")}
-            ${this.tabButton("glossary", "📚 Glossary")}
-            ${this.tabButton("limits", "⚠️ Limits")}
-          </nav>
-
-          <section class="about-section" data-tab="algorithms" role="tabpanel">
-            <div class="about-section-head">
-              <h2>🧠 Algorithms & Signals</h2>
-              <p>How the dashboard “thinks” (in plain English)</p>
-            </div>
-
-            <div class="about-grid">
-              ${this.algoCard({
-                icon: "⏱️",
-                title: "Ledger Rhythm & Cadence",
-                body:
-                  "Tracks close cadence shifts and continuity to spot stress, congestion, and capture gaps.",
-                bullets: ["Cadence deviations", "Continuity gap flags", "Replay-safe analysis windows"],
-              })}
-              ${this.algoCard({
-                icon: "🧪",
-                title: "Transaction Mix, Dominance & Concentration",
-                body:
-                  "Groups types per ledger (Payment / Offers / NFT / TrustSet / Other) and explains dominant behavior changes.",
-                bullets: ["Dominant type", "Dominance %", "Pattern flags", "Delta narratives"],
-              })}
-              ${this.algoCard({
-                icon: "👣",
-                title: "Wallet Flow Breadcrumbs (Repeated Fingerprints)",
-                body:
-                  "Detects repeated flow fingerprints across multiple ledgers to highlight persistent movement patterns.",
-                bullets: ["Repeated fingerprints", "Repeat counts", "Confidence score", "Trace-highlight ledgers"],
-              })}
-              ${this.algoCard({
-                icon: "🕸️",
-                title: "Cluster Inference (Graph-Based, No Identity)",
-                body:
-                  "Builds an interaction graph from flows and infers clusters via connectivity and persistence.",
-                bullets: ["Cluster size", "Persistence %", "Core members", "Cluster drill-down targets"],
-              })}
-              ${this.algoCard({
-                icon: "📖",
-                title: "Ledger-to-Ledger Delta Narratives",
-                body:
-                  "Turns raw deltas into explainable summaries (e.g., ‘Offers surged’ / ‘Payments collapsed’).",
-                bullets: ["Top deltas", "Dominance flips", "Explainable summaries"],
-              })}
-              ${this.algoCard({
-                icon: "⏮️",
-                title: "Replay & Forensic Snapshots",
-                body:
-                  "Rewind captured history and export explainable state snapshots for reporting and investigation.",
-                bullets: ["Replay window", "Export JSON/CSV", "Stable analysis lens"],
-              })}
-            </div>
-
-            <div class="about-divider"></div>
-
-            <div class="about-section-head">
-              <h3>🧭 How to Investigate</h3>
-              <p>A practical workflow (investigation → validation → documentation)</p>
-            </div>
-
-            <div class="about-steps">
-              ${this.step("⚡", "Start with the Ledger Stream", "Watch dominant activity, tx mix, and continuity. Look for bursts, flips, and repeated patterns across several ledgers.")}
-              ${this.step("👣", "Click Breadcrumbs to Trace Ledgers", "Use repeated fingerprints to highlight relevant ledgers in the stream. Persistence matters more than one-off spikes.")}
-              ${this.step("🔎", "Pivot into Account Inspector", "Inspect top senders/receivers from suspicious fingerprints. Expand outward carefully and compare neighbors.")}
-              ${this.step("🧭", "Validate with Context", "Check whether the pattern matches known service behavior (exchanges/issuers). Confirm amounts, regularity, and persistence.")}
-              ${this.step("⏮️", "Use Replay for Before/After", "Rewind to compare baseline behavior vs anomaly. Keep the same window size when comparing.")}
-              ${this.step("📦", "Export Snapshots", "Export JSON/CSV for reports. Document the window size, selected ledger, and what triggered the investigation.")}
-            </div>
-
-            <div class="about-hint">
-              Want this even clearer? We can add mini interactive tooltips on the live dashboard
-              (hover on “Fan-out” to show the diagram + benign vs risk notes).
-            </div>
-          </section>
-
-          <section class="about-section" data-tab="patterns" role="tabpanel">
-            <div class="about-section-head">
-              <h2>🧩 Visual Patterns</h2>
-              <p>Fast mental models for fan-in/out, hubs, and clusters</p>
-            </div>
-
-            <div class="about-pattern-grid">
-              ${this.patternCard({
-                title: "Fan-out",
-                subtitle: "One → many distribution",
-                body:
-                  "A single source sends to many destinations across a short window. Can be payouts/airdrops or drain-style dispersion.",
-                benign: ["Airdrops / payouts", "Exchange withdrawals", "Treasury distribution"],
-                risk: ["Drain-style dispersion", "Scripting / automation", "Smurfing patterns"],
-              })}
-              ${this.patternCard({
-                title: "Fan-in",
-                subtitle: "Many → one aggregation",
-                body:
-                  "Many sources send into one destination. Can be deposits or consolidation before a move.",
-                benign: ["Exchange deposits", "Merchant aggregation", "Consolidation for fees"],
-                risk: ["Consolidation before laundering", "Coordinated funneling", "Layering preparation"],
-              })}
-              ${this.patternCard({
-                title: "Hub Model",
-                subtitle: "Central connector node",
-                body:
-                  "A hub links many nodes and routes flow. Often a service wallet (exchange/bridge/issuer), sometimes a coordinator.",
-                benign: ["Service hot wallet", "Bridge/router", "Issuer distribution hub"],
-                risk: ["Coordinated routing", "Layering behavior", "Obfuscation hops"],
-              })}
-              ${this.patternCard({
-                title: "Cluster",
-                subtitle: "Connected component",
-                body:
-                  "A group of wallets linked by observed interactions. Persistence suggests stable structure; volatility suggests opportunistic flow.",
-                benign: ["Ecosystem structure", "Service network", "Market-making group"],
-                risk: ["Coordinated campaign", "Persistent laundering ring", "Bot-driven ring"],
-              })}
-            </div>
-
-            <div class="about-divider"></div>
-
-            <div class="about-section-head">
-              <h3>✅ Common Benign Explanations</h3>
-              <p>Signals often have normal causes — check context</p>
-            </div>
-
-            <div class="about-benign-grid">
-              ${this.benignCard(
-                "🏦 Exchanges / Service wallets",
-                "High fan-in/out, hubs, and dense clusters are normal around exchanges. Look for consistent patterns and strong persistence.",
-                ["Hot wallet hubs", "Batch deposits/withdrawals", "Consolidation of dust"]
-              )}
-              ${this.benignCard(
-                "🏷️ Issuers / Trustline operations",
-                "TrustSet bursts, issuer-centric hubs, and distribution fan-outs can be legitimate token operations.",
-                ["Trustline churn", "Treasury distribution", "Market maker interactions"]
-              )}
-              ${this.benignCard(
-                "💧 DEX / AMM activity",
-                "OfferCreate/Cancel surges and loop-like patterns can be market-making, arbitrage, or liquidity operations.",
-                ["Offer spikes", "Rapid cancels", "Routing via pools"]
-              )}
-              ${this.benignCard(
-                "🤖 Automation & testing",
-                "Uniform amounts, strict periodicity, and repeated pairs can be scripts (especially on testnet).",
-                ["Uniform sizes", "Regular intervals", "Same counterparties"]
-              )}
-            </div>
-          </section>
-
-          <section class="about-section" data-tab="glossary" role="tabpanel">
-            <div class="about-section-head">
-              <h2>📚 Glossary</h2>
-              <p>Terms you’ll see in NaluXrp</p>
-            </div>
-
-            <div class="about-glossary-toolbar">
-              <div class="about-search">
-                <span class="about-search-icon">🔎</span>
-                <input id="aboutGlossarySearch" type="text" placeholder="Search terms (fan-out, hub, dominance, cluster, continuity gap)..." />
-              </div>
-
-              <div class="about-toolbar-actions">
-                <button class="about-btn" id="aboutExpandAll" type="button">Expand all</button>
-                <button class="about-btn" id="aboutCollapseAll" type="button">Collapse all</button>
-                <span class="about-toolbar-note" id="aboutGlossaryCount"></span>
-              </div>
-            </div>
-
-            <div class="about-glossary-list" id="aboutGlossaryList">
-              ${this.glossaryItems.map((it, idx) => this.glossaryRow(it, idx)).join("")}
-            </div>
-          </section>
-
-          <section class="about-section" data-tab="limits" role="tabpanel">
-            <div class="about-section-head">
-              <h2>⚠️ Signal Limits & Data Quality</h2>
-              <p>Why results can change + how to interpret safely</p>
-            </div>
-
-            <div class="about-limit-grid">
-              ${this.limitCard("🧾 On-ledger only",
-                "Signals come from observable XRPL activity. Off-ledger context (exchange internal movement, KYC, custody) is not visible here."
-              )}
-              ${this.limitCard("⚠️ False positives are normal",
-                "Many patterns have benign explanations (service wallets, batching, market making). Treat signals as prompts, not conclusions."
-              )}
-              ${this.limitCard("🛰️ Sampling + capture gaps",
-                "Reconnects, server load limits, and missing ledgers can distort local history. Continuity gaps can skew comparisons."
-              )}
-              ${this.limitCard("🧪 Heuristics, not proof",
-                "Confidence and persistence are explainable heuristics — not identity attribution or legal determinations."
-              )}
-              ${this.limitCard("🔭 Window sensitivity",
-                "Results can change with different window sizes (5 vs 20 vs 50). Use consistent windows for analysis and exports."
-              )}
-              ${this.limitCard("🌐 Rate limits & node variability",
-                "Different XRPL servers behave differently under load. Throttling and queue-based fetching reduce skipped ledgers."
-              )}
-            </div>
-          </section>
-
-          <footer class="about-footer">
-            <div class="about-footer-left">NaluXrp • about@2.0.1-futuristic-fixed</div>
-            <div class="about-footer-right">Built for explainability: patterns are signals, not accusations.</div>
-          </footer>
-        </div>
-      `;
-    },
-
-    tabButton(id, label) {
-      return `
-        <button class="about-tab" type="button" role="tab"
-          data-tab-btn="${id}" aria-selected="false">
-          ${label}
-        </button>
-      `;
-    },
-
-    algoCard({ icon, title, body, bullets }) {
-      const id = this.safeId(title);
-      return `
-        <article class="about-card about-accordion" data-acc="${id}">
-          <div class="about-card-top">
-            <div class="about-card-icon">${icon}</div>
-            <div class="about-card-title">${title}</div>
-            <button class="about-acc-toggle" type="button" aria-expanded="false" data-acc-toggle="${id}">
-              <span class="about-acc-label">Details</span>
-              <span class="about-acc-chevron">▾</span>
-            </button>
-          </div>
-
-          <div class="about-acc-body" data-acc-body="${id}">
-            <p class="about-card-body">${body}</p>
-            <ul class="about-bullets">
-              ${(bullets || []).map((b) => `<li>${b}</li>`).join("")}
-            </ul>
-          </div>
-        </article>
-      `;
-    },
-
-    step(icon, title, body) {
-      return `
-        <div class="about-step">
-          <div class="about-step-icon">${icon}</div>
-          <div class="about-step-content">
-            <div class="about-step-title">${title}</div>
-            <div class="about-step-body">${body}</div>
-          </div>
-        </div>
-      `;
-    },
-
-    patternCard({ title, subtitle, body, benign, risk }) {
-      return `
-        <article class="about-card about-pattern">
-          <div class="about-pattern-head">
-            <div>
-              <div class="about-pattern-title">${title}</div>
-              <div class="about-pattern-sub">${subtitle}</div>
-            </div>
-            <div class="about-pattern-badge">Pattern</div>
-          </div>
-
-          <p class="about-card-body">${body}</p>
-
-          <div class="about-split">
-            <div class="about-split-col good">
-              <div class="about-split-title">Benign</div>
-              <ul class="about-mini-list">
-                ${(benign || []).map((x) => `<li>${x}</li>`).join("")}
-              </ul>
-            </div>
-            <div class="about-split-col warn">
-              <div class="about-split-title">Risk cues</div>
-              <ul class="about-mini-list">
-                ${(risk || []).map((x) => `<li>${x}</li>`).join("")}
-              </ul>
-            </div>
-          </div>
-        </article>
-      `;
-    },
-
-    benignCard(title, body, bullets) {
-      return `
-        <article class="about-card about-benign">
-          <div class="about-benign-title">${title}</div>
-          <p class="about-card-body">${body}</p>
-          <ul class="about-bullets">
-            ${(bullets || []).map((b) => `<li>${b}</li>`).join("")}
-          </ul>
-        </article>
-      `;
-    },
-
-    limitCard(title, body) {
-      return `
-        <article class="about-card about-limit">
-          <div class="about-limit-title">${title}</div>
-          <p class="about-card-body">${body}</p>
-        </article>
-      `;
-    },
-
-    glossaryRow(item, idx) {
-      const id = `glossary_${idx}_${this.safeId(item.key)}`;
-      const tags = (item.tags || []).map((t) => `<span class="about-tag">${t}</span>`).join("");
-      return `
-        <div class="about-glossary-item" data-glossary-item="${id}">
-          <button class="about-glossary-head" type="button" data-glossary-toggle="${id}" aria-expanded="false">
-            <div class="about-glossary-left">
-              <div class="about-glossary-term">${item.key}</div>
-              <div class="about-glossary-tags">${tags}</div>
-            </div>
-            <div class="about-glossary-right">
-              <span class="about-glossary-chevron">▾</span>
-            </div>
-          </button>
-          <div class="about-glossary-body" data-glossary-body="${id}">
-            ${item.body}
-          </div>
-        </div>
-      `;
-    },
-
-    // --------------------------------------------------
-    // EVENTS / BINDING
-    // --------------------------------------------------
-    bind() {
-      const root = document.getElementById("about");
-      if (!root) return;
-
-      // Tabs
-      root.querySelectorAll("[data-tab-btn]").forEach((btn) => {
-        btn.addEventListener("click", () => this.setTab(btn.getAttribute("data-tab-btn")));
-      });
-
-      // Accordions
-      root.querySelectorAll("[data-acc-toggle]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = btn.getAttribute("data-acc-toggle");
-          this.toggleAccordion(id, btn);
-        });
-      });
-
-      // Glossary toggles
-      root.querySelectorAll("[data-glossary-toggle]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = btn.getAttribute("data-glossary-toggle");
-          this.toggleGlossary(id, btn);
-        });
-      });
-
-      // Glossary search
-      const search = document.getElementById("aboutGlossarySearch");
-      if (search) search.addEventListener("input", () => this.filterGlossary(search.value));
-
-      // Expand / collapse all
-      const expandAll = document.getElementById("aboutExpandAll");
-      const collapseAll = document.getElementById("aboutCollapseAll");
-      if (expandAll) expandAll.addEventListener("click", () => this.setAllGlossary(true));
-      if (collapseAll) collapseAll.addEventListener("click", () => this.setAllGlossary(false));
-
-      this.updateGlossaryCount();
-    },
-
-    setTab(tabId) {
-      const root = document.getElementById("about");
-      if (!root) return;
-
-      this.activeTab = tabId;
-
-      root.querySelectorAll(".about-tab[data-tab-btn]").forEach((b) => {
-        const on = b.getAttribute("data-tab-btn") === tabId;
-        b.classList.toggle("is-active", on);
-        b.setAttribute("aria-selected", on ? "true" : "false");
-      });
-
-      root.querySelectorAll(".about-section[data-tab]").forEach((sec) => {
-        const on = sec.getAttribute("data-tab") === tabId;
-        sec.classList.toggle("is-active", on);
-      });
-    },
-
-    toggleAccordion(id, btn) {
-      const body = document.querySelector(`[data-acc-body="${id}"]`);
-      if (!body) return;
-
-      const expanded = btn.getAttribute("aria-expanded") === "true";
-      btn.setAttribute("aria-expanded", expanded ? "false" : "true");
-      btn.classList.toggle("is-open", !expanded);
-      body.classList.toggle("is-open", !expanded);
-    },
-
-    toggleGlossary(id, btn) {
-      const body = document.querySelector(`[data-glossary-body="${id}"]`);
-      const item = document.querySelector(`[data-glossary-item="${id}"]`);
-      if (!body || !item) return;
-
-      const expanded = btn.getAttribute("aria-expanded") === "true";
-      btn.setAttribute("aria-expanded", expanded ? "false" : "true");
-      item.classList.toggle("is-open", !expanded);
-      body.classList.toggle("is-open", !expanded);
-    },
-
-    setAllGlossary(open) {
-      document.querySelectorAll("[data-glossary-toggle]").forEach((btn) => {
-        const id = btn.getAttribute("data-glossary-toggle");
-        const body = document.querySelector(`[data-glossary-body="${id}"]`);
-        const item = document.querySelector(`[data-glossary-item="${id}"]`);
-        if (!body || !item) return;
-
-        btn.setAttribute("aria-expanded", open ? "true" : "false");
-        item.classList.toggle("is-open", open);
-        body.classList.toggle("is-open", open);
-      });
-    },
-
-    filterGlossary(q) {
-      const query = (q || "").trim().toLowerCase();
-      const list = document.getElementById("aboutGlossaryList");
-      if (!list) return;
-
-      let visible = 0;
-
-      list.querySelectorAll(".about-glossary-item").forEach((node) => {
-        const term = (node.querySelector(".about-glossary-term")?.textContent || "").toLowerCase();
-        const tags = (node.querySelector(".about-glossary-tags")?.textContent || "").toLowerCase();
-        const body = (node.querySelector(".about-glossary-body")?.textContent || "").toLowerCase();
-
-        const match = !query || term.includes(query) || tags.includes(query) || body.includes(query);
-
-        node.style.display = match ? "" : "none";
-        if (match) visible += 1;
-      });
-
-      this.updateGlossaryCount(visible);
-    },
-
-    updateGlossaryCount(overrideVisible) {
-      const countEl = document.getElementById("aboutGlossaryCount");
-      if (!countEl) return;
-
-      const total = this.glossaryItems.length;
-      const visible = typeof overrideVisible === "number" ? overrideVisible : total;
-      countEl.textContent = `${visible}/${total}`;
-    },
-
-    // --------------------------------------------------
-    // UTILS
-    // --------------------------------------------------
-    safeId(s) {
-      return String(s || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 60);
-    },
-
-    escapeHtml(str) {
-      return String(str || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    },
-  };
-
-  // --------------------------------------------------
-  // HOOK: switchPage('about') -> ensureRendered()
-  // --------------------------------------------------
-  function hookSwitchPage() {
-    if (typeof window.switchPage !== "function") return;
-
-    // avoid double-hooking
-    if (window.switchPage.__aboutHooked) return;
-
-    const original = window.switchPage;
-
-    const wrapped = function (pageId, ...args) {
-      const res = original.call(this, pageId, ...args);
-      if (String(pageId).toLowerCase() === "about") {
-        setTimeout(() => About.ensureRendered(true), 0);
-      }
-      return res;
-    };
-
-    wrapped.__aboutHooked = true;
-
-    // keep any properties if needed
-    Object.keys(original).forEach((k) => {
-      try { wrapped[k] = original[k]; } catch (e) {}
-    });
-
-    window.switchPage = wrapped;
+/* SAFETY: ensure the about section has room when active */
+#about.page-section.active {
+  display: block;
+}
+#about.page-section {
+  width: 100%;
+  min-height: calc(100vh - 90px);
+}
+
+/* Main container */
+.about-page {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 110px 20px 40px; /* fixed navbar */
+  box-sizing: border-box;
+  animation: fadeSlideIn 0.55s ease-out;
+}
+
+/* Error fallback UI */
+.about-error {
+  border-radius: 18px;
+  border: 1px solid rgba(255, 184, 108, 0.35);
+  background: rgba(255, 184, 108, 0.08);
+  padding: 16px;
+}
+.about-error-title {
+  font-weight: 900;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.about-error-body {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.about-error code {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-primary);
+}
+
+/* HERO */
+.about-hero {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 18px;
+  align-items: stretch;
+  margin-bottom: 18px;
+}
+
+.about-kicker {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.95;
+}
+
+.about-title {
+  margin: 10px 0 6px;
+  font-size: 2.2rem;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  text-shadow: 0 0 14px rgba(0, 212, 255, 0.15);
+}
+
+.about-subtitle {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  font-size: 1.02rem;
+}
+
+.about-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.about-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+.about-hero-card {
+  position: relative;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(0, 212, 255, 0.18), transparent 55%),
+    radial-gradient(circle at 100% 20%, rgba(189, 147, 249, 0.16), transparent 55%),
+    linear-gradient(135deg, rgba(0,0,0,0.58), rgba(0,0,0,0.78));
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04),
+    0 18px 44px rgba(0,0,0,0.65);
+  padding: 16px 16px 14px;
+  overflow: hidden;
+}
+
+.about-hero-card::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  opacity: 0.55;
+  filter: blur(34px);
+  background: radial-gradient(circle at 0 0, rgba(0,212,255,0.22), transparent 55%);
+  pointer-events: none;
+}
+
+.about-hero-card-title {
+  font-weight: 800;
+  color: var(--accent-secondary);
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+
+.about-hero-card-tag {
+  margin-top: 6px;
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.35);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.about-hero-card-text {
+  margin: 12px 0 10px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  position: relative;
+  z-index: 1;
+}
+
+/* CALLOUTS */
+.about-callouts {
+  display: grid;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.about-callout {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.35);
+}
+
+.about-callout-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.about-callout-title {
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.about-callout-text {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.about-callout.warn {
+  border-color: rgba(255, 184, 108, 0.35);
+  background: rgba(255, 184, 108, 0.08);
+}
+
+.about-callout.neutral {
+  border-color: rgba(139, 233, 253, 0.25);
+  background: rgba(139, 233, 253, 0.06);
+}
+
+/* TABS */
+.about-tabs {
+  position: sticky;
+  top: 78px;
+  z-index: 50;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+  margin: 14px 0 16px;
+  border-radius: 16px;
+  background: rgba(0,0,0,0.30);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(16px);
+}
+
+.about-tab {
+  appearance: none;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  white-space: nowrap;
+}
+
+.about-tab:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-secondary);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.55);
+}
+
+.about-tab.is-active {
+  border-color: var(--accent-primary);
+  background:
+    radial-gradient(circle at 0 0, rgba(0,212,255,0.18), transparent 60%),
+    rgba(0,0,0,0.35);
+  box-shadow: 0 0 0 1px rgba(0,212,255,0.12), 0 12px 28px rgba(0,0,0,0.6);
+}
+
+/* SECTIONS */
+.about-section {
+  display: none;
+  animation: fadeSlideIn 0.45s ease-out;
+}
+.about-section.is-active {
+  display: block;
+}
+
+.about-section-head {
+  margin: 8px 0 14px;
+}
+
+.about-section-head h2,
+.about-section-head h3 {
+  margin: 0 0 5px;
+  color: var(--accent-secondary);
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.about-section-head p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.about-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.14), transparent);
+  margin: 18px 0;
+}
+
+/* GRIDS */
+.about-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.about-pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.about-benign-grid,
+.about-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+/* CARDS */
+.about-card {
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 55%),
+    linear-gradient(135deg, rgba(0,0,0,0.55), rgba(0,0,0,0.78));
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.03),
+    0 18px 38px rgba(0,0,0,0.62);
+  padding: 14px 14px 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.about-card::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background: radial-gradient(circle at 0 0, rgba(0,212,255,0.10), transparent 55%);
+  opacity: 0.65;
+  filter: blur(34px);
+  pointer-events: none;
+}
+
+.about-card-top {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.about-card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.10);
+  font-size: 1.1rem;
+}
+
+.about-card-title {
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+.about-card-body {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  position: relative;
+  z-index: 1;
+}
+
+.about-bullets {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  position: relative;
+  z-index: 1;
+}
+.about-bullets li {
+  margin: 6px 0;
+}
+
+/* ACCORDIONS */
+.about-acc-toggle {
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.35);
+  color: var(--text-primary);
+  padding: 7px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  position: relative;
+  z-index: 1;
+}
+
+.about-acc-toggle:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-secondary);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.55);
+}
+
+.about-acc-chevron {
+  opacity: 0.9;
+  transition: transform 0.18s ease;
+}
+
+.about-accordion [aria-expanded="true"] .about-acc-chevron {
+  transform: rotate(180deg);
+}
+
+.about-acc-body {
+  display: none;
+  margin-top: 10px;
+}
+.about-acc-body.is-open {
+  display: block;
+}
+
+/* STEPS */
+.about-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.about-step {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.28);
+}
+
+.about-step-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+}
+
+.about-step-title {
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+.about-step-body {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin-top: 4px;
+}
+
+/* PATTERN CARDS */
+.about-pattern-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.about-pattern-title {
+  font-weight: 950;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.about-pattern-sub {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.about-pattern-badge {
+  font-size: 0.75rem;
+  font-weight: 900;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
+  color: var(--text-secondary);
+}
+
+.about-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.about-split-col {
+  border-radius: 14px;
+  padding: 10px 10px 8px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.28);
+}
+
+.about-split-col.good {
+  border-color: rgba(80, 250, 123, 0.25);
+  background: rgba(80, 250, 123, 0.06);
+}
+
+.about-split-col.warn {
+  border-color: rgba(255, 184, 108, 0.28);
+  background: rgba(255, 184, 108, 0.06);
+}
+
+.about-split-title {
+  font-weight: 900;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.about-mini-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-secondary);
+}
+.about-mini-list li {
+  margin: 6px 0;
+}
+
+/* GLOSSARY */
+.about-glossary-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(0,0,0,0.28);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.about-search {
+  flex: 1 1 320px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.35);
+}
+
+.about-search input {
+  width: 100%;
+  outline: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.about-toolbar-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.about-btn {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.35);
+  color: var(--text-primary);
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  white-space: nowrap;
+}
+
+.about-btn:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-secondary);
+  box-shadow: 0 12px 22px rgba(0,0,0,0.55);
+}
+
+.about-toolbar-note {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.28);
+}
+
+.about-glossary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.about-glossary-item {
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 55%),
+    rgba(0,0,0,0.35);
+  overflow: hidden;
+}
+
+.about-glossary-head {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.about-glossary-term {
+  font-weight: 950;
+  color: var(--text-primary);
+}
+
+.about-glossary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.about-tag {
+  font-size: 0.72rem;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.30);
+  color: var(--text-secondary);
+  font-weight: 800;
+}
+
+.about-glossary-chevron {
+  opacity: 0.9;
+  transition: transform 0.18s ease;
+}
+
+.about-glossary-item.is-open .about-glossary-chevron {
+  transform: rotate(180deg);
+}
+
+.about-glossary-body {
+  display: none;
+  padding: 0 14px 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.about-glossary-body.is-open {
+  display: block;
+}
+
+/* HINT */
+.about-hint {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(139, 233, 253, 0.25);
+  background: rgba(139, 233, 253, 0.06);
+  color: var(--text-secondary);
+}
+
+/* FOOTER */
+.about-footer {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,0.10);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.about-footer-left {
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+/* RESPONSIVE */
+@media (max-width: 1200px) {
+  .about-hero {
+    grid-template-columns: 1fr;
   }
-
-  // --------------------------------------------------
-  // OBSERVE: when #about becomes active -> ensureRendered()
-  // --------------------------------------------------
-  function observeAboutActive() {
-    const aboutSection = document.getElementById("about");
-    if (!aboutSection || typeof MutationObserver === "undefined") return;
-
-    const obs = new MutationObserver(() => {
-      if (aboutSection.classList.contains("active")) {
-        About.ensureRendered(false);
-      }
-    });
-
-    obs.observe(aboutSection, { attributes: true, attributeFilter: ["class"] });
+  .about-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
-  // --------------------------------------------------
-  // INIT
-  // --------------------------------------------------
-  document.addEventListener("DOMContentLoaded", () => {
-    // render once
-    About.ensureRendered(false);
+@media (max-width: 820px) {
+  .about-page {
+    padding: 100px 16px 34px;
+  }
+  .about-grid,
+  .about-pattern-grid,
+  .about-benign-grid,
+  .about-limit-grid {
+    grid-template-columns: 1fr;
+  }
+  .about-split {
+    grid-template-columns: 1fr;
+  }
+  .about-tabs {
+    top: 74px;
+  }
+}
 
-    // hook page switching and active observer
-    hookSwitchPage();
-    observeAboutActive();
-  });
+@media (max-width: 480px) {
+  .about-title {
+    font-size: 1.75rem;
+  }
+  .about-tab {
+    width: 100%;
+    justify-content: center;
+  }
+  .about-toolbar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
 
-  // external API
-  window.renderAbout = () => About.ensureRendered(true);
-  window.NaluAbout = About;
-})();
-
+/* fallback animation */
+@keyframes fadeSlideIn {
+  0% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
