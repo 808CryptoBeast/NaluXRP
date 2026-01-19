@@ -351,32 +351,39 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 /* =========================================
-   Dropdown readability fix (high contrast)
+   Fix: Dropdown menu items too light (unhovered)
    Paste at END of navbar.css
    ========================================= */
 
-.dropdown-menu {
-  /* Force a darker panel regardless of theme vars */
-  background: rgba(6, 10, 18, 0.94) !important;
-  border: 1px solid rgba(255, 255, 255, 0.14) !important;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.72) !important;
-  backdrop-filter: blur(16px);
+.nav-dropdown .dropdown-menu {
+  background: rgba(10, 10, 18, 0.92);
+  border-color: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(18px);
 }
 
-.dropdown-item {
-  /* Make text readable by default */
+/* Force readable text for dropdown links/buttons (beats global a{} styles) */
+.nav-dropdown .dropdown-menu .dropdown-item,
+.nav-dropdown .dropdown-menu a.dropdown-item,
+.nav-dropdown .dropdown-menu button.dropdown-item {
   color: rgba(255, 255, 255, 0.92) !important;
-  text-shadow: 0 1px 10px rgba(0,0,0,0.55);
-
-  /* Give each item a subtle chip background so it’s visible */
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  opacity: 1 !important;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.6);
 }
 
-.dropdown-item:hover {
-  /* Keep your hover effect but ensure contrast */
-  background: rgba(0, 212, 255, 0.16) !important;
-  border-color: rgba(0, 212, 255, 0.28) !important;
-  color: rgba(255, 255, 255, 0.98) !important;
+/* If your dropdown items are <a> tags, also cover link states */
+.nav-dropdown .dropdown-menu a.dropdown-item:link,
+.nav-dropdown .dropdown-menu a.dropdown-item:visited {
+  color: rgba(255, 255, 255, 0.92) !important;
+  opacity: 1 !important;
 }
 
+/* Hover: keep your nice glow, but start from readable */
+.nav-dropdown .dropdown-menu .dropdown-item:hover {
+  color: #ffffff !important;
+  background: rgba(0, 212, 255, 0.14);
+}
+
+/* Optional: clearer separation between items */
+.nav-dropdown .dropdown-menu .dropdown-item + .dropdown-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
