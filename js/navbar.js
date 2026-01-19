@@ -1,410 +1,308 @@
 // =======================================================
-// navbar.js – NaluXrp 🌊 (FULL)
-// Mobile + Desktop friendly navbar controller
-// - Hamburger menu (mobile overlay)
-// - Dropdowns: hover on desktop, click accordion on mobile
-// - Active page highlighting
-// - Inspector link injected into Network dropdown + fallback button in navbar
-// - Outside click + Escape closes menus
-// - Optional navbar collapse toggle buttons supported (#navbarToggle / #navbarToggleBtn)
+// navbar.js — NaluXrp 🌊 (Responsive + Mobile Friendly + Robust)
+// FIXES INCLUDED:
+// ✅ Prevent duplicate Account Inspector buttons (dedupe)
+// ✅ Ensure Account Inspector button exists (single, consistent)
+// ✅ Medium-screen layout works (CSS handles wrap; JS doesn't fight it)
+// ✅ Connection badge updates from xrpl-connection events
+// ✅ Mobile hamburger + outside click close + mobile dropdown accordion
 // =======================================================
 
 (function () {
-  const SELECTORS = {
-    navbar: "#navbar",
-    navLinks: "#navLinks",
-    hamburger: "#hamburger",
-    dropdown: ".nav-dropdown",
-    dropdownToggle: ".dropdown-toggle",
-    dropdownMenu: ".dropdown-menu",
-    navBtn: ".nav-btn",
-    dropdownItem: ".dropdown-item",
-    statusBadge: ".status-badge",
-    desktopToggle: "#navbarToggle",
-    floatingToggle: "#navbarToggleBtn",
-  };
-
-  let initialized = false;
-  let originalSwitchPage = null;
-
-  function $(sel, root = document) {
-    return root.querySelector(sel);
-  }
-  function $all(sel, root = document) {
-    return Array.from(root.querySelectorAll(sel));
+  function $(id) {
+    return document.getElementById(id);
   }
 
-  function isMobile() {
-    return window.innerWidth <= 992;
-  }
-
-  function safeCallSwitchPage(pageId) {
+  function safeSwitchPage(pageId) {
     if (typeof window.switchPage === "function") {
       window.switchPage(pageId);
-    } else {
-      console.error("❌ switchPage() not found. Ensure ui.js loads before navbar.js");
+      return true;
     }
+    console.warn("❌ switchPage() not found");
+    return false;
   }
 
-  // -----------------------------
-  // Mobile menu open/close
-  // -----------------------------
-  function openMobileMenu() {
-    const hamburger = $(SELECTORS.hamburger);
-    const navLinks = $(SELECTORS.navLinks);
+  function initNavbar() {
+    bindHamburger();
+    bindMobileDropdowns();
+    bindNavButtonsFallback();
+    ensureSingleInspectorButton();
+    bindConnectionBadge();
+    bindKeyboardShortcuts();
+    bindNavbarToggleIfExists();
+  }
+
+  // -------------------------------------------------------
+  // 1) HAMBURGER (mobile)
+  // -------------------------------------------------------
+  function bindHamburger() {
+    const hamburger = $("hamburger");
+    const navLinks = $("navLinks");
     if (!hamburger || !navLinks) return;
 
-    hamburger.classList.add("active");
-    navLinks.classList.add("show");
-    document.body.classList.add("mobile-menu-open");
-    hamburger.setAttribute("aria-expanded", "true");
-  }
-
-  function closeMobileMenu() {
-    const hamburger = $(SELECTORS.hamburger);
-    const navLinks = $(SELECTORS.navLinks);
-    if (hamburger) {
-      hamburger.classList.remove("active");
-      hamburger.setAttribute("aria-expanded", "false");
-    }
-    if (navLinks) navLinks.classList.remove("show");
-    document.body.classList.remove("mobile-menu-open");
-
-    // close any open dropdown accordions
-    $all(`${SELECTORS.dropdown}.active`).forEach((d) => d.classList.remove("active"));
-  }
-
-  function toggleMobileMenu() {
-    const navLinks = $(SELECTORS.navLinks);
-    if (!navLinks) return;
-    if (navLinks.classList.contains("show")) closeMobileMenu();
-    else openMobileMenu();
-  }
-
-  // -----------------------------
-  // Dropdown behavior
-  // -----------------------------
-  function setupDropdowns() {
-    const dropdowns = $all(SELECTORS.dropdown);
-    dropdowns.forEach((drop) => {
-      const toggle = $(SELECTORS.dropdownToggle, drop);
-      const menu = $(SELECTORS.dropdownMenu, drop);
-      if (!toggle || !menu) return;
-
-      // Accessibility
-      toggle.setAttribute("aria-haspopup", "true");
-      toggle.setAttribute("aria-expanded", "false");
-
-      // Mobile: click accordion
-      toggle.addEventListener("click", (e) => {
-        if (!isMobile()) return; // Desktop uses CSS hover (still clickable but we skip)
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Close other dropdowns first
-        dropdowns.forEach((d) => {
-          if (d !== drop) d.classList.remove("active");
-          const t = $(SELECTORS.dropdownToggle, d);
-          if (t) t.setAttribute("aria-expanded", "false");
-        });
-
-        const nowActive = !drop.classList.contains("active");
-        drop.classList.toggle("active", nowActive);
-        toggle.setAttribute("aria-expanded", nowActive ? "true" : "false");
-      });
-
-      // Desktop: allow click-to-open too (optional)
-      toggle.addEventListener("click", (e) => {
-        if (isMobile()) return;
-        // If user clicks on desktop, toggle a "forced open" state
-        e.preventDefault();
-        e.stopPropagation();
-
-        const currently = drop.classList.contains("force-open");
-        dropdowns.forEach((d) => d.classList.remove("force-open"));
-        drop.classList.toggle("force-open", !currently);
-        toggle.setAttribute("aria-expanded", !currently ? "true" : "false");
-      });
-    });
-
-    // Outside click closes forced-open dropdowns (desktop) + mobile menus
-    document.addEventListener("click", (e) => {
-      const nav = $(SELECTORS.navbar);
-      if (!nav) return;
-
-      // Close forced-open dropdowns if click outside navbar
-      if (!e.target.closest(SELECTORS.navbar)) {
-        $all(`${SELECTORS.dropdown}.force-open`).forEach((d) => d.classList.remove("force-open"));
-        $all(SELECTORS.dropdownToggle).forEach((t) => t.setAttribute("aria-expanded", "false"));
-        if (isMobile()) closeMobileMenu();
-        return;
-      }
-
-      // If click inside navbar but not inside a dropdown, close forced-open dropdowns
-      if (!e.target.closest(SELECTORS.dropdown)) {
-        $all(`${SELECTORS.dropdown}.force-open`).forEach((d) => d.classList.remove("force-open"));
-        $all(SELECTORS.dropdownToggle).forEach((t) => t.setAttribute("aria-expanded", "false"));
-      }
-    });
-  }
-
-  // -----------------------------
-  // Hamburger
-  // -----------------------------
-  function setupHamburger() {
-    const hamburger = $(SELECTORS.hamburger);
-    const navLinks = $(SELECTORS.navLinks);
-    if (!hamburger || !navLinks) return;
-
-    hamburger.setAttribute("role", "button");
-    hamburger.setAttribute("tabindex", "0");
-    hamburger.setAttribute("aria-label", "Toggle navigation");
-    hamburger.setAttribute("aria-expanded", "false");
+    if (hamburger.__bound) return;
+    hamburger.__bound = true;
 
     hamburger.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleMobileMenu();
+      hamburger.classList.toggle("active");
+      navLinks.classList.toggle("show");
+      document.body.classList.toggle("mobile-menu-open");
     });
 
-    hamburger.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
+    // Tap outside closes menu (mobile only)
+    document.addEventListener("click", (e) => {
+      if (window.innerWidth > 992) return;
+      if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
+        closeMobileMenu();
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 992) closeMobileMenu();
+    });
+  }
+
+  function closeMobileMenu() {
+    const hamburger = $("hamburger");
+    const navLinks = $("navLinks");
+    if (hamburger) hamburger.classList.remove("active");
+    if (navLinks) navLinks.classList.remove("show");
+    document.body.classList.remove("mobile-menu-open");
+
+    // also collapse any active accordion dropdown
+    document.querySelectorAll(".nav-dropdown.active").forEach((d) => d.classList.remove("active"));
+  }
+
+  // -------------------------------------------------------
+  // 2) MOBILE DROPDOWNS become accordion
+  // -------------------------------------------------------
+  function bindMobileDropdowns() {
+    const toggles = document.querySelectorAll(".dropdown-toggle");
+    toggles.forEach((toggle) => {
+      if (toggle.__bound) return;
+      toggle.__bound = true;
+
+      toggle.addEventListener("click", (e) => {
+        if (window.innerWidth > 992) return; // desktop uses hover CSS
+
         e.preventDefault();
-        toggleMobileMenu();
-      }
+        e.stopPropagation();
+
+        const parent = toggle.closest(".nav-dropdown");
+        if (!parent) return;
+
+        // close others
+        document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
+          if (d !== parent) d.classList.remove("active");
+        });
+
+        parent.classList.toggle("active");
+      });
     });
   }
 
-  // -----------------------------
-  // Bind nav buttons + dropdown items
-  // (Your HTML uses inline onclick="switchPage('...')"
-  // We *also* add listeners so we can close mobile + highlight active.)
-  // -----------------------------
-  function bindNavigationClicks() {
-    // Buttons
-    $all(SELECTORS.navBtn).forEach((btn) => {
+  // -------------------------------------------------------
+  // 3) NAV BUTTON FALLBACK binding
+  // (Your HTML uses inline onclick, but this makes it resilient
+  //  if you later remove inline handlers.)
+  // -------------------------------------------------------
+  function bindNavButtonsFallback() {
+    document.querySelectorAll("[data-page]").forEach((btn) => {
       if (btn.__navBound) return;
-      btn.addEventListener("click", () => {
-        // If this button is the theme button (no page navigation), ignore
-        const txt = (btn.textContent || "").toLowerCase();
-        if (btn.classList.contains("theme-btn") || txt.trim() === "🎨") return;
-
-        // close mobile after click
-        if (isMobile()) closeMobileMenu();
-      });
       btn.__navBound = true;
-    });
-
-    // Dropdown items (anchors)
-    $all(SELECTORS.dropdownItem).forEach((item) => {
-      if (item.__dropBound) return;
-      item.addEventListener("click", () => {
-        if (isMobile()) closeMobileMenu();
-        // close forced-open dropdowns on desktop after selection
-        $all(`${SELECTORS.dropdown}.force-open`).forEach((d) => d.classList.remove("force-open"));
-        $all(SELECTORS.dropdownToggle).forEach((t) => t.setAttribute("aria-expanded", "false"));
+      btn.addEventListener("click", (e) => {
+        const page = btn.getAttribute("data-page");
+        if (!page) return;
+        e.preventDefault();
+        e.stopPropagation();
+        safeSwitchPage(page);
+        if (window.innerWidth <= 992) closeMobileMenu();
       });
-      item.__dropBound = true;
     });
   }
 
-  // -----------------------------
-  // Active page highlighting
-  // Wrap switchPage so any navigation updates active state.
-  // -----------------------------
-  function installActivePageHook() {
-    if (originalSwitchPage) return;
-    if (typeof window.switchPage !== "function") return;
+  // -------------------------------------------------------
+  // 4) ACCOUNT INSPECTOR BUTTON (single + deduped)
+  // -------------------------------------------------------
+  function ensureSingleInspectorButton() {
+    const navLinks = $("navLinks");
+    if (!navLinks) return;
 
-    originalSwitchPage = window.switchPage;
+    // Remove any inspector duplicates first (from old injections / other modules)
+    // Keep the one with id="navInspectorBtn" if it exists, otherwise keep first found.
+    const candidates = [
+      ...document.querySelectorAll(
+        '#navInspectorBtn, [data-page="inspector"], .nav-inspector-item, .nav-inspector, a[onclick*="inspector"], button[onclick*="inspector"]'
+      )
+    ];
 
-    window.switchPage = function (pageId) {
-      try {
-        originalSwitchPage(pageId);
-      } finally {
-        // delay to allow UI.currentPage update + DOM changes
-        setTimeout(updateActiveNavState, 0);
+    // If one already exists in the nav, we will normalize it to our preferred button
+    let primary = document.getElementById("navInspectorBtn");
+
+    // Create primary if missing
+    if (!primary) {
+      primary = document.createElement("button");
+      primary.id = "navInspectorBtn";
+      primary.type = "button";
+      primary.className = "nav-btn nav-inspector";
+      primary.setAttribute("data-page", "inspector");
+      primary.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
+      primary.title = "Account Inspector";
+
+      // Insert near Dashboard button if possible
+      const dashBtn = navLinks.querySelector('button[onclick*="dashboard"], button[data-page="dashboard"]');
+      if (dashBtn && dashBtn.parentNode === navLinks) {
+        dashBtn.insertAdjacentElement("afterend", primary);
+      } else {
+        navLinks.insertAdjacentElement("afterbegin", primary);
       }
-    };
+    } else {
+      // Normalize existing inspector element to our styling
+      primary.classList.add("nav-btn", "nav-inspector");
+      primary.setAttribute("data-page", "inspector");
+      if (!primary.innerHTML || !primary.innerHTML.includes("Inspector")) {
+        primary.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
+      }
+    }
+
+    // Bind click (ensure it actually navigates)
+    if (!primary.__bound) {
+      primary.__bound = true;
+      primary.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        safeSwitchPage("inspector");
+        if (window.innerWidth <= 992) closeMobileMenu();
+      });
+    }
+
+    // Remove all duplicates besides the primary
+    const allInspectorEls = [
+      ...document.querySelectorAll(
+        '#navInspectorBtn, [data-page="inspector"], .nav-inspector-item, .nav-inspector, a[onclick*="inspector"], button[onclick*="inspector"]'
+      )
+    ];
+
+    allInspectorEls.forEach((el) => {
+      if (el === primary) return;
+      // Only remove if it is inside the navbar area (don’t delete real page content)
+      if (el.closest(".navbar") || el.closest("#navbar")) {
+        try { el.remove(); } catch (_) {}
+      }
+    });
+
+    // Re-bind any [data-page] that were newly created
+    bindNavButtonsFallback();
+  }
+
+  // -------------------------------------------------------
+  // 5) CONNECTION BADGE: updates status bubble in navbar
+  // HTML: #statusDot, #connectionStatus
+  // -------------------------------------------------------
+  function bindConnectionBadge() {
+    const dot = $("statusDot");
+    const text = $("connectionStatus");
+    if (!dot || !text) return;
+
+    function setBadge(mode, serverName) {
+      // modes: "live" | "connecting" | "disconnected"
+      dot.classList.remove("active", "connecting", "disconnected");
+      if (mode === "live") {
+        dot.classList.add("active");
+        text.textContent = `LIVE • ${serverName || "XRPL"}`;
+      } else if (mode === "disconnected") {
+        dot.classList.add("disconnected");
+        text.textContent = `DISCONNECTED`;
+      } else {
+        dot.classList.add("connecting");
+        text.textContent = `CONNECTING…`;
+      }
+    }
 
     // initial
-    updateActiveNavState();
-  }
+    setBadge("connecting");
 
-  function normalizePageId(pageId) {
-    return String(pageId || "").trim().toLowerCase();
-  }
-
-  function updateActiveNavState() {
-    const current = normalizePageId(window.UI?.currentPage || "");
-
-    // Clear previous active markers
-    $all(`${SELECTORS.navBtn}.is-active`).forEach((b) => b.classList.remove("is-active"));
-    $all(`${SELECTORS.dropdownItem}.is-active`).forEach((a) => a.classList.remove("is-active"));
-
-    if (!current) return;
-
-    // Try to match inline onclick="switchPage('X')"
-    const matchByOnclick = (el) => {
-      const oc = el.getAttribute("onclick") || "";
-      return oc.includes(`switchPage('${current}')`) || oc.includes(`switchPage("${current}")`);
-    };
-
-    const btn = $all(SELECTORS.navBtn).find(matchByOnclick);
-    if (btn) btn.classList.add("is-active");
-
-    const item = $all(SELECTORS.dropdownItem).find(matchByOnclick);
-    if (item) item.classList.add("is-active");
-  }
-
-  // -----------------------------
-  // Insert "Account Inspector" into Network dropdown
-  // (and if not found, add a normal nav button at end)
-  // -----------------------------
-  function injectInspectorButton() {
-    // Already exists?
-    if (document.querySelector(".nav-inspector-item")) return;
-
-    const dropdowns = $all(SELECTORS.dropdown);
-    let networkDrop = null;
-
-    for (const d of dropdowns) {
-      const t = $(SELECTORS.dropdownToggle, d);
-      const label = (t?.textContent || "").toLowerCase();
-      if (label.includes("network") || label.includes("🌐")) {
-        networkDrop = d;
-        break;
+    // Listen to XRPL module events
+    window.addEventListener("xrpl-connection", (ev) => {
+      const d = ev.detail || {};
+      if (d.connected) setBadge("live", d.server || d.url || "XRPL");
+      else {
+        // If switching networks: show a clearer state
+        if (String(d.modeReason || "").toLowerCase().includes("network")) setBadge("connecting", "Switching");
+        else setBadge("connecting");
       }
-    }
-
-    // Build item
-    const a = document.createElement("a");
-    a.href = "#";
-    a.className = "dropdown-item nav-inspector-item";
-    a.textContent = "🔎 Account Inspector";
-    a.title = "Open Account Inspector";
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      safeCallSwitchPage("inspector");
-      if (isMobile()) closeMobileMenu();
     });
 
-    if (networkDrop) {
-      const menu = $(SELECTORS.dropdownMenu, networkDrop);
-      if (menu) {
-        menu.appendChild(a);
+    // Optional: click badge triggers reconnect
+    text.style.cursor = "pointer";
+    text.title = "Click to reconnect";
+    text.addEventListener("click", () => {
+      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
+    });
+  }
+
+  // -------------------------------------------------------
+  // 6) KEYBOARD SHORTCUTS
+  // -------------------------------------------------------
+  function bindKeyboardShortcuts() {
+    window.addEventListener("keydown", (e) => {
+      const isMac = navigator.platform.toUpperCase().includes("MAC");
+      const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
+
+      // Ctrl/Cmd+I -> Inspector
+      if (ctrlOrCmd && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        safeSwitchPage("inspector");
         return;
       }
-    }
 
-    // Fallback: add a normal nav button
-    const navLinks = $(SELECTORS.navLinks);
-    if (navLinks) {
-      const btn = document.createElement("button");
-      btn.className = "nav-btn nav-inspector-btn";
-      btn.type = "button";
-      btn.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
-      btn.title = "Open Account Inspector";
-      btn.addEventListener("click", () => safeCallSwitchPage("inspector"));
-      navLinks.appendChild(btn);
-    }
-  }
-
-  // -----------------------------
-  // Navbar hide-on-scroll (desktop)
-  // -----------------------------
-  function setupScrollHide() {
-    const navbar = $(SELECTORS.navbar);
-    if (!navbar) return;
-
-    let lastY = window.scrollY || 0;
-
-    window.addEventListener("scroll", () => {
-      if (isMobile()) return; // don’t auto-hide on mobile
-      if (document.body.classList.contains("navbar-collapsed")) return; // user override
-
-      const y = window.scrollY || 0;
-      if (y > lastY && y > 120) navbar.classList.add("hide");
-      else navbar.classList.remove("hide");
-      lastY = y;
-    });
-  }
-
-  // -----------------------------
-  // Optional: manual collapse toggles
-  // (#navbarToggle and #navbarToggleBtn exist in your HTML)
-  // -----------------------------
-  function setupManualCollapseToggles() {
-    const desktopToggle = $(SELECTORS.desktopToggle);
-    const floatingToggle = $(SELECTORS.floatingToggle);
-
-    const doToggle = () => {
-      document.body.classList.toggle("navbar-collapsed");
-      // when collapsed, ensure mobile menu is closed
-      closeMobileMenu();
-    };
-
-    if (desktopToggle && !desktopToggle.__bound) {
-      desktopToggle.addEventListener("click", doToggle);
-      desktopToggle.__bound = true;
-    }
-
-    if (floatingToggle && !floatingToggle.__bound) {
-      floatingToggle.addEventListener("click", doToggle);
-      floatingToggle.__bound = true;
-    }
-
-    // Keyboard shortcut: press "N" to collapse/expand (desktop)
-    window.addEventListener("keydown", (e) => {
-      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
-      if (e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        doToggle();
-      }
+      // Esc -> close mobile menu
       if (e.key === "Escape") {
         closeMobileMenu();
       }
     });
   }
 
-  // -----------------------------
-  // Keep bindings correct on resize
-  // -----------------------------
-  function setupResizeBehavior() {
-    window.addEventListener("resize", () => {
-      // If we leave mobile breakpoint, ensure menu isn’t stuck open
-      if (!isMobile()) {
-        closeMobileMenu();
-        $all(`${SELECTORS.dropdown}.active`).forEach((d) => d.classList.remove("active"));
+  // -------------------------------------------------------
+  // 7) Navbar toggle button (optional)
+  // -------------------------------------------------------
+  function bindNavbarToggleIfExists() {
+    const navbar = $("navbar");
+    const toggle = $("navbarToggle");
+    const floating = $("navbarToggleBtn");
+
+    if (!navbar) return;
+
+    function toggleNav() {
+      navbar.classList.toggle("hide");
+      if (floating) {
+        const icon = floating.querySelector(".toggle-icon");
+        if (icon) icon.textContent = navbar.classList.contains("hide") ? "▼" : "▲";
       }
-      updateActiveNavState();
+    }
+
+    if (toggle && !toggle.__bound) {
+      toggle.__bound = true;
+      toggle.addEventListener("click", toggleNav);
+    }
+
+    if (floating && !floating.__bound) {
+      floating.__bound = true;
+      floating.addEventListener("click", toggleNav);
+    }
+
+    // Press "N" to toggle
+    window.addEventListener("keydown", (e) => {
+      if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        toggleNav();
+      }
     });
   }
 
-  // -----------------------------
-  // INIT
-  // -----------------------------
-  function init() {
-    if (initialized) return;
-    initialized = true;
+  document.addEventListener("DOMContentLoaded", initNavbar);
 
-    setupHamburger();
-    setupDropdowns();
-    bindNavigationClicks();
-
-    // Ensure inspector exists in nav
-    injectInspectorButton();
-
-    // Active page highlighting
-    installActivePageHook();
-
-    // Scroll hide behavior + manual toggles
-    setupScrollHide();
-    setupManualCollapseToggles();
-    setupResizeBehavior();
-
-    console.log("✅ Navbar module loaded (mobile + desktop + inspector injected)");
-  }
-
-  document.addEventListener("DOMContentLoaded", init);
+  // Exports
+  window.closeMobileMenu = closeMobileMenu;
 })();
