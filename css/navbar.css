@@ -1,41 +1,38 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css) (FULL)
-   - Fixed layout across all screen sizes
-   - Mobile overlay menu works
-   - Dropdowns: hover desktop, accordion mobile
-   - Active state styling + better effects
+   NaluXrp 🌊 – Navbar (navbar.css)
+   FIXES:
+   ✅ Medium width wrap (logo + status on first row, links second row)
+   ✅ Connection badge has 3 states (live/connecting/disconnected)
+   ✅ Mobile friendly and desktop friendly
    ========================================= */
 
 .navbar {
   position: fixed;
   top: 0; left: 0; right: 0;
-  background: rgba(10, 10, 20, 0.75);
-  backdrop-filter: blur(18px);
+  background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
   border-bottom: 2px solid var(--accent-primary);
-  box-shadow: 0 10px 35px rgba(0,0,0,0.55);
-  z-index: 10000;
+  box-shadow: 0 5px 30px var(--glow-color);
+  z-index: 1000;
   transform: translateY(0);
-  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), box-shadow 0.25s ease;
+  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
-.navbar.hide {
-  transform: translateY(-100%);
-}
-
-/* Optional manual collapse */
-body.navbar-collapsed .navbar {
-  transform: translateY(-100%);
-}
+.navbar.hide { transform: translateY(-100%); }
 
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
-  padding: 0 18px;
+  padding: 0 20px;
   min-height: 75px;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+
+  /* ✅ allow wrap at medium sizes */
+  flex-wrap: nowrap;
 }
 
 /* Logo */
@@ -44,8 +41,8 @@ body.navbar-collapsed .navbar {
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  user-select: none;
-  min-width: 190px;
+  flex: 0 0 auto;
+  min-width: 220px;
 }
 
 .logo-text {
@@ -55,13 +52,11 @@ body.navbar-collapsed .navbar {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: 1.5px;
-  text-shadow: 0 0 18px rgba(0, 212, 255, 0.18);
 }
 
 .logo-slogan {
   font-size: 0.72em;
   color: var(--text-secondary);
-  opacity: 0.95;
 }
 
 /* Links row */
@@ -69,50 +64,47 @@ body.navbar-collapsed .navbar {
   display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: center;
-  flex: 1;
-  min-width: 0;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 300px;
 }
 
 /* Buttons */
 .nav-btn,
 .dropdown-toggle {
-  padding: 9px 13px;
-  background: linear-gradient(135deg, rgba(0,0,0,0.35), rgba(0,0,0,0.55));
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.12);
-  color: var(--text-primary);
+  padding: 9px 12px;
+  background: linear-gradient(135deg, rgba(0,0,0,0.4), rgba(0,0,0,0.6));
+  border-radius: 10px;
+  border: 2px solid var(--accent-tertiary);
+  color: var(--accent-tertiary);
   cursor: pointer;
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-  box-shadow: 0 0 0 rgba(0,0,0,0);
-  user-select: none;
+  gap: 6px;
+  transition: all 0.2s ease;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover {
-  border-color: rgba(0, 212, 255, 0.45);
-  box-shadow: 0 10px 22px rgba(0, 212, 255, 0.08);
+  border-color: var(--accent-primary);
+  background: linear-gradient(135deg, var(--glow-color), var(--glow-color-light));
+  color: var(--accent-secondary);
+  box-shadow: 0 5px 15px var(--glow-color);
   transform: translateY(-2px);
 }
 
-/* Active page indicator */
-.nav-btn.is-active {
-  border-color: rgba(0, 212, 255, 0.65);
-  box-shadow: 0 0 0 1px rgba(0,212,255,0.25), 0 12px 26px rgba(0,212,255,0.10);
-}
+.nav-icon { font-size: 1.05rem; }
+.nav-label { display: inline-block; }
 
-.nav-icon {
-  font-size: 1.05rem;
+/* Inspector highlight */
+.nav-btn.nav-inspector {
+  border-color: rgba(0, 212, 255, 0.45);
 }
-
-.nav-label {
-  display: inline-block;
+.nav-btn.nav-inspector:hover {
+  border-color: rgba(0, 212, 255, 0.85);
 }
 
 /* Dropdowns */
@@ -121,86 +113,61 @@ body.navbar-collapsed .navbar {
   display: inline-block;
 }
 
-/* Hover spacer so menu doesn't close while moving cursor */
 .nav-dropdown::after {
   content: "";
   position: absolute;
   top: 100%;
   left: 0;
   width: 100%;
-  height: 14px;
+  height: 18px;
   background: transparent;
 }
 
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 14px);
+  top: calc(100% + 18px);
   right: 0;
-  background: rgba(10, 10, 20, 0.92);
-  border-radius: 14px;
-  border: 1px solid rgba(0, 212, 255, 0.35);
-  min-width: 210px;
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  border: 2px solid var(--accent-primary);
+  min-width: 200px;
   padding: 8px;
   display: none;
   flex-direction: column;
-  box-shadow: 0 18px 38px rgba(0,0,0,0.75);
-  animation: navDropIn 0.16s ease;
-  z-index: 10002;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+  animation: slideDown 0.2s ease;
+  z-index: 1002;
 }
 
-/* Desktop open via hover */
-.nav-dropdown:hover .dropdown-menu {
-  display: flex;
-}
-
-/* Desktop open via click (force-open class added by JS) */
-.nav-dropdown.force-open .dropdown-menu {
-  display: flex;
-}
-
-@keyframes navDropIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+.nav-dropdown:hover .dropdown-menu { display: flex; }
 
 .dropdown-item {
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 0.92rem;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.9rem;
   color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+  transition: 0.2s ease;
   text-align: left;
   font-weight: 700;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: rgba(255,255,255,0.02);
-  text-decoration: none;
-  display: block;
 }
 
 .dropdown-item:hover {
-  background: rgba(0, 212, 255, 0.10);
-  border-color: rgba(0, 212, 255, 0.30);
+  background: var(--glow-color);
   transform: translateX(4px);
-}
-
-.dropdown-item.is-active {
-  background: rgba(0, 212, 255, 0.14);
-  border-color: rgba(0, 212, 255, 0.42);
 }
 
 /* Connection status */
 .status-badge {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 6px 10px;
   background: rgba(0,0,0,0.35);
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
-  font-size: 0.82rem;
-  user-select: none;
-  flex-shrink: 0;
+  border: 1px solid var(--accent-tertiary);
+  font-size: 0.85rem;
+  flex: 0 0 auto;
 }
 
 .status-dot {
@@ -208,21 +175,36 @@ body.navbar-collapsed .navbar {
   height: 10px;
   border-radius: 50%;
   background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255,184,108,0.6);
+  box-shadow: 0 0 8px #ffb86c;
 }
 
+/* ✅ NEW states */
 .status-dot.active {
   background: #50fa7b;
-  box-shadow: 0 0 12px rgba(80,250,123,0.75);
+  box-shadow: 0 0 10px #50fa7b;
+}
+.status-dot.connecting {
+  background: #ffb86c;
+  box-shadow: 0 0 10px rgba(255,184,108,0.8);
+  animation: pulseDot 1.2s ease-in-out infinite;
+}
+.status-dot.disconnected {
+  background: #ff6e6e;
+  box-shadow: 0 0 10px rgba(255,110,110,0.8);
+}
+
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.25); opacity: 1; }
 }
 
 /* Desktop navbar toggle */
 .navbar-toggle {
-  margin-left: 8px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(0,0,0,0.35);
+  margin-left: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.4);
   color: var(--text-primary);
   cursor: pointer;
 }
@@ -233,27 +215,24 @@ body.navbar-collapsed .navbar {
   right: 16px;
   bottom: 16px;
   border-radius: 999px;
-  padding: 9px 11px;
-  border: 1px solid rgba(0, 212, 255, 0.45);
+  padding: 8px 10px;
+  border: 1px solid var(--accent-secondary);
   background: rgba(0,0,0,0.6);
   color: var(--accent-secondary);
   cursor: pointer;
-  z-index: 9999;
-  box-shadow: 0 14px 34px rgba(0,0,0,0.45);
+  z-index: 999;
 }
 
-.toggle-icon {
-  display: inline-block;
-}
+.toggle-icon { display: inline-block; }
 
-/* Hamburger */
+/* Hamburger (hidden on desktop) */
 .hamburger {
   display: none;
   flex-direction: column;
   gap: 4px;
   padding: 10px;
   cursor: pointer;
-  user-select: none;
+  flex: 0 0 auto;
 }
 
 .hamburger span {
@@ -261,65 +240,80 @@ body.navbar-collapsed .navbar {
   height: 3px;
   background: var(--accent-secondary);
   border-radius: 2px;
-  transition: transform 0.25s ease, opacity 0.25s ease;
+  transition: all 0.25s ease;
 }
 
-.hamburger.active span:nth-child(1) {
-  transform: translateY(7px) rotate(45deg);
-}
-.hamburger.active span:nth-child(2) {
-  opacity: 0;
-}
-.hamburger.active span:nth-child(3) {
-  transform: translateY(-7px) rotate(-45deg);
+.hamburger.active span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.active span:nth-child(2) { opacity: 0; }
+.hamburger.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* =========================================
+   ✅ MEDIUM SCREENS FIX (your 1068×873 issue)
+   Logo + Status stay visible; buttons drop to row 2
+   ========================================= */
+@media (max-width: 1100px) {
+  .nav-content {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 14px;
+    align-items: center;
+  }
+
+  .nav-logo {
+    min-width: 200px;
+  }
+
+  /* Put status on first row (right side) */
+  .status-badge {
+    margin-left: auto;
+  }
+
+  /* Move nav links to full-width second row */
+  .nav-links {
+    width: 100%;
+    flex: 1 1 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .nav-btn, .dropdown-toggle {
+    padding: 8px 11px;
+    font-size: 0.88rem;
+  }
+
+  .navbar-toggle {
+    display: none;
+  }
 }
 
 /* =========================================
    Mobile / small screens
    ========================================= */
 @media (max-width: 992px) {
-  .nav-content {
-    padding: 0 12px;
-    gap: 10px;
-  }
+  .nav-content { padding: 0 12px; flex-wrap: nowrap; }
+  .nav-logo .logo-slogan { display: none; }
 
-  .nav-logo {
-    min-width: auto;
-  }
+  .hamburger { display: flex; }
 
-  .nav-logo .logo-slogan {
-    display: none;
-  }
-
-  .navbar-toggle {
-    display: none;
-  }
-
-  .hamburger {
-    display: flex;
-  }
-
-  /* Full-screen mobile menu overlay */
+  /* slide-over menu */
   .nav-links {
     position: fixed;
     top: 75px;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(10, 10, 20, 0.94);
-    backdrop-filter: blur(12px);
+    background: var(--bg-secondary);
     flex-direction: column;
     align-items: stretch;
-    justify-content: flex-start;
     padding: 16px;
     gap: 10px;
-
     transform: translateX(-100%);
     opacity: 0;
     pointer-events: none;
     transition: transform 0.25s ease, opacity 0.25s ease;
     overflow-y: auto;
-    z-index: 10001;
+    z-index: 999;
+    justify-content: flex-start;
   }
 
   .nav-links.show {
@@ -328,41 +322,31 @@ body.navbar-collapsed .navbar {
     pointer-events: all;
   }
 
-  .nav-btn,
-  .dropdown-toggle {
+  .nav-btn, .dropdown-toggle {
     width: 100%;
     justify-content: flex-start;
     padding: 12px 14px;
-    font-size: 1rem;
   }
 
-  /* Dropdowns become accordion sections */
-  .nav-dropdown:hover .dropdown-menu {
-    display: none;
-  }
+  /* dropdown hover disabled; accordion via JS */
+  .nav-dropdown:hover .dropdown-menu { display: none; }
 
   .nav-dropdown .dropdown-menu {
     position: static;
     margin-top: 6px;
-    border-radius: 12px;
-  }
-
-  .nav-dropdown.active .dropdown-menu {
-    display: flex;
-  }
-
-  /* Hide status badge on tiny screens if it crowds */
-  .status-badge {
-    font-size: 0.78rem;
-    padding: 5px 9px;
-  }
-}
-
-@media (max-width: 480px) {
-  .logo-text {
-    font-size: 1.25em;
-  }
-  .status-badge {
+    border-width: 1px;
     display: none;
   }
+
+  .nav-dropdown.active .dropdown-menu { display: flex; }
+}
+
+/* Very small */
+@media (max-width: 480px) {
+  .nav-label { font-size: 0.88rem; }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
