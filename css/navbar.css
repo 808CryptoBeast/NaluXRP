@@ -1,11 +1,12 @@
 /* =========================================
    NaluXrp 🌊 – Navbar (navbar.css)
    FIXES:
-   ✅ Hamburger REMOVED (hidden always)
-   ✅ Mobile = icon-only horizontal scroll rail (no drawer)
-   ✅ Dropdown items readable WITHOUT hover
-   ✅ Dropdowns open via .open class (JS) + hover only on pointer devices
-   ✅ Prevents overlap around ~1068px
+   ✅ No hamburger (hidden)
+   ✅ Desktop hover works (JS handles hover too)
+   ✅ Mobile/touch click works (JS handles)
+   ✅ Dropdown items readable without hover
+   ✅ No overlap around ~1068px: icon mode
+   ✅ Nav rail scrolls instead of wrapping
    ========================================= */
 
 :root {
@@ -26,11 +27,9 @@
   transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
-.navbar.hide {
-  transform: translateY(-100%);
-}
+.navbar.hide { transform: translateY(-100%); }
 
-/* Grid prevents overlap: logo | nav rail | status */
+/* Layout: logo | rail | status */
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
@@ -67,12 +66,10 @@
   opacity: 0.95;
 }
 
-/* HAMBURGER REMOVED */
-.hamburger {
-  display: none !important;
-}
+/* Kill hamburger always */
+.hamburger { display: none !important; }
 
-/* Nav rail (no wrap) */
+/* Nav rail */
 .nav-links {
   display: flex;
   align-items: center;
@@ -85,16 +82,38 @@
   scrollbar-width: none;
   min-width: 0;
   padding: 6px 2px;
-  mask-image: linear-gradient(90deg, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
+  position: relative;
 }
 
 .nav-links::-webkit-scrollbar { display: none; }
+
+/* Optional fade edges without mask-image (more compatible) */
+.nav-links::before,
+.nav-links::after {
+  content: "";
+  position: sticky;
+  top: 0;
+  width: 14px;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.nav-links::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--bg-secondary), transparent);
+}
+
+.nav-links::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--bg-secondary), transparent);
+}
 
 /* Buttons */
 .nav-btn,
 .dropdown-toggle {
   padding: 9px 13px;
-  background: rgba(0,0,0,0.60); /* darker default */
+  background: rgba(0,0,0,0.60);
   border-radius: 10px;
   border: 1px solid rgba(255,255,255,0.16);
   color: rgba(255,255,255,0.92);
@@ -124,20 +143,12 @@
     rgba(0,0,0,0.74);
 }
 
-.nav-icon {
-  font-size: 1.08rem;
-  line-height: 1;
-}
-
+.nav-icon { font-size: 1.08rem; line-height: 1; }
 .nav-label { display: inline-block; }
 
-/* Dropdown container */
-.nav-dropdown {
-  position: relative;
-  display: inline-block;
-}
+/* Dropdown */
+.nav-dropdown { position: relative; display: inline-block; }
 
-/* Dropdown menu: readable even when not hovering */
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 12px);
@@ -155,22 +166,16 @@
   max-width: calc(100vw - 20px);
 }
 
-/* JS open state */
 .nav-dropdown.open .dropdown-menu { display: flex; }
 
-/* Hover open only for real mouse devices (prevents broken touch behavior) */
-@media (hover: hover) and (pointer: fine) {
-  .nav-dropdown:hover .dropdown-menu { display: flex; }
-}
-
-/* Dropdown items (FIX: visible text by default) */
+/* Dropdown items — readable without hover */
 .dropdown-item {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.92rem;
   color: rgba(255,255,255,0.92);
   cursor: pointer;
-  transition: transform 0.15s ease, background 0.15s ease;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
   text-align: left;
   font-weight: 750;
   background: rgba(255,255,255,0.04);
@@ -200,7 +205,7 @@
   font-size: 0.88rem;
   color: rgba(255,255,255,0.92);
   white-space: nowrap;
-  max-width: 320px;
+  max-width: 340px;
 }
 
 #connectionStatus {
@@ -241,35 +246,34 @@
   50% { transform: scale(1.25); opacity: 1; }
 }
 
-/* Optional desktop toggles (if present in HTML) */
+/* Hide old toggles if present */
 .navbar-toggle,
-.navbar-toggle-btn {
-  display: none !important; /* keep UI clean and avoid blocking */
-}
+.navbar-toggle-btn { display: none !important; }
 
 /* =========================================================
-   Responsive behavior
+   Responsive
    ========================================================= */
 
-/* Prevent crowding around ~1068px: icon-only */
+/* Around 1068px: hide labels to prevent overlap */
 @media (max-width: 1180px) {
   .logo-slogan { display: none; }
   .nav-btn, .dropdown-toggle { padding: 8px 11px; }
-  .nav-label { display: none; } /* icons only */
+  .nav-label { display: none; }
   .nav-logo { min-width: 190px; }
 }
 
-/* Tablet / small widths: compact status */
+/* Smaller widths */
 @media (max-width: 900px) {
   .nav-content { padding: 0 12px; gap: 10px; }
   .nav-logo { min-width: 160px; }
   #connectionStatus { max-width: 170px; }
 }
 
-/* Very small phones: show dot only (optional) */
+/* Very small phones */
 @media (max-width: 520px) {
   #connectionStatus { display: none; }
   .status-badge { padding: 7px 10px; }
   .logo-text { font-size: 1.25em; }
   .nav-logo { min-width: 150px; }
 }
+
