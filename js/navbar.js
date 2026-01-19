@@ -385,4 +385,3 @@
     document.head.appendChild(style);
   }
 })();
-
