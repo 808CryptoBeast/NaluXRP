@@ -1,275 +1,261 @@
 // =======================================================
-// navbar.js — Stable + Responsive + Inspector Safe
-// FIXES:
-// ✅ Prevents Inspector duplication (keeps only ONE)
-// ✅ Prevents overlap at ~1068px (CSS handles + scroll rail helpers)
-// ✅ Dropdown readable and usable on desktop + mobile
-// ✅ Connection badge updates from xrpl-connection events
-// ✅ Adds global top-offset so navbar doesn't cover page content
+// navbar.js — NO HAMBURGER + CLICK DROPDOWNS + SINGLE INSPECTOR
+// Fixes:
+// ✅ Removes hamburger behavior (mobile uses icon-only scroll rail)
+// ✅ Dropdowns work on click/tap (desktop + mobile)
+// ✅ Guarantees ONLY ONE Inspector button (removes duplicates everywhere)
+// ✅ Keeps navbar from covering page content (dynamic --nav-offset)
+// ✅ Connection badge updates via xrpl-connection events
 // =======================================================
 
 (function () {
-  const NAV_OFFSET_STYLE_ID = "nav-offset-style";
-  const INSPECTOR_BTN_CLASS = "nav-inspector-btn";
+  // Prevent double-initialization if script is loaded twice
+  if (window.__NALU_NAVBAR_V3_INITIALIZED__) return;
+  window.__NALU_NAVBAR_V3_INITIALIZED__ = true;
+
+  const INSPECTOR_SELECTOR = [
+    '[data-page="inspector"]',
+    '.nav-inspector-btn',
+    '.nav-inspector-item',
+    'button[onclick*="switchPage(\'inspector\')"]',
+    'button[onclick*="switchPage(\\"inspector\\")"]',
+    'a[onclick*="switchPage(\'inspector\')"]',
+    'a[onclick*="switchPage(\\"inspector\\")"]'
+  ].join(",");
 
   document.addEventListener("DOMContentLoaded", () => {
-    initNavbar();
     injectNavbarSafetyStyles();
-    ensureInspectorButton();
-    bindConnectionBadge();
     applyNavOffset();
-    installPageHighlighting();
+    setupDropdowns();
+    ensureSingleInspectorButton();
+    bindConnectionBadge();
+
+    window.addEventListener("resize", () => {
+      closeAllDropdowns();
+      applyNavOffset();
+    });
+
+    // If your app toggles sections, keep active button in sync
+    hookSwitchPageForActiveState();
+    // Initial active state
+    setTimeout(() => syncActiveFromCurrentSection(), 0);
   });
 
-  // ----------------------------
-  // Init
-  // ----------------------------
-  function initNavbar() {
-    setupHamburger();
-    setupDropdownsMobile();
-    setupScrollHideDesktop();
-    enableHorizontalWheelScroll();
-    window.addEventListener("resize", () => {
-      applyNavOffset();
-      // close drawer if resizing up
-      if (window.innerWidth > 992) closeMobileMenu();
-    });
-  }
-
-  // ----------------------------
-  // Inspector button (ONE only)
-  // ----------------------------
-  function ensureInspectorButton() {
-    const navLinks = document.getElementById("navLinks");
-    if (!navLinks) return;
-
-    // Remove duplicates if any
-    const all = navLinks.querySelectorAll(`[data-page="inspector"], .${INSPECTOR_BTN_CLASS}`);
-    if (all.length > 1) {
-      for (let i = 1; i < all.length; i++) all[i].remove();
-    }
-
-    // If exists already, ensure it has correct styling/class
-    if (all.length === 1) {
-      all[0].classList.add(INSPECTOR_BTN_CLASS);
-      all[0].setAttribute("data-page", "inspector");
-      return;
-    }
-
-    // Create
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `nav-btn ${INSPECTOR_BTN_CLASS}`;
-    btn.setAttribute("data-page", "inspector");
-    btn.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
-    btn.title = "Account Inspector";
-
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      safeSwitchPage("inspector");
-      if (window.innerWidth <= 992) closeMobileMenu();
-    });
-
-    // Insert right after Dashboard if possible
-    const dashBtn = findButtonForPage(navLinks, "dashboard");
-    if (dashBtn && dashBtn.parentNode) {
-      dashBtn.insertAdjacentElement("afterend", btn);
-    } else {
-      navLinks.prepend(btn);
-    }
-  }
-
-  function findButtonForPage(container, pageId) {
-    const direct = container.querySelector(`[data-page="${pageId}"]`);
-    if (direct) return direct;
-
-    // Try parsing onclick="switchPage('dashboard')"
-    const candidates = container.querySelectorAll("button, a");
-    for (const el of candidates) {
-      const oc = el.getAttribute("onclick") || "";
-      const match = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
-      if (match && match[1] === pageId) return el;
-    }
-    return null;
-  }
-
-  // ----------------------------
-  // Mobile menu (hamburger)
-  // ----------------------------
-  function setupHamburger() {
-    const hamburger = document.getElementById("hamburger");
-    const navLinks = document.getElementById("navLinks");
-    if (!hamburger || !navLinks) return;
-
-    hamburger.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      hamburger.classList.toggle("active");
-      navLinks.classList.toggle("show");
-      document.body.classList.toggle("mobile-menu-open");
-    });
-
-    // Tap outside closes menu (mobile only)
-    document.addEventListener("click", (e) => {
-      if (window.innerWidth > 992) return;
-      if (!e.target.closest(".navbar") && !e.target.closest("#hamburger")) {
-        closeMobileMenu();
-      }
-    });
-  }
-
-  function closeMobileMenu() {
-    const hamburger = document.getElementById("hamburger");
-    const navLinks = document.getElementById("navLinks");
-
-    if (hamburger) hamburger.classList.remove("active");
-    if (navLinks) navLinks.classList.remove("show");
-    document.body.classList.remove("mobile-menu-open");
-
-    // close any open dropdowns
-    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
-  }
-
-  // ----------------------------
-  // Dropdowns: Mobile click accordion, Desktop hover + click toggle
-  // ----------------------------
-  function setupDropdownsMobile() {
-    const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
-
-    dropdownToggles.forEach((toggle) => {
-      if (toggle.__bound) return;
+  // ------------------------------------------------------
+  // DROPDOWNS: click/tap to open (works everywhere)
+  // ------------------------------------------------------
+  function setupDropdowns() {
+    const toggles = document.querySelectorAll(".nav-dropdown .dropdown-toggle");
+    toggles.forEach((toggle) => {
+      if (toggle.__naluBound) return;
 
       toggle.addEventListener("click", (e) => {
-        const parent = toggle.closest(".nav-dropdown");
-        if (!parent) return;
-
-        // Desktop: allow click to toggle open state (nice for touch laptops)
-        if (window.innerWidth > 992) {
-          e.preventDefault();
-          e.stopPropagation();
-
-          // close others
-          document.querySelectorAll(".nav-dropdown.open").forEach((d) => {
-            if (d !== parent) d.classList.remove("open");
-          });
-
-          parent.classList.toggle("open");
-          return;
-        }
-
-        // Mobile: accordion
         e.preventDefault();
         e.stopPropagation();
 
+        const parent = toggle.closest(".nav-dropdown");
+        if (!parent) return;
+
+        // Close other dropdowns
         document.querySelectorAll(".nav-dropdown.open").forEach((d) => {
           if (d !== parent) d.classList.remove("open");
         });
 
         parent.classList.toggle("open");
+        ensureDropdownInViewport(parent);
       });
 
-      toggle.__bound = true;
+      toggle.__naluBound = true;
     });
 
-    // Click outside closes dropdowns (desktop + mobile)
+    // Click outside closes
     document.addEventListener("click", (e) => {
       if (e.target.closest(".nav-dropdown")) return;
-      document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
+      closeAllDropdowns();
+    });
+
+    // ESC closes
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeAllDropdowns();
+    });
+
+    // Clicking a dropdown item closes dropdown
+    document.querySelectorAll(".nav-dropdown .dropdown-menu").forEach((menu) => {
+      menu.addEventListener("click", (e) => {
+        const item = e.target.closest(".dropdown-item");
+        if (!item) return;
+        closeAllDropdowns();
+      });
     });
   }
 
-  // ----------------------------
-  // Desktop scroll-hide navbar (optional)
-  // ----------------------------
-  function setupScrollHideDesktop() {
-    const navbar = document.getElementById("navbar");
-    if (!navbar) return;
-
-    let lastScrollY = window.scrollY;
-
-    window.addEventListener("scroll", () => {
-      if (window.innerWidth <= 992) return;
-
-      const currentY = window.scrollY;
-      if (currentY > lastScrollY && currentY > 90) navbar.classList.add("hide");
-      else navbar.classList.remove("hide");
-
-      lastScrollY = currentY;
-    });
+  function closeAllDropdowns() {
+    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
   }
 
-  // ----------------------------
-  // Horizontal wheel scroll for nav rail (desktop)
-  // ----------------------------
-  function enableHorizontalWheelScroll() {
+  // Keep dropdown menus inside viewport on small screens
+  function ensureDropdownInViewport(dropdown) {
+    const menu = dropdown.querySelector(".dropdown-menu");
+    const toggle = dropdown.querySelector(".dropdown-toggle");
+    if (!menu || !toggle) return;
+
+    // Reset any prior inline tweaks
+    menu.style.left = "";
+    menu.style.right = "";
+    menu.style.maxWidth = "";
+
+    const rect = menu.getBoundingClientRect();
+    const pad = 10;
+
+    // If overflowing right, pin to right edge
+    if (rect.right > window.innerWidth - pad) {
+      menu.style.right = "0";
+      menu.style.left = "auto";
+      menu.style.maxWidth = `calc(100vw - ${pad * 2}px)`;
+    }
+
+    // If overflowing left, pin to left edge
+    const rect2 = menu.getBoundingClientRect();
+    if (rect2.left < pad) {
+      menu.style.left = "0";
+      menu.style.right = "auto";
+      menu.style.maxWidth = `calc(100vw - ${pad * 2}px)`;
+    }
+  }
+
+  // ------------------------------------------------------
+  // SINGLE INSPECTOR BUTTON (no duplicates)
+  // - removes duplicates anywhere in DOM
+  // - ensures it lives in navLinks
+  // ------------------------------------------------------
+  function ensureSingleInspectorButton() {
     const navLinks = document.getElementById("navLinks");
     if (!navLinks) return;
 
-    navLinks.addEventListener(
-      "wheel",
-      (e) => {
-        // Only when not in mobile drawer mode
-        if (window.innerWidth <= 992) return;
+    // Gather all possible inspector nodes across DOM
+    const found = Array.from(document.querySelectorAll(INSPECTOR_SELECTOR));
 
-        // Convert vertical wheel to horizontal scroll
-        if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-          navLinks.scrollLeft += e.deltaY;
-          e.preventDefault();
-        }
-      },
-      { passive: false }
-    );
+    // Prefer the one inside navLinks, else first found
+    let keeper = found.find((n) => navLinks.contains(n)) || found[0] || null;
+
+    // Remove all others
+    found.forEach((n) => {
+      if (n !== keeper) n.remove();
+    });
+
+    // If none existed, create it
+    if (!keeper) {
+      keeper = document.createElement("button");
+      keeper.type = "button";
+      navLinks.appendChild(keeper);
+    }
+
+    // Normalize into a nav button
+    normalizeInspectorNode(keeper);
+
+    // Ensure it is placed right after Dashboard button if possible
+    const dash = findNavTarget(navLinks, "dashboard");
+    if (dash && dash.parentNode) {
+      // If already directly after dashboard, leave it
+      const after = dash.nextElementSibling;
+      if (after !== keeper) dash.insertAdjacentElement("afterend", keeper);
+    } else {
+      // fallback: place at start
+      if (navLinks.firstChild !== keeper) navLinks.prepend(keeper);
+    }
   }
 
-  // ----------------------------
-  // Connection badge hookup
-  // ----------------------------
+  function normalizeInspectorNode(node) {
+    // Make it a button
+    if (node.tagName.toLowerCase() !== "button") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = node.className || "";
+      btn.innerHTML = node.innerHTML || "";
+      // Replace
+      node.replaceWith(btn);
+      node = btn;
+    }
+
+    node.type = "button";
+    node.classList.add("nav-btn", "nav-inspector-btn");
+    node.setAttribute("data-page", "inspector");
+    node.removeAttribute("href");
+    node.removeAttribute("onclick");
+
+    // Standard content
+    node.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
+    node.title = "Account Inspector";
+
+    // Bind click once
+    if (!node.__naluInspectorBound) {
+      node.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        safeSwitchPage("inspector");
+        closeAllDropdowns();
+      });
+      node.__naluInspectorBound = true;
+    }
+
+    return node;
+  }
+
+  function findNavTarget(container, pageId) {
+    const dp = container.querySelector(`[data-page="${pageId}"]`);
+    if (dp) return dp;
+
+    const candidates = container.querySelectorAll("button, a");
+    for (const el of candidates) {
+      const oc = el.getAttribute("onclick") || "";
+      const m = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
+      if (m && m[1] === pageId) return el;
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------
+  // CONNECTION BADGE (statusDot + connectionStatus)
+  // ------------------------------------------------------
   function bindConnectionBadge() {
     const dot = document.getElementById("statusDot");
     const label = document.getElementById("connectionStatus");
     if (!dot || !label) return;
 
-    // Default state
     setBadge("connecting", "Connecting…");
 
-    // If XRPL has a getter, use initial
+    // initial state (if available)
     try {
       if (typeof window.getXRPLState === "function") {
         const s = window.getXRPLState();
-        if (s && s.connected) setBadge("live", `LIVE — ${s.server || "XRPL"}`);
+        if (s?.connected) setBadge("live", `LIVE — ${s.server || "XRPL"}`);
       }
     } catch (_) {}
 
     window.addEventListener("xrpl-connection", (ev) => {
-      const d = (ev && ev.detail) || {};
+      const d = ev?.detail || {};
       if (d.connected) {
         setBadge("live", `LIVE — ${d.server || "XRPL"}`);
       } else {
-        // distinguish connecting vs disconnected if mode is provided
         const mode = String(d.mode || "").toLowerCase();
-        const reason = d.modeReason || "";
-        if (mode.includes("connect")) {
-          setBadge("connecting", reason ? `Connecting… (${reason})` : "Connecting…");
-        } else {
-          setBadge("down", reason ? `Disconnected (${reason})` : "Disconnected");
-        }
+        const reason = d.modeReason ? ` (${d.modeReason})` : "";
+        if (mode.includes("connect")) setBadge("connecting", `Connecting…${reason}`);
+        else setBadge("down", `Disconnected${reason}`);
       }
     });
 
     function setBadge(state, text) {
-      dot.classList.remove("active", "connecting");
+      dot.classList.remove("active", "connecting", "down");
       if (state === "live") dot.classList.add("active");
       else if (state === "connecting") dot.classList.add("connecting");
+      else dot.classList.add("down");
       label.textContent = text;
     }
   }
 
-  // ----------------------------
-  // Prevent navbar from covering page content
-  // (global offset based on actual navbar height)
-  // ----------------------------
+  // ------------------------------------------------------
+  // NAVBAR OFFSET so it doesn't cover top-of-page content
+  // ------------------------------------------------------
   function applyNavOffset() {
     const navbar = document.getElementById("navbar");
     if (!navbar) return;
@@ -277,72 +263,60 @@
     const h = Math.max(70, Math.round(navbar.getBoundingClientRect().height));
     document.documentElement.style.setProperty("--nav-offset", `${h}px`);
 
-    // inject once: apply padding to container & scroll margin
-    if (!document.getElementById(NAV_OFFSET_STYLE_ID)) {
+    if (!document.getElementById("nav-offset-style")) {
       const style = document.createElement("style");
-      style.id = NAV_OFFSET_STYLE_ID;
+      style.id = "nav-offset-style";
       style.textContent = `
         .container { padding-top: var(--nav-offset, 78px) !important; }
         .page-section { scroll-margin-top: var(--nav-offset, 78px); }
-        /* About page uses its own padding; keep it consistent even if navbar height changes */
-        .about-page { padding-top: calc(var(--nav-offset, 78px) + 28px) !important; }
       `;
       document.head.appendChild(style);
     }
   }
 
-  // ----------------------------
-  // Active page highlighting
-  // ----------------------------
-  function installPageHighlighting() {
-    // Wrap switchPage (if present) to update nav highlights
-    if (typeof window.switchPage === "function" && !window.__navHighlightWrapped) {
-      const original = window.switchPage;
-      window.switchPage = function (pageId, ...rest) {
-        const res = original.apply(this, [pageId, ...rest]);
-        setActiveNav(pageId);
-        // close mobile menu after navigation
-        if (window.innerWidth <= 992) closeMobileMenu();
-        return res;
-      };
-      window.__navHighlightWrapped = true;
-    }
+  // ------------------------------------------------------
+  // ACTIVE PAGE HIGHLIGHTING
+  // ------------------------------------------------------
+  function hookSwitchPageForActiveState() {
+    if (typeof window.switchPage !== "function") return;
+    if (window.__NALU_SWITCHPAGE_WRAPPED__) return;
 
-    // Attempt initial highlight based on active section
-    setTimeout(() => {
-      const active = document.querySelector(".page-section.active");
-      if (active && active.id) setActiveNav(active.id);
-    }, 0);
+    const original = window.switchPage;
+    window.switchPage = function (pageId, ...rest) {
+      const res = original.apply(this, [pageId, ...rest]);
+      setActiveNav(pageId);
+      closeAllDropdowns();
+      return res;
+    };
+
+    window.__NALU_SWITCHPAGE_WRAPPED__ = true;
+  }
+
+  function syncActiveFromCurrentSection() {
+    const active = document.querySelector(".page-section.active");
+    if (active?.id) setActiveNav(active.id);
   }
 
   function setActiveNav(pageId) {
     const navLinks = document.getElementById("navLinks");
     if (!navLinks) return;
 
-    // Clear
     navLinks.querySelectorAll(".nav-btn.is-active, .dropdown-item.is-active").forEach((n) => {
       n.classList.remove("is-active");
     });
 
-    // Mark buttons that match page
-    const nodes = navLinks.querySelectorAll("button, a");
-    nodes.forEach((node) => {
+    navLinks.querySelectorAll("button, a").forEach((node) => {
       const target = getTargetPage(node);
       if (target === pageId) node.classList.add("is-active");
     });
-
-    // Also close dropdown open state on desktop after navigation
-    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
   }
 
   function getTargetPage(node) {
-    if (!node) return null;
     const dp = node.getAttribute("data-page");
     if (dp) return dp;
-
     const oc = node.getAttribute("onclick") || "";
-    const match = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
-    return match ? match[1] : null;
+    const m = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
+    return m ? m[1] : null;
   }
 
   function safeSwitchPage(pageId) {
@@ -350,9 +324,9 @@
     else console.error("❌ switchPage() not found!");
   }
 
-  // ----------------------------
-  // Overlay safety (notifications shouldn’t block nav)
-  // ----------------------------
+  // ------------------------------------------------------
+  // Overlay safety: toasts/alerts should not block navbar
+  // ------------------------------------------------------
   function injectNavbarSafetyStyles() {
     if (document.getElementById("navbar-safety-styles")) return;
 
@@ -370,7 +344,4 @@
     `;
     document.head.appendChild(style);
   }
-
-  // exports
-  window.closeMobileMenu = closeMobileMenu;
 })();
