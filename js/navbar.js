@@ -1,51 +1,111 @@
 // =======================================================
-// navbar.js — NaluXrp 🌊 (Responsive + Mobile Friendly + Robust)
-// FIXES INCLUDED:
-// ✅ Prevent duplicate Account Inspector buttons (dedupe)
-// ✅ Ensure Account Inspector button exists (single, consistent)
-// ✅ Medium-screen layout works (CSS handles wrap; JS doesn't fight it)
+// navbar.js — Stable + Responsive + Inspector Safe
+// FIXES:
+// ✅ Prevents Inspector duplication (keeps only ONE)
+// ✅ Prevents overlap at ~1068px (CSS handles + scroll rail helpers)
+// ✅ Dropdown readable and usable on desktop + mobile
 // ✅ Connection badge updates from xrpl-connection events
-// ✅ Mobile hamburger + outside click close + mobile dropdown accordion
+// ✅ Adds global top-offset so navbar doesn't cover page content
 // =======================================================
 
 (function () {
-  function $(id) {
-    return document.getElementById(id);
-  }
+  const NAV_OFFSET_STYLE_ID = "nav-offset-style";
+  const INSPECTOR_BTN_CLASS = "nav-inspector-btn";
 
-  function safeSwitchPage(pageId) {
-    if (typeof window.switchPage === "function") {
-      window.switchPage(pageId);
-      return true;
-    }
-    console.warn("❌ switchPage() not found");
-    return false;
-  }
-
-  function initNavbar() {
-    bindHamburger();
-    bindMobileDropdowns();
-    bindNavButtonsFallback();
-    ensureSingleInspectorButton();
+  document.addEventListener("DOMContentLoaded", () => {
+    initNavbar();
+    injectNavbarSafetyStyles();
+    ensureInspectorButton();
     bindConnectionBadge();
-    bindKeyboardShortcuts();
-    bindNavbarToggleIfExists();
+    applyNavOffset();
+    installPageHighlighting();
+  });
+
+  // ----------------------------
+  // Init
+  // ----------------------------
+  function initNavbar() {
+    setupHamburger();
+    setupDropdownsMobile();
+    setupScrollHideDesktop();
+    enableHorizontalWheelScroll();
+    window.addEventListener("resize", () => {
+      applyNavOffset();
+      // close drawer if resizing up
+      if (window.innerWidth > 992) closeMobileMenu();
+    });
   }
 
-  // -------------------------------------------------------
-  // 1) HAMBURGER (mobile)
-  // -------------------------------------------------------
-  function bindHamburger() {
-    const hamburger = $("hamburger");
-    const navLinks = $("navLinks");
-    if (!hamburger || !navLinks) return;
+  // ----------------------------
+  // Inspector button (ONE only)
+  // ----------------------------
+  function ensureInspectorButton() {
+    const navLinks = document.getElementById("navLinks");
+    if (!navLinks) return;
 
-    if (hamburger.__bound) return;
-    hamburger.__bound = true;
+    // Remove duplicates if any
+    const all = navLinks.querySelectorAll(`[data-page="inspector"], .${INSPECTOR_BTN_CLASS}`);
+    if (all.length > 1) {
+      for (let i = 1; i < all.length; i++) all[i].remove();
+    }
+
+    // If exists already, ensure it has correct styling/class
+    if (all.length === 1) {
+      all[0].classList.add(INSPECTOR_BTN_CLASS);
+      all[0].setAttribute("data-page", "inspector");
+      return;
+    }
+
+    // Create
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `nav-btn ${INSPECTOR_BTN_CLASS}`;
+    btn.setAttribute("data-page", "inspector");
+    btn.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
+    btn.title = "Account Inspector";
+
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      safeSwitchPage("inspector");
+      if (window.innerWidth <= 992) closeMobileMenu();
+    });
+
+    // Insert right after Dashboard if possible
+    const dashBtn = findButtonForPage(navLinks, "dashboard");
+    if (dashBtn && dashBtn.parentNode) {
+      dashBtn.insertAdjacentElement("afterend", btn);
+    } else {
+      navLinks.prepend(btn);
+    }
+  }
+
+  function findButtonForPage(container, pageId) {
+    const direct = container.querySelector(`[data-page="${pageId}"]`);
+    if (direct) return direct;
+
+    // Try parsing onclick="switchPage('dashboard')"
+    const candidates = container.querySelectorAll("button, a");
+    for (const el of candidates) {
+      const oc = el.getAttribute("onclick") || "";
+      const match = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
+      if (match && match[1] === pageId) return el;
+    }
+    return null;
+  }
+
+  // ----------------------------
+  // Mobile menu (hamburger)
+  // ----------------------------
+  function setupHamburger() {
+    const hamburger = document.getElementById("hamburger");
+    const navLinks = document.getElementById("navLinks");
+    if (!hamburger || !navLinks) return;
 
     hamburger.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+
       hamburger.classList.toggle("active");
       navLinks.classList.toggle("show");
       document.body.classList.toggle("mobile-menu-open");
@@ -58,251 +118,259 @@
         closeMobileMenu();
       }
     });
-
-    window.addEventListener("resize", () => {
-      if (window.innerWidth > 992) closeMobileMenu();
-    });
   }
 
   function closeMobileMenu() {
-    const hamburger = $("hamburger");
-    const navLinks = $("navLinks");
+    const hamburger = document.getElementById("hamburger");
+    const navLinks = document.getElementById("navLinks");
+
     if (hamburger) hamburger.classList.remove("active");
     if (navLinks) navLinks.classList.remove("show");
     document.body.classList.remove("mobile-menu-open");
 
-    // also collapse any active accordion dropdown
-    document.querySelectorAll(".nav-dropdown.active").forEach((d) => d.classList.remove("active"));
+    // close any open dropdowns
+    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
   }
 
-  // -------------------------------------------------------
-  // 2) MOBILE DROPDOWNS become accordion
-  // -------------------------------------------------------
-  function bindMobileDropdowns() {
-    const toggles = document.querySelectorAll(".dropdown-toggle");
-    toggles.forEach((toggle) => {
+  // ----------------------------
+  // Dropdowns: Mobile click accordion, Desktop hover + click toggle
+  // ----------------------------
+  function setupDropdownsMobile() {
+    const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
+
+    dropdownToggles.forEach((toggle) => {
       if (toggle.__bound) return;
-      toggle.__bound = true;
 
       toggle.addEventListener("click", (e) => {
-        if (window.innerWidth > 992) return; // desktop uses hover CSS
-
-        e.preventDefault();
-        e.stopPropagation();
-
         const parent = toggle.closest(".nav-dropdown");
         if (!parent) return;
 
-        // close others
-        document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
-          if (d !== parent) d.classList.remove("active");
+        // Desktop: allow click to toggle open state (nice for touch laptops)
+        if (window.innerWidth > 992) {
+          e.preventDefault();
+          e.stopPropagation();
+
+          // close others
+          document.querySelectorAll(".nav-dropdown.open").forEach((d) => {
+            if (d !== parent) d.classList.remove("open");
+          });
+
+          parent.classList.toggle("open");
+          return;
+        }
+
+        // Mobile: accordion
+        e.preventDefault();
+        e.stopPropagation();
+
+        document.querySelectorAll(".nav-dropdown.open").forEach((d) => {
+          if (d !== parent) d.classList.remove("open");
         });
 
-        parent.classList.toggle("active");
+        parent.classList.toggle("open");
       });
+
+      toggle.__bound = true;
+    });
+
+    // Click outside closes dropdowns (desktop + mobile)
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".nav-dropdown")) return;
+      document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
     });
   }
 
-  // -------------------------------------------------------
-  // 3) NAV BUTTON FALLBACK binding
-  // (Your HTML uses inline onclick, but this makes it resilient
-  //  if you later remove inline handlers.)
-  // -------------------------------------------------------
-  function bindNavButtonsFallback() {
-    document.querySelectorAll("[data-page]").forEach((btn) => {
-      if (btn.__navBound) return;
-      btn.__navBound = true;
-      btn.addEventListener("click", (e) => {
-        const page = btn.getAttribute("data-page");
-        if (!page) return;
-        e.preventDefault();
-        e.stopPropagation();
-        safeSwitchPage(page);
-        if (window.innerWidth <= 992) closeMobileMenu();
-      });
-    });
-  }
-
-  // -------------------------------------------------------
-  // 4) ACCOUNT INSPECTOR BUTTON (single + deduped)
-  // -------------------------------------------------------
-  function ensureSingleInspectorButton() {
-    const navLinks = $("navLinks");
-    if (!navLinks) return;
-
-    // Remove any inspector duplicates first (from old injections / other modules)
-    // Keep the one with id="navInspectorBtn" if it exists, otherwise keep first found.
-    const candidates = [
-      ...document.querySelectorAll(
-        '#navInspectorBtn, [data-page="inspector"], .nav-inspector-item, .nav-inspector, a[onclick*="inspector"], button[onclick*="inspector"]'
-      )
-    ];
-
-    // If one already exists in the nav, we will normalize it to our preferred button
-    let primary = document.getElementById("navInspectorBtn");
-
-    // Create primary if missing
-    if (!primary) {
-      primary = document.createElement("button");
-      primary.id = "navInspectorBtn";
-      primary.type = "button";
-      primary.className = "nav-btn nav-inspector";
-      primary.setAttribute("data-page", "inspector");
-      primary.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
-      primary.title = "Account Inspector";
-
-      // Insert near Dashboard button if possible
-      const dashBtn = navLinks.querySelector('button[onclick*="dashboard"], button[data-page="dashboard"]');
-      if (dashBtn && dashBtn.parentNode === navLinks) {
-        dashBtn.insertAdjacentElement("afterend", primary);
-      } else {
-        navLinks.insertAdjacentElement("afterbegin", primary);
-      }
-    } else {
-      // Normalize existing inspector element to our styling
-      primary.classList.add("nav-btn", "nav-inspector");
-      primary.setAttribute("data-page", "inspector");
-      if (!primary.innerHTML || !primary.innerHTML.includes("Inspector")) {
-        primary.innerHTML = `<span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>`;
-      }
-    }
-
-    // Bind click (ensure it actually navigates)
-    if (!primary.__bound) {
-      primary.__bound = true;
-      primary.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        safeSwitchPage("inspector");
-        if (window.innerWidth <= 992) closeMobileMenu();
-      });
-    }
-
-    // Remove all duplicates besides the primary
-    const allInspectorEls = [
-      ...document.querySelectorAll(
-        '#navInspectorBtn, [data-page="inspector"], .nav-inspector-item, .nav-inspector, a[onclick*="inspector"], button[onclick*="inspector"]'
-      )
-    ];
-
-    allInspectorEls.forEach((el) => {
-      if (el === primary) return;
-      // Only remove if it is inside the navbar area (don’t delete real page content)
-      if (el.closest(".navbar") || el.closest("#navbar")) {
-        try { el.remove(); } catch (_) {}
-      }
-    });
-
-    // Re-bind any [data-page] that were newly created
-    bindNavButtonsFallback();
-  }
-
-  // -------------------------------------------------------
-  // 5) CONNECTION BADGE: updates status bubble in navbar
-  // HTML: #statusDot, #connectionStatus
-  // -------------------------------------------------------
-  function bindConnectionBadge() {
-    const dot = $("statusDot");
-    const text = $("connectionStatus");
-    if (!dot || !text) return;
-
-    function setBadge(mode, serverName) {
-      // modes: "live" | "connecting" | "disconnected"
-      dot.classList.remove("active", "connecting", "disconnected");
-      if (mode === "live") {
-        dot.classList.add("active");
-        text.textContent = `LIVE • ${serverName || "XRPL"}`;
-      } else if (mode === "disconnected") {
-        dot.classList.add("disconnected");
-        text.textContent = `DISCONNECTED`;
-      } else {
-        dot.classList.add("connecting");
-        text.textContent = `CONNECTING…`;
-      }
-    }
-
-    // initial
-    setBadge("connecting");
-
-    // Listen to XRPL module events
-    window.addEventListener("xrpl-connection", (ev) => {
-      const d = ev.detail || {};
-      if (d.connected) setBadge("live", d.server || d.url || "XRPL");
-      else {
-        // If switching networks: show a clearer state
-        if (String(d.modeReason || "").toLowerCase().includes("network")) setBadge("connecting", "Switching");
-        else setBadge("connecting");
-      }
-    });
-
-    // Optional: click badge triggers reconnect
-    text.style.cursor = "pointer";
-    text.title = "Click to reconnect";
-    text.addEventListener("click", () => {
-      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
-    });
-  }
-
-  // -------------------------------------------------------
-  // 6) KEYBOARD SHORTCUTS
-  // -------------------------------------------------------
-  function bindKeyboardShortcuts() {
-    window.addEventListener("keydown", (e) => {
-      const isMac = navigator.platform.toUpperCase().includes("MAC");
-      const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
-
-      // Ctrl/Cmd+I -> Inspector
-      if (ctrlOrCmd && e.key.toLowerCase() === "i") {
-        e.preventDefault();
-        safeSwitchPage("inspector");
-        return;
-      }
-
-      // Esc -> close mobile menu
-      if (e.key === "Escape") {
-        closeMobileMenu();
-      }
-    });
-  }
-
-  // -------------------------------------------------------
-  // 7) Navbar toggle button (optional)
-  // -------------------------------------------------------
-  function bindNavbarToggleIfExists() {
-    const navbar = $("navbar");
-    const toggle = $("navbarToggle");
-    const floating = $("navbarToggleBtn");
-
+  // ----------------------------
+  // Desktop scroll-hide navbar (optional)
+  // ----------------------------
+  function setupScrollHideDesktop() {
+    const navbar = document.getElementById("navbar");
     if (!navbar) return;
 
-    function toggleNav() {
-      navbar.classList.toggle("hide");
-      if (floating) {
-        const icon = floating.querySelector(".toggle-icon");
-        if (icon) icon.textContent = navbar.classList.contains("hide") ? "▼" : "▲";
-      }
-    }
+    let lastScrollY = window.scrollY;
 
-    if (toggle && !toggle.__bound) {
-      toggle.__bound = true;
-      toggle.addEventListener("click", toggleNav);
-    }
+    window.addEventListener("scroll", () => {
+      if (window.innerWidth <= 992) return;
 
-    if (floating && !floating.__bound) {
-      floating.__bound = true;
-      floating.addEventListener("click", toggleNav);
-    }
+      const currentY = window.scrollY;
+      if (currentY > lastScrollY && currentY > 90) navbar.classList.add("hide");
+      else navbar.classList.remove("hide");
 
-    // Press "N" to toggle
-    window.addEventListener("keydown", (e) => {
-      if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        toggleNav();
-      }
+      lastScrollY = currentY;
     });
   }
 
-  document.addEventListener("DOMContentLoaded", initNavbar);
+  // ----------------------------
+  // Horizontal wheel scroll for nav rail (desktop)
+  // ----------------------------
+  function enableHorizontalWheelScroll() {
+    const navLinks = document.getElementById("navLinks");
+    if (!navLinks) return;
 
-  // Exports
+    navLinks.addEventListener(
+      "wheel",
+      (e) => {
+        // Only when not in mobile drawer mode
+        if (window.innerWidth <= 992) return;
+
+        // Convert vertical wheel to horizontal scroll
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+          navLinks.scrollLeft += e.deltaY;
+          e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+  }
+
+  // ----------------------------
+  // Connection badge hookup
+  // ----------------------------
+  function bindConnectionBadge() {
+    const dot = document.getElementById("statusDot");
+    const label = document.getElementById("connectionStatus");
+    if (!dot || !label) return;
+
+    // Default state
+    setBadge("connecting", "Connecting…");
+
+    // If XRPL has a getter, use initial
+    try {
+      if (typeof window.getXRPLState === "function") {
+        const s = window.getXRPLState();
+        if (s && s.connected) setBadge("live", `LIVE — ${s.server || "XRPL"}`);
+      }
+    } catch (_) {}
+
+    window.addEventListener("xrpl-connection", (ev) => {
+      const d = (ev && ev.detail) || {};
+      if (d.connected) {
+        setBadge("live", `LIVE — ${d.server || "XRPL"}`);
+      } else {
+        // distinguish connecting vs disconnected if mode is provided
+        const mode = String(d.mode || "").toLowerCase();
+        const reason = d.modeReason || "";
+        if (mode.includes("connect")) {
+          setBadge("connecting", reason ? `Connecting… (${reason})` : "Connecting…");
+        } else {
+          setBadge("down", reason ? `Disconnected (${reason})` : "Disconnected");
+        }
+      }
+    });
+
+    function setBadge(state, text) {
+      dot.classList.remove("active", "connecting");
+      if (state === "live") dot.classList.add("active");
+      else if (state === "connecting") dot.classList.add("connecting");
+      label.textContent = text;
+    }
+  }
+
+  // ----------------------------
+  // Prevent navbar from covering page content
+  // (global offset based on actual navbar height)
+  // ----------------------------
+  function applyNavOffset() {
+    const navbar = document.getElementById("navbar");
+    if (!navbar) return;
+
+    const h = Math.max(70, Math.round(navbar.getBoundingClientRect().height));
+    document.documentElement.style.setProperty("--nav-offset", `${h}px`);
+
+    // inject once: apply padding to container & scroll margin
+    if (!document.getElementById(NAV_OFFSET_STYLE_ID)) {
+      const style = document.createElement("style");
+      style.id = NAV_OFFSET_STYLE_ID;
+      style.textContent = `
+        .container { padding-top: var(--nav-offset, 78px) !important; }
+        .page-section { scroll-margin-top: var(--nav-offset, 78px); }
+        /* About page uses its own padding; keep it consistent even if navbar height changes */
+        .about-page { padding-top: calc(var(--nav-offset, 78px) + 28px) !important; }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+
+  // ----------------------------
+  // Active page highlighting
+  // ----------------------------
+  function installPageHighlighting() {
+    // Wrap switchPage (if present) to update nav highlights
+    if (typeof window.switchPage === "function" && !window.__navHighlightWrapped) {
+      const original = window.switchPage;
+      window.switchPage = function (pageId, ...rest) {
+        const res = original.apply(this, [pageId, ...rest]);
+        setActiveNav(pageId);
+        // close mobile menu after navigation
+        if (window.innerWidth <= 992) closeMobileMenu();
+        return res;
+      };
+      window.__navHighlightWrapped = true;
+    }
+
+    // Attempt initial highlight based on active section
+    setTimeout(() => {
+      const active = document.querySelector(".page-section.active");
+      if (active && active.id) setActiveNav(active.id);
+    }, 0);
+  }
+
+  function setActiveNav(pageId) {
+    const navLinks = document.getElementById("navLinks");
+    if (!navLinks) return;
+
+    // Clear
+    navLinks.querySelectorAll(".nav-btn.is-active, .dropdown-item.is-active").forEach((n) => {
+      n.classList.remove("is-active");
+    });
+
+    // Mark buttons that match page
+    const nodes = navLinks.querySelectorAll("button, a");
+    nodes.forEach((node) => {
+      const target = getTargetPage(node);
+      if (target === pageId) node.classList.add("is-active");
+    });
+
+    // Also close dropdown open state on desktop after navigation
+    document.querySelectorAll(".nav-dropdown.open").forEach((d) => d.classList.remove("open"));
+  }
+
+  function getTargetPage(node) {
+    if (!node) return null;
+    const dp = node.getAttribute("data-page");
+    if (dp) return dp;
+
+    const oc = node.getAttribute("onclick") || "";
+    const match = oc.match(/switchPage\(['"]([^'"]+)['"]\)/);
+    return match ? match[1] : null;
+  }
+
+  function safeSwitchPage(pageId) {
+    if (typeof window.switchPage === "function") window.switchPage(pageId);
+    else console.error("❌ switchPage() not found!");
+  }
+
+  // ----------------------------
+  // Overlay safety (notifications shouldn’t block nav)
+  // ----------------------------
+  function injectNavbarSafetyStyles() {
+    if (document.getElementById("navbar-safety-styles")) return;
+
+    const style = document.createElement("style");
+    style.id = "navbar-safety-styles";
+    style.textContent = `
+      .navbar, #navbar { z-index: 10000; pointer-events: auto; }
+      .notification-container,
+      .notifications,
+      .toast-container,
+      .toast-wrapper,
+      .toasts,
+      #notifications { pointer-events: none !important; z-index: 9000 !important; }
+      .notification, .toast { pointer-events: auto !important; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // exports
   window.closeMobileMenu = closeMobileMenu;
 })();
