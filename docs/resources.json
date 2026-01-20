@@ -1,0 +1,101 @@
+[
+  {
+    "id": "chainalysis_blog",
+    "title": "Chainalysis — Blog & Case Studies",
+    "url": "https://blog.chainalysis.com/",
+    "type": "vendor",
+    "tags": ["vendor", "case-study", "training"],
+    "icon": "🏢",
+    "description": "Comprehensive vendor case studies and research into on-chain behavior and investigation techniques."
+  },
+  {
+    "id": "elliptic_resources",
+    "title": "Elliptic — Research & Resources",
+    "url": "https://www.elliptic.co/resources",
+    "type": "vendor",
+    "tags": ["vendor", "research"],
+    "icon": "🏢",
+    "description": "Elliptic publishes reports and guidance on crypto crime trends and investigative techniques."
+  },
+  {
+    "id": "trm_resources",
+    "title": "TRM Labs — Resources",
+    "url": "https://trmlabs.com/resources/",
+    "type": "vendor",
+    "tags": ["vendor", "research"],
+    "icon": "🏢",
+    "description": "Vendor research and threat intelligence for blockchain investigations."
+  },
+  {
+    "id": "ciphertrace",
+    "title": "CipherTrace — Product & Research",
+    "url": "https://ciphertrace.com/",
+    "type": "vendor",
+    "tags": ["vendor"],
+    "icon": "🧾",
+    "description": "Blockchain intelligence vendor with tools and reports for compliance and investigations."
+  },
+  {
+    "id": "fincen",
+    "title": "FinCEN (U.S.) — Financial intelligence & guidance",
+    "url": "https://www.fincen.gov/",
+    "type": "government",
+    "tags": ["government", "policy"],
+    "icon": "🏛️",
+    "description": "U.S. Financial Crimes Enforcement Network — advisories and regulatory guidance relevant to crypto."
+  },
+  {
+    "id": "fatf",
+    "title": "FATF — Standards & publications",
+    "url": "https://www.fatf-gafi.org/publications/",
+    "type": "government",
+    "tags": ["government", "policy"],
+    "icon": "🏛️",
+    "description": "Financial Action Task Force — international standards and reports on AML/CFT, including crypto guidance."
+  },
+  {
+    "id": "europol",
+    "title": "Europol — e-crime & policy work",
+    "url": "https://www.europol.europa.eu/",
+    "type": "government",
+    "tags": ["government", "policy"],
+    "icon": "🏛️",
+    "description": "European law enforcement coordination; publishes reports and news about crypto-enabled crime."
+  },
+  {
+    "id": "uk_nca",
+    "title": "UK National Crime Agency — Cyber / Financial crime",
+    "url": "https://nationalcrimeagency.gov.uk/",
+    "type": "government",
+    "tags": ["government", "policy"],
+    "icon": "🏛️",
+    "description": "UK law enforcement body covering cyber and financial crime; useful for operational context."
+  },
+  {
+    "id": "xrpl_org",
+    "title": "XRPL.org — Official documentation",
+    "url": "https://xrpl.org/",
+    "type": "protocol",
+    "tags": ["xrpl", "docs", "developer"],
+    "icon": "🌊",
+    "description": "Official XRPL docs: transaction types, protocol behaviors, servers, and developer guides."
+  },
+  {
+    "id": "chainalysis_university",
+    "title": "Chainalysis University",
+    "url": "https://university.chainalysis.com/",
+    "type": "training",
+    "tags": ["training", "vendor"],
+    "icon": "🎓",
+    "description": "Vendor-run training and certification for blockchain investigation and compliance."
+  },
+  {
+    "id": "academic_survey",
+    "title": "Blockchain forensics survey (example)",
+    "url": "https://arxiv.org/abs/2005.10828",
+    "type": "academic",
+    "tags": ["academic", "survey"],
+    "icon": "📚",
+    "description": "Representative academic surveys and papers on blockchain forensics and deanonymization methods."
+  }
+]
