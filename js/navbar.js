@@ -1,22 +1,34 @@
 // =======================================================
 // navbar.js – CLEAN + RESPONSIVE + DROPDOWNS THAT CLOSE
 // FIXES:
-//  - No hamburger / no "More" behavior (we hide those in CSS)
+//  - No hamburger / no toggle buttons (hidden)
 //  - Exactly ONE Inspector button (dedupe + remove from dropdowns)
 //  - Dropdowns work on desktop hover + click, and mobile tap
 //  - Dropdowns close when mouse leaves / tap outside / ESC
 //  - Prevent stuck-open menus
+//  - NEW: navbar height auto-offset (prevents overlaying dashboard header)
+//  - NEW: connection badge updates from xrpl-connection events
 // =======================================================
 
 (function () {
   const DESKTOP_BREAKPOINT = 992; // <= this is "mobile/tap" behavior
+  let _offsetRAF = null;
 
   document.addEventListener("DOMContentLoaded", () => {
     hideUnusedControls();
     ensureSingleInspectorButton();
+
     initDropdowns();
     initGlobalCloseHandlers();
-    console.log("✅ Navbar module loaded (fixed: single inspector, working dropdowns, no hamburger/more)");
+
+    // ✅ Prevent navbar from covering content (especially when it wraps to 2 rows)
+    syncNavbarOffset();
+    window.addEventListener("resize", () => syncNavbarOffset());
+
+    // ✅ Navbar connection badge should reflect real connection state
+    initConnectionBadge();
+
+    console.log("✅ Navbar module loaded (single inspector, working dropdowns, auto-offset, live connection badge)");
   });
 
   // -------------------------------------------------------
@@ -46,8 +58,26 @@
   }
 
   // -------------------------------------------------------
+  // ✅ FIX: Prevent fixed navbar from overlaying page content
+  // We measure actual navbar height (can be ~76px or ~126px when wrapped)
+  // and store it in CSS variable --nav-offset used by navbar.css
+  // -------------------------------------------------------
+  function syncNavbarOffset() {
+    if (_offsetRAF) cancelAnimationFrame(_offsetRAF);
+
+    _offsetRAF = requestAnimationFrame(() => {
+      const navbar = document.getElementById("navbar");
+      if (!navbar) return;
+
+      const rect = navbar.getBoundingClientRect();
+      const h = Math.max(0, Math.round(rect.height));
+      document.documentElement.style.setProperty("--nav-offset", `${h}px`);
+    });
+  }
+
+  // -------------------------------------------------------
   // Ensure EXACTLY ONE Inspector button in the main nav row
-  // - Remove any inspector entries inside dropdown menus
+  // - Remove inspector entries inside dropdown menus
   // - Remove duplicates in the nav row
   // - Create the button if missing
   // -------------------------------------------------------
@@ -55,22 +85,23 @@
     const navLinks = document.getElementById("navLinks");
     if (!navLinks) return;
 
-    // 1) Remove any "Inspector" items that accidentally got injected into dropdown menus
-    document.querySelectorAll(".dropdown-menu .dropdown-item, .dropdown-menu button, .dropdown-menu a").forEach((node) => {
-      const txt = (node.textContent || "").toLowerCase();
-      const isInspector = txt.includes("inspector") || txt.includes("account inspector");
-      if (isInspector) node.remove();
-    });
+    // 1) Remove any "Inspector" items inside dropdown menus
+    document
+      .querySelectorAll(".dropdown-menu .dropdown-item, .dropdown-menu button, .dropdown-menu a")
+      .forEach((node) => {
+        const txt = (node.textContent || "").toLowerCase();
+        const isInspector = txt.includes("inspector") || txt.includes("account inspector");
+        if (isInspector) node.remove();
+      });
 
     // 2) Find existing inspector buttons in the main nav area
-    const candidates = Array.from(navLinks.querySelectorAll("button, a"))
-      .filter((el) => {
-        const txt = (el.textContent || "").toLowerCase();
-        const isInspector = txt.includes("inspector");
-        const byAttr = el.getAttribute("data-page") === "inspector";
-        const byOnclick = (el.getAttribute("onclick") || "").includes("switchPage('inspector'");
-        return isInspector || byAttr || byOnclick;
-      });
+    const candidates = Array.from(navLinks.querySelectorAll("button, a")).filter((el) => {
+      const txt = (el.textContent || "").toLowerCase();
+      const isInspector = txt.includes("inspector");
+      const byAttr = el.getAttribute("data-page") === "inspector";
+      const byOnclick = (el.getAttribute("onclick") || "").includes("switchPage('inspector'");
+      return isInspector || byAttr || byOnclick;
+    });
 
     // Keep first, remove others
     if (candidates.length > 1) {
@@ -93,15 +124,17 @@
       });
 
       // Insert it right after Dashboard button if possible
-      const dashboardBtn = Array.from(navLinks.querySelectorAll("button, a"))
-        .find((el) => (el.textContent || "").toLowerCase().includes("dashboard"));
+      const dashboardBtn = Array.from(navLinks.querySelectorAll("button, a")).find((el) =>
+        (el.textContent || "").toLowerCase().includes("dashboard")
+      );
+
       if (dashboardBtn && dashboardBtn.parentNode === navLinks) {
         dashboardBtn.insertAdjacentElement("afterend", inspectorBtn);
       } else {
         navLinks.insertBefore(inspectorBtn, navLinks.firstChild?.nextSibling || null);
       }
     } else {
-      // normalize its look (icon + label)
+      // normalize its look
       inspectorBtn.classList.add("nav-btn", "nav-inspector-btn");
       inspectorBtn.setAttribute("title", inspectorBtn.getAttribute("title") || "Account Inspector");
     }
@@ -113,21 +146,20 @@
   //   - hover opens, leaving closes
   //   - click also toggles (useful for touch laptops)
   // Mobile:
-  //   - click toggles open/close
-  //   - clicking an item closes
+  //   - tap toggles open/close
+  //   - selecting an item closes
   // -------------------------------------------------------
   function initDropdowns() {
     const dropdowns = Array.from(document.querySelectorAll(".nav-dropdown"));
+
     dropdowns.forEach((dd) => {
       const toggle = dd.querySelector(".dropdown-toggle");
       const menu = dd.querySelector(".dropdown-menu");
       if (!toggle || !menu) return;
 
-      // Prevent double-binding
       if (dd.__navBound) return;
       dd.__navBound = true;
 
-      // Close timer for desktop hover-out
       let closeTimer = null;
 
       const open = () => {
@@ -153,23 +185,20 @@
         closeTimer = setTimeout(() => close(), 140);
       });
 
-      // Click toggle
+      // Click/tap toggle
       toggle.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
 
-        // In desktop mode, click toggles too (helps touchpads/touch laptops)
         const isOpen = dd.classList.contains("open");
         if (isOpen) close();
         else open();
       });
 
-      // Clicking inside menu should not bubble to document (which would close instantly)
+      // Clicking inside menu should not bubble to document
       menu.addEventListener("click", (e) => {
         e.stopPropagation();
-        // On mobile, selecting an item should close the menu
         if (isMobileMode()) {
-          // allow the link/button action to run first
           setTimeout(() => close(), 0);
         }
       });
@@ -209,7 +238,6 @@
   // -------------------------------------------------------
   function initGlobalCloseHandlers() {
     document.addEventListener("click", (e) => {
-      // if click outside any dropdown, close all
       if (!e.target.closest(".nav-dropdown")) {
         closeAllDropdownsExcept(null);
       }
@@ -219,6 +247,60 @@
       if (e.key === "Escape") {
         closeAllDropdownsExcept(null);
       }
+    });
+  }
+
+  // -------------------------------------------------------
+  // ✅ Connection badge: updates #statusDot + #connectionStatus
+  // Listens to your xrpl-connection module events.
+  // -------------------------------------------------------
+  function initConnectionBadge() {
+    const dot = document.getElementById("statusDot");
+    const text = document.getElementById("connectionStatus");
+    const badge = dot?.closest(".status-badge") || null;
+
+    if (!dot || !text) return;
+
+    const setUI = (connected, serverName, mode, reason) => {
+      if (connected) {
+        dot.classList.add("active");
+        text.textContent = `LIVE — ${serverName || "XRPL"}`;
+        if (badge) badge.dataset.state = "live";
+      } else {
+        dot.classList.remove("active");
+
+        const r = String(reason || "");
+        const m = String(mode || "");
+
+        // A nicer reconnecting message
+        if (/disconnected|ws_disconnected|closed/i.test(r) || /connecting/i.test(m)) {
+          text.textContent = "Reconnecting…";
+          if (badge) badge.dataset.state = "connecting";
+        } else {
+          text.textContent = "Connecting…";
+          if (badge) badge.dataset.state = "connecting";
+        }
+      }
+    };
+
+    // Initial sync (best-effort)
+    try {
+      if (typeof window.isXRPLConnected === "function" && window.isXRPLConnected()) {
+        const st = typeof window.getXRPLState === "function" ? window.getXRPLState() : null;
+        setUI(true, st?.server || "XRPL", st?.mode, st?.modeReason);
+      } else if (window.XRPL && window.XRPL.connected) {
+        setUI(true, window.XRPL.server?.name || "XRPL", window.XRPL.mode, window.XRPL.modeReason);
+      } else {
+        setUI(false, null, "connecting", "Initializing");
+      }
+    } catch {
+      setUI(false, null, "connecting", "Initializing");
+    }
+
+    // Live updates from your connection module
+    window.addEventListener("xrpl-connection", (ev) => {
+      const d = ev?.detail || {};
+      setUI(!!d.connected, d.server || d.name, d.mode, d.modeReason);
     });
   }
 })();
