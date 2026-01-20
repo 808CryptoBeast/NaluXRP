@@ -1,30 +1,31 @@
 /* =========================================================
    about.js — NaluXrp 🌊 About Page (Futuristic + Educational)
-   FIX:
-   ✅ Removes "floating/sticky tab bar" blocking content by overriding
-      the sticky behavior inline (no about.css change required).
+   UPDATED:
+   ✅ Adds "Resources" tab with curated industry, government, XRPL, and learning links.
    ========================================================= */
 
 (function () {
-  const VERSION = "about@3.0.1-tabs-nonsticky";
+  const VERSION = "about@3.1.0-resources";
 
   const GLOSSARY = [
-    { term: "Ledger", tags: ["basics", "xrpl"], definition: "A ledger is a finalized batch of XRPL activity. Every few seconds, the network closes a ledger that contains validated transactions and updates account state." },
-    { term: "Ledger Stream", tags: ["dashboard", "live"], definition: "A continuously updating view of recently closed ledgers. Each card summarizes one ledger: totals, fees, success rate, and the transaction-type mix." },
-    { term: "Transaction Mix", tags: ["analytics"], definition: "The breakdown of transaction types in a ledger (Payments, Offers, NFTs, TrustSet, Other). Mix helps explain what the network is doing at that moment." },
+    { term: "Ledger", tags: ["basics", "xrpl"], definition: "A ledger is a finalized batch of XRPL activity. Every few seconds, the network closes a ledger that contains validated transactions and updates to account state." },
+    { term: "Ledger Stream", tags: ["dashboard", "live"], definition: "A continuously updating view of recently closed ledgers. Each card summarizes one ledger: totals, fees, success rate, and the transaction mix." },
+    { term: "Transaction Mix", tags: ["analytics"], definition: "The breakdown of transaction types in a ledger (Payments, Offers, NFTs, TrustSet, Other). Mix helps explain what the network is doing at scale." },
     { term: "Dominant Type", tags: ["metrics", "dashboard"], definition: "The transaction category with the highest count in a ledger. Dominance is a quick situation signal; it’s strongest when compared across several ledgers." },
     { term: "Dominance Strength", tags: ["metrics"], definition: "How strongly one type dominates the mix (e.g., Offers at 75% = high dominance). It is an explainable heuristic, not a verdict." },
     { term: "Continuity Gap", tags: ["network", "quality"], definition: "A missing ledger in local capture history (reconnects, node throttling, fetch failure). Gaps can distort short-window analytics." },
     { term: "Flow", tags: ["forensics"], definition: "A simplified view of movement patterns inferred from Payment activity: sender → receiver edges. Used for fingerprinting and clustering." },
-    { term: "Breadcrumb / Flow Fingerprint", tags: ["forensics", "cybersecurity"], definition: "A repeated flow structure across multiple ledgers (often repeated sender→receiver relationships). Persistence matters more than one-off spikes." },
+    { term: "Breadcrumb / Flow Fingerprint", tags: ["forensics", "cybersecurity"], definition: "A repeated flow structure across multiple ledgers (often repeated sender→receiver relationships). Persistence across ledgers strengthens the signal." },
     { term: "Fan-out", tags: ["patterns"], definition: "One sender distributes to many receivers. Can be benign (airdrops/payouts/withdrawals) or risky (drain dispersion/smurfing). Context matters." },
     { term: "Fan-in", tags: ["patterns"], definition: "Many senders converge into one receiver. Often benign (exchange deposits/merchant aggregation), sometimes seen in coordinated funneling." },
-    { term: "Hub Model", tags: ["graph"], definition: "A central connector routes between many wallets. Usually legitimate service infrastructure; the question is whether routing changes abruptly or unusually." },
+    { term: "Hub Model", tags: ["graph"], definition: "A central connector routes between many wallets. Usually legitimate service infrastructure; the question is whether routing changes abruptly or uses obfuscation." },
     { term: "Cluster", tags: ["graph", "forensics"], definition: "A group of wallets connected by observed interactions in a window. Clusters describe structure, not identity." },
-    { term: "Cluster Persistence", tags: ["graph", "metrics"], definition: "How consistently the cluster appears across the selected window. Persistent clusters often indicate stable services; volatile clusters can indicate opportunistic campaigns." },
+    { term: "Cluster Persistence", tags: ["graph", "metrics"], definition: "How consistently the cluster appears across the selected window. Persistent clusters often indicate stable services; volatile clusters can indicate temporary campaigns." },
     { term: "Replay Window", tags: ["workflow"], definition: "A slice of captured history you can rewind through. Replay helps compare baseline vs anomaly using the same analysis lens." },
-    { term: "Forensic Snapshot", tags: ["export"], definition: "An exportable record of state: window size, selected ledger, fingerprints, clusters, and narratives — useful for documentation and team review." },
-    { term: "Account Inspector", tags: ["inspector"], definition: "A deeper per-account view used to validate signals: balance/state, objects, trustlines, and relationships. It’s where you pivot from 'signal' to 'evidence'." }
+    { term: "Forensic Snapshot", tags: ["export"], definition: "An exportable record of state: window size, selected ledger, fingerprints, clusters, and narratives — useful for documentation and team handoff." },
+    { term: "Account Inspector", tags: ["inspector"], definition: "A deeper per-account view used to validate signals: balance/state, objects, trustlines, and relationships. It’s where you pivot from signal to investigation." },
+    { term: "Blockchain analytics provider", tags: ["tools", "industry"], definition: "Companies offering tooling and datasets to analyse on-chain flows, link addresses, and assist compliance or investigations. Their methods vary; their outputs are inputs to human analysis." },
+    { term: "Chain of custody", tags: ["evidence"], definition: "Procedures and records that preserve how data / exports were collected, who handled them, and when — important for reproducibility and legal admissibility." },
   ];
 
   function el(id) { return document.getElementById(id); }
@@ -108,6 +109,7 @@
           <button class="about-tab" data-tab="patterns" role="tab" aria-selected="false">🧩 Visual Patterns</button>
           <button class="about-tab" data-tab="glossary" role="tab" aria-selected="false">📚 Glossary</button>
           <button class="about-tab" data-tab="limits" role="tab" aria-selected="false">⚠️ Limits</button>
+          <button class="about-tab" data-tab="resources" role="tab" aria-selected="false">🔗 Resources</button>
         </div>
 
         <div class="about-section is-active" data-section="algorithms" role="tabpanel">
@@ -120,21 +122,15 @@
           </div>
 
           <div class="about-grid">
-            ${card("⚡", "Dominance & Transaction Mix", "Each ledger card groups activity into Payment / Offers / NFT / TrustSet / Other and labels the dominant type. Dominance becomes meaningful when it persists across multiple ledgers or flips abruptly.", [
-              "Use it for fast situational awareness.",
-              "Compare several ledgers — one ledger can be noisy.",
-              "Look for bursts or dominance flips (e.g., Payment → Offer)."
-            ])}
-            ${card("👣", "Flow Fingerprints (Breadcrumbs)", "Breadcrumbs detect repeated flow structures across several ledgers (often repeated sender→receiver). Persistence is stronger than one-off spikes.", [
-              "Repeat count ranks stable patterns above noise.",
-              "Confidence is a heuristic (not proof).",
-              "Use breadcrumbs to trace-highlight relevant ledgers."
-            ])}
-            ${card("🕸️", "Cluster Inference (Graph-Based)", "The app builds an interaction graph from observed flows and groups connected wallets into clusters. Clusters describe structure — not identity.", [
-              "Cluster size: how many wallets connect.",
-              "Persistence: how consistently it appears across the window.",
-              "Services often form stable clusters (benign)."
-            ])}
+            ${card("⚡", "Dominance & Transaction Mix", "Each ledger card groups activity into Payment / Offers / NFT / TrustSet / Other and labels the dominant type. Dominance becomes meaningful when compared across several ledgers.",
+              ["Use it for fast situational awareness.", "Compare several ledgers — one ledger can be noisy.", "Look for bursts or dominance flips (e.g., Payment → Offer)."]
+            )}
+            ${card("👣", "Flow Fingerprints (Breadcrumbs)", "Breadcrumbs detect repeated flow structures across several ledgers (often repeated sender→receiver). Persistence is stronger than one-off events.",
+              ["Repeat count ranks stable patterns above noise.", "Confidence is a heuristic (not proof).", "Use breadcrumbs to trace-highlight relevant ledgers."]
+            )}
+            ${card("🕸️", "Cluster Inference (Graph-Based)", "The app builds an interaction graph from observed flows and groups connected wallets into clusters. Clusters describe structure — not identity.",
+              ["Cluster size: how many wallets connect.", "Persistence: how consistently it appears across the window.", "Services often form stable clusters (benign)."]
+            )}
           </div>
 
           <div class="about-divider"></div>
@@ -226,6 +222,117 @@
           <div class="about-footer">
             <div class="about-footer-left">NaluXrp • <span style="color: var(--accent-secondary);">${VERSION}</span></div>
             <div>Built for explainability: patterns are signals, not accusations.</div>
+          </div>
+        </div>
+
+        <div class="about-section" data-section="resources" role="tabpanel">
+          <div class="about-section-head">
+            <h2>Further reading & tools</h2>
+            <p>Curated sources for analysts, researchers, policymakers, and learners. Use these to deepen technical knowledge, learn investigative workflows, and understand policy context.</p>
+          </div>
+
+          <div class="about-resources-grid">
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🏢</div>
+                <div class="about-card-title">Industry & vendor resources</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                Trusted vendors and their public research/blogs are useful for techniques and case studies:
+                <ul>
+                  <li><a href="https://blog.chainalysis.com/" target="_blank" rel="noopener noreferrer">Chainalysis — Research & Blog</a></li>
+                  <li><a href="https://www.elliptic.co/resources" target="_blank" rel="noopener noreferrer">Elliptic — Research & Resources</a></li>
+                  <li><a href="https://trmlabs.com/resources/" target="_blank" rel="noopener noreferrer">TRM Labs — Resources</a></li>
+                  <li><a href="https://ciphertrace.com/" target="_blank" rel="noopener noreferrer">CipherTrace / industry tools</a></li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🏛️</div>
+                <div class="about-card-title">Government & policy</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                Policy and law-enforcement guidance frames how on-chain analysis is used in investigations and compliance:
+                <ul>
+                  <li><a href="https://www.fincen.gov/" target="_blank" rel="noopener noreferrer">FinCEN (U.S.) — Financial intelligence & guidance</a></li>
+                  <li><a href="https://www.fatf-gafi.org/publications/" target="_blank" rel="noopener noreferrer">FATF — Standards & publications</a></li>
+                  <li><a href="https://www.europol.europa.eu/" target="_blank" rel="noopener noreferrer">Europol — e-crime & policy work</a></li>
+                  <li><a href="https://nationalcrimeagency.gov.uk/" target="_blank" rel="noopener noreferrer">UK National Crime Agency — cyber / financial crime</a></li>
+                </ul>
+                Note: governments often contract vendors or build internal tooling. Their reports help you understand operational use-cases and legal constraints.
+              </div>
+            </div>
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🌊</div>
+                <div class="about-card-title">XRPL-specific & developer docs</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                For protocol-level details, transaction types, and RPC usage:
+                <ul>
+                  <li><a href="https://xrpl.org/" target="_blank" rel="noopener noreferrer">XRPL.org — Official documentation</a></li>
+                  <li>Use explorers and node docs to reproduce ledger data and validate captures.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🎓</div>
+                <div class="about-card-title">Learning & training</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                Recommended learning paths and hands-on exercises:
+                <ul>
+                  <li><a href="https://university.chainalysis.com/" target="_blank" rel="noopener noreferrer">Chainalysis University — courses & certification (vendor-run)</a></li>
+                  <li>Vendor blogs often include step-by-step case studies; reproduce them locally with testnets and exported snapshots.</li>
+                  <li>Look for university research & arXiv surveys on blockchain forensics to understand academic methods.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🛠️</div>
+                <div class="about-card-title">Practical tips & tools</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                Hands-on suggestions to get more from NaluXrp and improve reproducibility:
+                <ul>
+                  <li>Take reproducible snapshots: include window size, selected ledgers, and trigger criteria in exported JSON/CSV.</li>
+                  <li>Practice with testnets before using live captures for sensitive analysis.</li>
+                  <li>Combine on-chain signals with off-chain context (official exchange notices, published reports) before making claims.</li>
+                  <li>Keep a documented chain of custody for exports if findings may enter compliance or legal workflows.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="about-card">
+              <div class="about-card-top">
+                <div class="about-card-icon">🔎</div>
+                <div class="about-card-title">How to use these sources</div>
+                <div></div>
+              </div>
+              <div class="about-card-body">
+                A short analyst guide:
+                <ol>
+                  <li>Start with vendor blog case studies to learn common indicators and techniques.</li>
+                  <li>Reproduce examples with NaluXrp and XRPL test data to build muscle memory.</li>
+                  <li>Read policy documents (FATF, FinCEN) to understand regulatory constraints.</li>
+                  <li>Document findings with snapshots and narrative — signals are starting points, not identity claims.</li>
+                </ol>
+              </div>
+            </div>
+
           </div>
         </div>
 
