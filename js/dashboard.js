@@ -86,7 +86,7 @@
             <div class="network-selector">
               <span class="selector-label">🌐 Network:</span>
               <button class="net-btn" data-network="xrpl-mainnet">
-                <img src="images/xrplmainnet.jpg" class="net-icon" alt="XRPL" onerror="this.style.display='none'"> Mainnet
+                <img src="images/xrpl mainnet.jpg" class="net-icon" alt="XRPL" onerror="this.style.display='none'"> Mainnet
               </button>
               <button class="net-btn" data-network="xrpl-testnet">
                 <img src="images/xrptestnet.jpg" class="net-icon" alt="Testnet" onerror="this.style.display='none'"> Testnet
@@ -2070,5 +2070,6 @@
 
   console.log("📊 NaluXrp Dashboard V2 FORENSICS loaded (alerts tray enabled, non-blocking)");
 })();
+
 
 
