@@ -86,13 +86,13 @@
             <div class="network-selector">
               <span class="selector-label">🌐 Network:</span>
               <button class="net-btn" data-network="xrpl-mainnet">
-                <img src="assets/images/xrplmainnet.jpg" class="net-icon" alt="XRPL" onerror="this.style.display='none'"> Mainnet
+                <img src="images/xrplmainnet.jpg" class="net-icon" alt="XRPL" onerror="this.style.display='none'"> Mainnet
               </button>
               <button class="net-btn" data-network="xrpl-testnet">
-                <img src="assets/images/xrptestnet.jpg" class="net-icon" alt="Testnet" onerror="this.style.display='none'"> Testnet
+                <img src="images/xrptestnet.jpg" class="net-icon" alt="Testnet" onerror="this.style.display='none'"> Testnet
               </button>
               <button class="net-btn" data-network="xahau-mainnet">
-                <img src="assets/images/xahau.jpg" class="net-icon" alt="Xahau" onerror="this.style.display='none'"> Xahau
+                <img src="images/xahau.jpg" class="net-icon" alt="Xahau" onerror="this.style.display='none'"> Xahau
               </button>
             </div>
 
@@ -2070,4 +2070,5 @@
 
   console.log("📊 NaluXrp Dashboard V2 FORENSICS loaded (alerts tray enabled, non-blocking)");
 })();
+
 
