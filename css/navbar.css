@@ -1,11 +1,22 @@
 /* =========================================
    NaluXrp 🌊 – Navbar (navbar.css)
-   FIXED: no hamburger, no more button, dropdowns readable,
-   responsive layout (incl. ~1068px), dropdown open/close states.
+   FIXED:
+   - no hamburger, no toggle buttons
+   - dropdowns readable
+   - responsive layout (incl. ~1068px)
+   - dropdown open/close states
+   - NEW: dynamic content offset so navbar never blocks dashboard header
+   - NEW: connection badge has visible LIVE/CONNECTING styling
    ========================================= */
 
 :root{
   --nav-height: 76px;
+  --nav-offset: 76px; /* updated by navbar.js via measurement */
+}
+
+/* ✅ push page content below fixed navbar (prevents blocking dashboard logos) */
+.container{
+  padding-top: calc(var(--nav-offset) + 14px);
 }
 
 /* Fixed navbar */
@@ -125,14 +136,14 @@
   transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
-/* Open state controlled by JS (works for hover + mobile tap) */
+/* Open state controlled by JS */
 .nav-dropdown.open .dropdown-menu {
   display: flex;
   opacity: 1;
   transform: translateY(0);
 }
 
-/* Dropdown items: FIXED readability (not washed out) */
+/* Dropdown items: readable even without hover */
 .dropdown-item {
   padding: 10px 12px;
   border-radius: 10px;
@@ -165,6 +176,16 @@
   font-size: 0.86rem;
   white-space: nowrap;
   flex: 0 0 auto;
+}
+
+/* State styling so it doesn't look "stuck" */
+.status-badge[data-state="connecting"]{
+  border-color: rgba(255,184,108,0.35);
+  box-shadow: 0 0 0 1px rgba(255,184,108,0.08);
+}
+.status-badge[data-state="live"]{
+  border-color: rgba(80,250,123,0.35);
+  box-shadow: 0 0 0 1px rgba(80,250,123,0.10);
 }
 
 .status-dot {
@@ -237,4 +258,3 @@
   .logo-text { font-size: 1.25em; }
   .status-badge { font-size: 0.8rem; padding: 6px 10px; }
 }
-
