@@ -45,33 +45,107 @@
   white-space: nowrap;
 }
 
-.net-btn {
+/* Network button row */
+.network-selector{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+/* Uniform compact “pill” buttons */
+.net-btn{
+  --h: 36px;
+
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 10px;
+
+  height: var(--h);
+  padding: 0 12px;
+  border-radius: 12px;
+
   border: 1px solid rgba(255,255,255,0.14);
-  background: linear-gradient(135deg, rgba(0,0,0,0.35), rgba(0,0,0,0.55));
+  background: linear-gradient(135deg, rgba(0,0,0,0.38), rgba(0,0,0,0.62));
   color: var(--text-primary);
+
   cursor: pointer;
-  font-size: 0.9em;
-  font-weight: 650;
+  font-size: 0.88rem;
+  font-weight: 700;
   white-space: nowrap;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.03),
+    0 10px 22px rgba(0,0,0,0.45);
+
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    filter 0.18s ease;
 }
 
-.net-btn:hover {
+/* Icon becomes a “mini badge” */
+.net-icon{
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+}
+
+/* Hover glow */
+.net-btn:hover{
   transform: translateY(-1px);
-  background: linear-gradient(135deg, rgba(0,0,0,0.45), rgba(0,0,0,0.70));
-  border-color: var(--accent-secondary);
-  box-shadow: 0 12px 26px rgba(0,0,0,0.5);
+  border-color: rgba(0, 212, 255, 0.55);
+  background: linear-gradient(135deg, rgba(0,0,0,0.48), rgba(0,0,0,0.78));
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.14),
+    0 14px 28px rgba(0,0,0,0.55);
+  filter: saturate(1.08);
 }
 
-/* optional: “selected network” look if you ever add .active */
-.net-btn.active {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 1px rgba(0,212,255,0.12), 0 12px 28px rgba(0,0,0,0.6);
+/* Click feedback */
+.net-btn:active{
+  transform: translateY(0px) scale(0.98);
+}
+
+/* Keyboard focus (accessibility) */
+.net-btn:focus-visible{
+  outline: none;
+  border-color: rgba(0, 212, 255, 0.85);
+  box-shadow:
+    0 0 0 3px rgba(0, 212, 255, 0.18),
+    0 14px 28px rgba(0,0,0,0.55);
+}
+
+/* Optional: “selected network” state if you toggle .is-active in JS */
+.net-btn.is-active{
+  border-color: var(--accent-secondary);
+  background:
+    radial-gradient(circle at 15% 10%, rgba(0, 212, 255, 0.16), transparent 55%),
+    linear-gradient(135deg, rgba(0,0,0,0.45), rgba(0,0,0,0.72));
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.18),
+    0 16px 32px rgba(0,0,0,0.6);
+}
+
+/* Small screens: slightly tighter */
+@media (max-width: 520px){
+  .net-btn{
+    --h: 34px;
+    padding: 0 10px;
+    font-size: 0.84rem;
+  }
+  .net-icon{
+    width: 17px;
+    height: 17px;
+  }
 }
 
 
@@ -556,4 +630,5 @@
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+
 
