@@ -1,16 +1,13 @@
 /* =========================================================
    about.js — NaluXrp 🌊 About Page (Futuristic + Educational)
-   UPDATED:
-   ✅ Resources UI now loads docs/resources.json
-   ✅ Filters (tags), search, and bookmarking (localStorage)
-   ✅ "Try demo" demo snapshot loader (examples/demo_snapshot.json)
-   ✅ Export reproducible metadata & "How to cite" helper
-   ✅ Report-an-issue CTA (links to GitHub issue template)
-   Version bumped for visibility.
+   FIX (Resources):
+   ✅ Removes broken resources (Cipher tree/CipherTrace, Chainalysis, Blockchain Forensics Survey)
+   ✅ Replaces with working alternatives (Elliptic, TRM Labs, arXiv survey)
+   ✅ Keeps your core behavior: loads docs/resources.json, filters, search, bookmarks
    ========================================================= */
 
 (function () {
-  const VERSION = "about@4.0.0-resources-demos";
+  const VERSION = "about@4.0.1-resources-fixed";
 
   const GLOSSARY = [
     { term: "Ledger", tags: ["basics", "xrpl"], definition: "A ledger is a finalized batch of XRPL activity. Every few seconds, the network closes a ledger that contains validated transactions and updates to account state." },
@@ -45,6 +42,15 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  function normStr(s) {
+    return String(s || "").trim().toLowerCase();
+  }
+
+  function safeId(s) {
+    const n = normStr(s).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    return n || `res_${Math.random().toString(16).slice(2)}`;
   }
 
   /* ----------------------------
@@ -113,7 +119,7 @@
           </div>
         </div>
 
-        <!-- Tabs (NON-STICKY override so it won’t block content) -->
+        <!-- Tabs (non-sticky so it won't block content) -->
         <div class="about-tabs" role="tablist" aria-label="About tabs"
              style="position:relative; top:auto; margin-top: 10px;">
           <button class="about-tab is-active" data-tab="algorithms" role="tab" aria-selected="true">🧠 Algorithms</button>
@@ -123,33 +129,52 @@
           <button class="about-tab" data-tab="resources" role="tab" aria-selected="false">🔗 Resources</button>
         </div>
 
-        <!-- Algorithms / Patterns / Glossary sections omitted for brevity in template -->
-        <!-- Keep the original content for algorithms/patterns/glossary/limits as previous version -->
         <div class="about-section is-active" data-section="algorithms" role="tabpanel">
-          <!-- ... existing algorithms content (omitted here to keep patch readable) ... -->
           <div class="about-section-head">
             <h2>How the dashboard “thinks”</h2>
-            <p>NaluXrp is designed like a security console: summarize what just happened, highlight persistence, and provide workflows to drill deeper. Here are the core signals in plain English.</p>
+            <p>
+              NaluXrp behaves like a security console: summarize what just happened, highlight persistence,
+              and give you fast pivots into deeper inspection. These are the core signals in plain English.
+            </p>
           </div>
+
           <div class="about-grid">
-            ${card("⚡", "Dominance & Transaction Mix", "Each ledger card groups activity into Payment / Offers / NFT / TrustSet / Other and labels the dominant type. Dominance becomes meaningful when compared across several ledgers.",
-              ["Use it for fast situational awareness.", "Compare several ledgers — one ledger can be noisy.", "Look for bursts or dominance flips (e.g., Payment → Offer)."]
+            ${card("⚡", "Dominance & Transaction Mix",
+              "Each ledger card groups activity into Payment / Offers / NFT / TrustSet / Other and labels the dominant type. Dominance becomes meaningful when compared across several ledgers.",
+              ["Use it for fast situational awareness.", "Compare multiple ledgers — one ledger can be noisy.", "Watch for bursts or dominance flips (e.g., Payment → Offer)."]
             )}
-            ${card("👣", "Flow Fingerprints (Breadcrumbs)", "Breadcrumbs detect repeated flow structures across several ledgers (often repeated sender→receiver). Persistence is stronger than one-off events.",
+            ${card("👣", "Flow Fingerprints (Breadcrumbs)",
+              "Breadcrumbs detect repeated flow structures across several ledgers (often repeated sender→receiver). Persistence is stronger than one-off events.",
               ["Repeat count ranks stable patterns above noise.", "Confidence is a heuristic (not proof).", "Use breadcrumbs to trace-highlight relevant ledgers."]
             )}
-            ${card("🕸️", "Cluster Inference (Graph-Based)", "The app builds an interaction graph from observed flows and groups connected wallets into clusters. Clusters describe structure — not identity.",
+            ${card("🕸️", "Cluster Inference (Graph-Based)",
+              "The app builds an interaction graph from observed flows and groups connected wallets into clusters. Clusters describe structure — not identity.",
               ["Cluster size: how many wallets connect.", "Persistence: how consistently it appears across the window.", "Services often form stable clusters (benign)."]
             )}
+          </div>
+
+          <div class="about-divider"></div>
+
+          <div class="about-section-head">
+            <h3>How to investigate (workflow)</h3>
+            <p>A practical loop: observe → select → pivot → validate → document.</p>
+          </div>
+
+          <div class="about-steps">
+            ${step("⚡", "Start with the Ledger Stream", "Watch dominant activity, tx mix, and continuity. Look for bursts, flips, and repeated patterns across several ledgers.")}
+            ${step("👣", "Use Breadcrumbs to Trace", "When a fingerprint repeats, highlight those ledgers and compare before/after behavior. Persistence matters more than one-off spikes.")}
+            ${step("🔎", "Pivot into Account Inspector", "Inspect the accounts driving the flow. Expand outward carefully and compare neighbors, trustlines, and behavior over time.")}
+            ${step("🧭", "Validate with Context", "Check if the pattern matches known service behavior (exchanges/issuers/market makers). Confirm regularity, amounts, and persistence.")}
+            ${step("📦", "Export & Document", "Export snapshots (JSON/CSV), record the window size and node, and write a short narrative of what triggered the investigation.")}
           </div>
         </div>
 
         <div class="about-section" data-section="patterns" role="tabpanel">
-          <!-- patterns content (unchanged) -->
           <div class="about-section-head">
             <h2>Visual patterns</h2>
             <p>These are common flow shapes used in cybersecurity-style analysis. They can be benign or risky depending on context.</p>
           </div>
+
           <div class="about-pattern-grid">
             ${pattern("Fan-out", "One → many distribution", "Flow shape",
               "A single source sends to many destinations in a short window. Common for payouts/withdrawals — also used for drain dispersion.",
@@ -218,11 +243,10 @@
           </div>
         </div>
 
-        <!-- Resources section (dynamically populated) -->
         <div class="about-section" data-section="resources" role="tabpanel">
           <div class="about-section-head">
             <h2>Further reading & tools</h2>
-            <p>Curated sources for analysts, researchers, policymakers, and learners. Use these to deepen technical knowledge, learn investigative workflows, and understand policy context.</p>
+            <p>Curated sources for analysts, researchers, and learners. Use these to deepen technical knowledge and investigative workflows.</p>
           </div>
 
           <div class="about-resources-toolbar">
@@ -230,10 +254,10 @@
             <select id="resourceTagFilter" class="about-select">
               <option value="">All types / tags</option>
             </select>
-            <button id="clearResourceFilters" class="about-btn">Clear</button>
+            <button id="clearResourceFilters" class="about-btn" type="button">Clear</button>
             <div style="margin-left:auto">
-              <button id="tryDemo" class="about-btn">Try demo snapshot</button>
-              <button id="exportMeta" class="about-btn">Download export template</button>
+              <button id="tryDemo" class="about-btn" type="button">Try demo snapshot</button>
+              <button id="exportMeta" class="about-btn" type="button">Download export template</button>
             </div>
           </div>
 
@@ -243,8 +267,7 @@
 
           <div class="about-resources-note">
             <p>
-              Tips: bookmark resources you find useful (local only), reproduce vendor case studies in testnets, and include snapshot metadata when exporting results.
-              To request a resource be added, use <a href="https://github.com/808CryptoBeast/NaluXRP/issues/new?template=resource_request.md" target="_blank" rel="noopener noreferrer">this issue template</a>.
+              Tip: bookmark resources you find useful (local only), reproduce case studies in testnets, and include snapshot metadata when exporting results.
             </p>
           </div>
         </div>
@@ -259,17 +282,96 @@
   }
 
   /* ----------------------------
-     Resources: dynamic loader, filters, bookmarks
+     Resources: loader, filters, bookmarks
      ---------------------------- */
   async function fetchJSON(url) {
     try {
-      const res = await fetch(url, {cache: "no-cache"});
+      const res = await fetch(url, { cache: "no-cache" });
       if (!res.ok) throw new Error(`fetch ${url} status ${res.status}`);
       return await res.json();
     } catch (err) {
       console.warn("fetchJSON error", err);
       return null;
     }
+  }
+
+  function coerceResourceArray(json) {
+    if (!json) return [];
+    if (Array.isArray(json)) return json;
+    if (Array.isArray(json.resources)) return json.resources;
+    return [];
+  }
+
+  function resourceHay(r) {
+    const t = normStr(r.title);
+    const u = normStr(r.url);
+    const d = normStr(r.description);
+    const tags = normStr((r.tags || []).join(" "));
+    return `${t} ${u} ${d} ${tags}`;
+  }
+
+  function sanitizeAndReplaceResources(resources) {
+    const badPatterns = [
+      /cipher\s*(trace|tree)/i,
+      /chainalysis/i,
+      /blockchain\s+forensics\s+survey/i
+    ];
+
+    // Filter bad ones
+    let cleaned = (resources || []).filter((r) => {
+      const hay = resourceHay(r);
+      return !badPatterns.some((re) => re.test(hay));
+    });
+
+    // Normalize IDs (so bookmarks work reliably)
+    cleaned = cleaned.map((r) => ({
+      ...r,
+      id: r.id ? String(r.id) : safeId(r.title || r.url || "resource"),
+    }));
+
+    const existingIds = new Set(cleaned.map(r => String(r.id)));
+    const existingUrls = new Set(cleaned.map(r => normStr(r.url)));
+
+    // Working replacements
+    const replacements = [
+      {
+        id: "elliptic",
+        title: "Elliptic",
+        url: "https://www.elliptic.co/",
+        description: "Blockchain analytics and compliance tooling. Useful to understand common investigation patterns, risk signals, and attribution caveats.",
+        tags: ["tools", "industry", "forensics"],
+        icon: "🧭",
+        type: "tool"
+      },
+      {
+        id: "trm_labs",
+        title: "TRM Labs",
+        url: "https://www.trmlabs.com/",
+        description: "Blockchain intelligence platform with research and investigative concepts that map well to explainable signal workflows.",
+        tags: ["tools", "industry", "forensics"],
+        icon: "🛰️",
+        type: "tool"
+      },
+      {
+        id: "arxiv_blockchain_forensics_survey",
+        title: "Blockchain Forensics Survey (arXiv PDF)",
+        url: "https://arxiv.org/pdf/2108.04634",
+        description: "Academic survey on blockchain forensics: research trends, challenges, and methods. Great for learners who want the bigger picture.",
+        tags: ["reading", "research", "survey", "forensics"],
+        icon: "📄",
+        type: "paper"
+      }
+    ];
+
+    for (const r of replacements) {
+      if (existingIds.has(r.id)) continue;
+      if (existingUrls.has(normStr(r.url))) continue;
+      cleaned.push(r);
+      existingIds.add(r.id);
+      existingUrls.add(normStr(r.url));
+    }
+
+    return cleaned;
   }
 
   async function initResources(root) {
@@ -280,18 +382,37 @@
     const exportMetaBtn = el("exportMeta");
     if (!listEl) return;
 
-    // Fetch curated resource index (docs/resources.json)
-    const resources = await fetchJSON("/docs/resources.json") || (await fetchJSON("docs/resources.json")) || [];
+    // Try multiple paths
+    const json =
+      (await fetchJSON("/docs/resources.json")) ||
+      (await fetchJSON("docs/resources.json")) ||
+      (await fetchJSON("/resources.json")) ||
+      (await fetchJSON("resources.json"));
+
+    let resources = coerceResourceArray(json);
+
+    // Fallback if no JSON
+    if (!resources.length) {
+      resources = [
+        { id: "xrpl_docs", title: "XRPL.org Developer Docs", url: "https://xrpl.org/", description: "Official XRPL docs: transaction types, ledger concepts, server methods.", tags: ["xrpl", "docs", "reading"], icon: "📚", type: "docs" },
+        { id: "xrp_scan", title: "XRPScan Explorer", url: "https://xrpscan.com/", description: "Explorer for accounts, ledgers, transactions, and on-ledger objects.", tags: ["xrpl", "tools", "explorer"], icon: "🧾", type: "tool" },
+      ];
+    }
+
+    // 🔥 Remove broken + inject replacements
+    resources = sanitizeAndReplaceResources(resources);
+
     // Build tag set
-    const tagSet = new Set();
-    resources.forEach(r => (r.tags || []).forEach(t => tagSet.add(t)));
-    const tags = Array.from(tagSet).sort();
-    tags.forEach(t => {
-      const opt = document.createElement("option");
-      opt.value = t;
-      opt.textContent = `${t}`;
-      tagSel.appendChild(opt);
-    });
+    if (tagSel) {
+      const tagSet = new Set();
+      resources.forEach(r => (r.tags || []).forEach(t => tagSet.add(t)));
+      Array.from(tagSet).sort().forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t;
+        opt.textContent = `${t}`;
+        tagSel.appendChild(opt);
+      });
+    }
 
     // State
     let filterTag = "";
@@ -308,15 +429,17 @@
       });
 
       listEl.innerHTML = filtered.map(r => renderResourceCard(r, bookmarks.includes(r.id))).join("");
-      // attach handlers
+
+      // handlers
       listEl.querySelectorAll(".resource-bookmark-btn").forEach(btn => {
         btn.addEventListener("click", () => {
           const id = btn.getAttribute("data-id");
           bookmarks = toggleBookmark(id, bookmarks);
           saveBookmarks(bookmarks);
-          render(); // re-render to update state
+          render();
         });
       });
+
       listEl.querySelectorAll(".resource-open-btn").forEach(btn => {
         btn.addEventListener("click", () => {
           const url = btn.getAttribute("data-url");
@@ -325,22 +448,26 @@
       });
     }
 
-    tagSel.addEventListener("change", () => {
-      filterTag = tagSel.value;
-      render();
-    });
+    if (tagSel) {
+      tagSel.addEventListener("change", () => {
+        filterTag = tagSel.value;
+        render();
+      });
+    }
 
-    searchInp.addEventListener("input", () => {
-      q = searchInp.value;
-      render();
-    });
+    if (searchInp) {
+      searchInp.addEventListener("input", () => {
+        q = searchInp.value;
+        render();
+      });
+    }
 
     const clearBtn = el("clearResourceFilters");
     if (clearBtn) clearBtn.addEventListener("click", () => {
       filterTag = "";
       q = "";
-      tagSel.value = "";
-      searchInp.value = "";
+      if (tagSel) tagSel.value = "";
+      if (searchInp) searchInp.value = "";
       render();
     });
 
@@ -368,14 +495,14 @@
         <div class="about-card-top">
           <div class="about-card-icon">${escapeHtml(r.icon || "🔗")}</div>
           <div class="about-card-title">${escapeHtml(r.title)} ${source}</div>
-          <div style="margin-left:auto">
+          <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;">
             <button class="about-btn resource-open-btn" data-url="${escapeHtml(r.url)}" type="button">Open</button>
             <button class="about-btn resource-bookmark-btn" data-id="${escapeHtml(r.id)}" type="button">${escapeHtml(bm)}</button>
           </div>
         </div>
         <div class="about-card-body">
           <div>${escapeHtml(r.description || "")}</div>
-          <div style="margin-top:8px">${tags}</div>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">${tags}</div>
         </div>
       </div>
     `;
@@ -385,7 +512,8 @@
     try {
       const raw = localStorage.getItem(LS_BOOKMARKS);
       if (!raw) return [];
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
       return [];
     }
@@ -411,36 +539,37 @@
      Demo loader & export metadata
      ---------------------------- */
   async function tryDemoSnapshot() {
-    // Load synthetic snapshot and attempt to hand off to app
-    const paths = ["/examples/demo_snapshot.json", "examples/demo_snapshot.json", "/demo_snapshot.json", "demo_snapshot.json"];
+    const paths = [
+      "/examples/demo_snapshot.json",
+      "examples/demo_snapshot.json",
+      "/demo_snapshot.json",
+      "demo_snapshot.json"
+    ];
+
     let snap = null;
     for (const p of paths) {
       try {
-        const r = await fetch(p, {cache: "no-cache"});
+        const r = await fetch(p, { cache: "no-cache" });
         if (!r.ok) continue;
         snap = await r.json();
         break;
-      } catch (e) {
-        // try next
-      }
+      } catch (e) {}
     }
 
     if (!snap) {
-      alert("Demo snapshot not found in examples/demo_snapshot.json. Please ensure the file is present in the repo.");
+      alert("Demo snapshot not found (examples/demo_snapshot.json). Add the file to enable this button.");
       return;
     }
 
-    // If the app exposes a loader hook, use it. Otherwise download snapshot for manual inspection.
     if (typeof window.loadSnapshot === "function") {
       try {
         window.loadSnapshot(snap);
-        alert("Demo snapshot loaded into the app (window.loadSnapshot).");
+        alert("Demo snapshot loaded into the app.");
       } catch (e) {
         console.warn("loadSnapshot error", e);
         downloadJSON(snap, "nalu_demo_snapshot.json");
       }
     } else {
-      // fallback: offer download
       downloadJSON(snap, "nalu_demo_snapshot.json");
     }
   }
@@ -449,9 +578,9 @@
     const template = {
       nalu_version: VERSION,
       exported_at: new Date().toISOString(),
-      node: "https://example.xrplnode.org (record your node)",
+      node: "record-your-node-url-here",
       capture_window: 20,
-      selected_ledger: "ledger_index or hash",
+      selected_ledger: "ledger_index_or_hash",
       triggers: ["dominance_flip", "fan_out_pattern"],
       notes: "Add narrative context, testnet vs mainnet, and chain of custody",
       metadata_schema_version: "nalu-export@1"
@@ -460,7 +589,7 @@
   }
 
   function downloadJSON(obj, filename) {
-    const blob = new Blob([JSON.stringify(obj, null, 2)], {type: "application/json"});
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -472,7 +601,7 @@
   }
 
   /* ----------------------------
-     Reuseable UI helpers (cards/steps/patterns)
+     Reusable UI helpers
      ---------------------------- */
   function card(icon, title, body, bullets) {
     const key = `acc_${Math.random().toString(16).slice(2)}_${Date.now()}`;
@@ -567,7 +696,7 @@
       });
     });
 
-    // accordion toggles (cards)
+    // accordion toggles
     root.querySelectorAll(".about-acc-toggle[data-acc]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const key = btn.getAttribute("data-acc");
