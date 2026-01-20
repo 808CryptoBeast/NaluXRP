@@ -39,47 +39,39 @@
     <div class="nav-content">
 
       <!-- Logo -->
-      <div class="nav-logo" onclick="switchPage('dashboard')" role="button" tabindex="0">
+      <div class="nav-logo" onclick="switchPage('dashboard')" role="button" tabindex="0" aria-label="Go to Dashboard">
         <div class="logo-text">🌊 <strong>NaluXrp</strong></div>
         <small class="logo-slogan">Riding The Ledger Waves</small>
       </div>
 
-      <!-- Hamburger (mobile) -->
-      <div class="hamburger" id="hamburger" aria-label="Toggle menu" role="button" tabindex="0">
-        <span></span><span></span><span></span>
-      </div>
-
       <!-- Navigation Links -->
-      <div class="nav-links" id="navLinks">
+      <div class="nav-links" id="navLinks" aria-label="Primary navigation">
 
-        <button class="nav-btn" onclick="switchPage('dashboard')" type="button">
+        <button class="nav-btn" onclick="switchPage('dashboard')" type="button" title="Dashboard">
           <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
         </button>
 
-        <!-- ✅ Account Inspector button (VISIBLE in navbar) -->
+        <!-- ✅ ONLY ONE Inspector button (here) -->
         <button class="nav-btn" onclick="switchPage('inspector')" type="button" title="Account Inspector">
           <span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>
         </button>
 
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle" type="button">
+          <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
             <span class="nav-icon">🌐</span><span class="nav-label">Network</span>
           </button>
-          <div class="dropdown-menu">
+          <div class="dropdown-menu" role="menu">
             <button class="dropdown-item" type="button" onclick="switchPage('validators')">🛡️ Validators</button>
             <button class="dropdown-item" type="button" onclick="switchPage('analytics')">📈 Analytics</button>
             <button class="dropdown-item" type="button" onclick="switchPage('explorer')">🔍 Explorer</button>
-
-            <!-- ✅ Inspector also available in dropdown (optional but nice) -->
-            <button class="dropdown-item" type="button" onclick="switchPage('inspector')">🔎 Account Inspector</button>
           </div>
         </div>
 
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle" type="button">
+          <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
             <span class="nav-icon">💰</span><span class="nav-label">DeFi</span>
           </button>
-          <div class="dropdown-menu">
+          <div class="dropdown-menu" role="menu">
             <button class="dropdown-item" type="button" onclick="switchPage('tokens')">🪙 Tokens</button>
             <button class="dropdown-item" type="button" onclick="switchPage('amm')">💧 AMM Pools</button>
             <button class="dropdown-item" type="button" onclick="switchPage('nfts')">🎨 NFTs</button>
@@ -87,21 +79,21 @@
         </div>
 
         <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle" type="button">
+          <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
             <span class="nav-icon">📚</span><span class="nav-label">Resources</span>
           </button>
-          <div class="dropdown-menu">
+          <div class="dropdown-menu" role="menu">
             <button class="dropdown-item" type="button" onclick="switchPage('news')">📰 News</button>
             <button class="dropdown-item" type="button" onclick="switchPage('history')">📜 History</button>
             <button class="dropdown-item" type="button" onclick="switchPage('about')">ℹ️ About</button>
           </div>
         </div>
 
-        <button class="nav-btn" onclick="switchPage('profile')" type="button">
+        <button class="nav-btn" onclick="switchPage('profile')" type="button" title="Profile">
           <span class="nav-icon">👤</span><span class="nav-label">Profile</span>
         </button>
 
-        <button class="nav-btn" onclick="switchPage('settings')" type="button">
+        <button class="nav-btn" onclick="switchPage('settings')" type="button" title="Settings">
           <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
         </button>
 
@@ -111,20 +103,13 @@
       </div>
 
       <!-- Connection Status -->
-      <div class="status-badge">
+      <div class="status-badge" title="XRPL Connection Status">
         <div class="status-dot" id="statusDot"></div>
         <span id="connectionStatus">Connecting...</span>
       </div>
 
-      <!-- Navbar Toggle (desktop) -->
-      <button class="navbar-toggle" id="navbarToggle" title="Toggle Navbar (N)" type="button">☰</button>
     </div>
   </nav>
-
-  <!-- Secondary floating toggle -->
-  <button class="navbar-toggle-btn" id="navbarToggleBtn" title="Toggle Navbar (Press N)" type="button">
-    <span class="toggle-icon">▲</span>
-  </button>
 
   <div class="background-effects">
     <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
@@ -147,26 +132,18 @@
     <section id="settings" class="page-section"></section>
     <section id="about" class="page-section"></section>
 
-    <!-- ✅ Add missing Inspector section -->
+    <!-- ✅ Inspector page section -->
     <section id="inspector" class="page-section"></section>
   </div>
 
   <!-- JS (order matters) -->
   <script src="js/utils.js"></script>
-
-  <!-- UI (defines switchPage + landing) -->
   <script src="js/ui.js"></script>
-
-  <!-- XRPL connection (dashboard can keep using this) -->
   <script src="js/xrpl-connection.js"></script>
 
-  <!-- Dashboard (module) -->
   <script type="module" src="js/dashboard.js"></script>
-
-  <!-- ✅ Modular AMM -->
   <script type="module" src="js/amm/index.js"></script>
 
-  <!-- Other modules -->
   <script src="js/validators.js"></script>
   <script src="js/tokens.js"></script>
   <script src="js/token-distribution.js"></script>
@@ -177,15 +154,13 @@
   <script src="js/news.js"></script>
   <script src="js/history.js"></script>
   <script src="js/settings.js"></script>
-
-  <!-- ✅ About -->
   <script src="js/about.js"></script>
 
-  <!-- ✅ Account Inspector (must exist if you're switching pages to it) -->
+  <!-- account inspector (your real file) -->
   <script src="js/account-inspector.js"></script>
 
-  <!-- Navbar LAST -->
+  <!-- navbar last -->
   <script src="js/navbar.js"></script>
-
 </body>
 </html>
+
