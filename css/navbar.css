@@ -1,57 +1,28 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css) – V3
-   Futuristic • Accessible • Mobile-first
-   No hamburger required (hidden if present).
+   NaluXrp 🌊 – Navbar (navbar.css)
+   FIXED: no hamburger, no more button, dropdowns readable,
+   responsive layout (incl. ~1068px), dropdown open/close states.
    ========================================= */
 
-:root {
-  --nav-height: 78px;
-  --nav-radius: 14px;
-  --nav-gap: 10px;
-  --nav-pad-x: 18px;
-  --nav-pad-y: 10px;
-
-  --nav-bg: var(--bg-secondary);
-  --nav-border: var(--accent-primary);
-  --nav-outline: rgba(255,255,255,0.14);
-
-  --nav-btn-bg: rgba(0,0,0,0.42);
-  --nav-btn-bg2: rgba(0,0,0,0.62);
-  --nav-btn-border: var(--accent-tertiary);
-  --nav-btn-text: var(--text-primary);
-
-  --nav-menu-bg: var(--bg-tertiary);
-  --nav-menu-border: rgba(255,255,255,0.16);
-
-  --nav-focus: rgba(0,212,255,0.55);
-  --nav-shadow: 0 10px 32px rgba(0,0,0,0.65);
-
-  --nav-safe-top: var(--nav-height); /* JS will update */
+:root{
+  --nav-height: 76px;
 }
 
-/* Keep content from hiding under fixed navbar */
-body.nav-padding-managed {
-  padding-top: var(--nav-safe-top);
-}
-
-/* Navbar container */
+/* Fixed navbar */
 .navbar {
   position: fixed;
   top: 0; left: 0; right: 0;
-  background: var(--nav-bg);
-  backdrop-filter: blur(18px);
-  border-bottom: 2px solid var(--nav-border);
-  box-shadow: 0 6px 26px var(--glow-color);
+  background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
+  border-bottom: 2px solid var(--accent-primary);
+  box-shadow: 0 5px 30px var(--glow-color);
   z-index: 10000;
   transform: translateY(0);
   transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
-.navbar.hide {
-  transform: translateY(-110%);
-}
+.navbar.hide { transform: translateY(-100%); }
 
-/* Layout */
 .nav-content {
   max-width: 1800px;
   margin: 0 auto;
@@ -61,7 +32,6 @@ body.nav-padding-managed {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  flex-wrap: nowrap;
 }
 
 /* Logo */
@@ -70,158 +40,131 @@ body.nav-padding-managed {
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  user-select: none;
   flex: 0 0 auto;
-  min-width: 200px;
+  min-width: 220px; /* helps prevent overlap around ~1068px */
 }
 
 .logo-text {
-  font-size: 1.5em;
+  font-size: 1.45em;
   font-weight: 800;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  letter-spacing: 1.5px;
-  white-space: nowrap;
+  letter-spacing: 1.6px;
+  line-height: 1.1;
 }
 
 .logo-slogan {
   font-size: 0.72em;
   color: var(--text-secondary);
-  white-space: nowrap;
   opacity: 0.95;
 }
 
-/* Links */
+/* Links row */
 .nav-links {
   display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: nowrap;
-  min-width: 320px;
 }
 
 /* Buttons */
 .nav-btn,
 .dropdown-toggle {
   padding: 9px 14px;
-  background: linear-gradient(135deg, var(--nav-btn-bg), var(--nav-btn-bg2));
-  border-radius: 12px;
-  border: 1px solid var(--nav-btn-border);
-  color: var(--nav-btn-text);
+  background: linear-gradient(135deg, rgba(0,0,0,0.55), rgba(0,0,0,0.75));
+  border-radius: 10px;
+  border: 2px solid rgba(255,255,255,0.10);
+  color: var(--text-primary);
   cursor: pointer;
   font-weight: 750;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.03);
-  outline: none;
+  transition: all 0.2s ease;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover {
   border-color: var(--accent-primary);
-  box-shadow: 0 10px 22px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,212,255,0.10);
+  background: linear-gradient(135deg, rgba(0,0,0,0.65), rgba(0,0,0,0.88));
+  box-shadow: 0 10px 22px rgba(0,0,0,0.55);
   transform: translateY(-2px);
 }
 
-.nav-btn.is-active {
-  border-color: var(--accent-primary);
-  background:
-    radial-gradient(circle at 0 0, rgba(0,212,255,0.20), transparent 60%),
-    linear-gradient(135deg, rgba(0,0,0,0.40), rgba(0,0,0,0.66));
-  box-shadow: 0 0 0 1px rgba(0,212,255,0.15), 0 12px 24px rgba(0,0,0,0.62);
-}
+.nav-icon { font-size: 1.1rem; }
+.nav-label { display: inline-block; }
 
-.nav-btn:focus-visible,
-.dropdown-toggle:focus-visible,
-.dropdown-item:focus-visible,
-.navbar-toggle:focus-visible,
-.navbar-toggle-btn:focus-visible {
-  outline: 2px solid var(--nav-focus);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(0,212,255,0.18);
-}
-
-.nav-icon {
-  font-size: 1.15rem;
-  line-height: 1;
-}
-
-.nav-label {
-  display: inline-block;
-}
-
-/* Dropdown wrapper */
+/* Dropdowns */
 .nav-dropdown {
   position: relative;
   display: inline-block;
 }
 
-/* Dropdown menu (JS controlled via .is-open) */
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 12px);
   right: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.62), rgba(0,0,0,0.78));
+  background: rgba(0,0,0,0.92);
   border-radius: 14px;
-  border: 1px solid var(--nav-menu-border);
-  min-width: 220px;
-  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.14);
+  min-width: 210px;
+  padding: 10px;
   display: none;
   flex-direction: column;
-  gap: 6px;
-  box-shadow: var(--nav-shadow);
+  box-shadow: 0 16px 42px rgba(0,0,0,0.75);
   z-index: 10002;
-  transform-origin: top right;
-  animation: navDropIn 0.14s ease-out;
+
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
-.nav-dropdown.is-open > .dropdown-menu {
+/* Open state controlled by JS (works for hover + mobile tap) */
+.nav-dropdown.open .dropdown-menu {
   display: flex;
+  opacity: 1;
+  transform: translateY(0);
 }
 
-/* Menu items must be readable even when not hovered */
+/* Dropdown items: FIXED readability (not washed out) */
 .dropdown-item {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.92rem;
-  color: var(--text-primary);         /* ✅ readable by default */
-  background: rgba(0,0,0,0.18);       /* ✅ slightly darker base */
-  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-primary);
   cursor: pointer;
-  transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease, filter 0.14s ease;
+  transition: 0.15s ease;
   text-align: left;
-  font-weight: 700;
+  font-weight: 750;
   text-decoration: none;
-  user-select: none;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
 }
 
 .dropdown-item:hover {
-  background: rgba(0,212,255,0.12);
-  border-color: rgba(0,212,255,0.25);
-  transform: translateX(4px);
-  filter: saturate(1.08);
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.14);
+  transform: translateX(2px);
 }
 
-/* Connection status badge */
+/* Connection status (right side) */
 .status-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  background: rgba(0,0,0,0.40);
+  padding: 7px 12px;
+  background: rgba(0,0,0,0.55);
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.12);
-  font-size: 0.85rem;
+  font-size: 0.86rem;
+  white-space: nowrap;
   flex: 0 0 auto;
-  user-select: none;
-  cursor: pointer;
 }
 
 .status-dot {
@@ -229,254 +172,44 @@ body.nav-padding-managed {
   height: 10px;
   border-radius: 50%;
   background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255,184,108,0.55);
+  box-shadow: 0 0 10px rgba(255,184,108,0.45);
 }
 
 .status-dot.active {
   background: #50fa7b;
-  box-shadow: 0 0 12px rgba(80,250,123,0.60);
+  box-shadow: 0 0 12px rgba(80,250,123,0.55);
 }
 
-#connectionStatus {
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
-/* Desktop navbar toggle (keep if you like) */
-.navbar-toggle {
-  margin-left: 2px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: rgba(0,0,0,0.40);
-  color: var(--text-primary);
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-
-/* Floating toggle button */
-.navbar-toggle-btn {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  border-radius: 999px;
-  padding: 9px 11px;
-  border: 1px solid rgba(0,212,255,0.35);
-  background: rgba(0,0,0,0.65);
-  color: var(--accent-secondary);
-  cursor: pointer;
-  z-index: 9999;
-  box-shadow: 0 14px 28px rgba(0,0,0,0.55);
-}
-
-.toggle-icon {
-  display: inline-block;
-  transition: transform 0.2s ease;
-}
-
-/* Hide hamburger always (not used) */
-.hamburger {
+/* -------------------------------------------------
+   REMOVE hamburger + toggle buttons (not used)
+-------------------------------------------------- */
+.hamburger,
+#hamburger,
+.navbar-toggle,
+#navbarToggle,
+.navbar-toggle-btn,
+#navbarToggleBtn {
   display: none !important;
 }
 
-/* ===== Connection Panel (popover) ===== */
-.nav-conn-panel {
-  position: fixed;
-  top: calc(var(--nav-safe-top) - 6px);
-  right: 14px;
-  width: min(360px, calc(100vw - 28px));
-  border-radius: 16px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background:
-    radial-gradient(circle at 0 0, rgba(0,212,255,0.16), transparent 55%),
-    linear-gradient(180deg, rgba(0,0,0,0.62), rgba(0,0,0,0.80));
-  box-shadow: 0 18px 44px rgba(0,0,0,0.70);
-  padding: 12px;
-  display: none;
-  z-index: 10050;
-}
-
-.nav-conn-panel.is-open {
-  display: block;
-}
-
-.nav-conn-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: baseline;
-  margin-bottom: 8px;
-}
-
-.nav-conn-title {
-  font-weight: 900;
-  color: var(--accent-secondary);
-}
-
-.nav-conn-sub {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.nav-conn-kv {
-  display: grid;
-  gap: 8px;
-  margin: 10px 0 12px;
-}
-
-.nav-conn-kv .kv {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: rgba(0,0,0,0.28);
-}
-
-.nav-conn-kv .k {
-  color: var(--text-secondary);
-  font-weight: 700;
-}
-
-.nav-conn-kv .v {
-  color: var(--text-primary);
-  font-weight: 800;
-  text-align: right;
-  word-break: break-word;
-}
-
-.nav-conn-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.nav-pill {
-  padding: 9px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(0,0,0,0.32);
-  color: var(--text-primary);
-  font-weight: 850;
-  cursor: pointer;
-  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
-}
-
-.nav-pill:hover {
-  transform: translateY(-2px);
-  border-color: rgba(0,212,255,0.35);
-  box-shadow: 0 12px 20px rgba(0,0,0,0.55);
-}
-
-/* ===== Command Palette ===== */
-.nav-cmd-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  backdrop-filter: blur(10px);
-  display: none;
-  z-index: 10060;
-}
-
-.nav-cmd-backdrop.is-open {
-  display: block;
-}
-
-.nav-cmd {
-  position: fixed;
-  top: 14%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(720px, calc(100vw - 26px));
-  border-radius: 18px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background:
-    radial-gradient(circle at 0 0, rgba(0,212,255,0.18), transparent 55%),
-    linear-gradient(180deg, rgba(0,0,0,0.62), rgba(0,0,0,0.84));
-  box-shadow: 0 24px 60px rgba(0,0,0,0.72);
-  padding: 12px;
-}
-
-.nav-cmd-top {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 10px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: rgba(0,0,0,0.30);
-}
-
-.nav-cmd-top span {
-  opacity: 0.9;
-}
-
-.nav-cmd-input {
-  width: 100%;
-  background: transparent;
-  border: 0;
-  outline: none;
-  color: var(--text-primary);
-  font-size: 1rem;
-  font-weight: 800;
-}
-
-.nav-cmd-hint {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  margin: 10px 4px 6px;
-}
-
-.nav-cmd-list {
-  display: grid;
-  gap: 8px;
-  max-height: 52vh;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.nav-cmd-item {
-  width: 100%;
-  text-align: left;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.10);
-  background: rgba(0,0,0,0.26);
-  color: var(--text-primary);
-  font-weight: 850;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
-}
-
-.nav-cmd-item:hover,
-.nav-cmd-item.is-selected {
-  transform: translateY(-1px);
-  border-color: rgba(0,212,255,0.30);
-  background: rgba(0,212,255,0.10);
-}
-
-.nav-cmd-item small {
-  color: var(--text-secondary);
-  font-weight: 800;
-}
-
-/* ===== Mid-width: two-row wrap to avoid overlap (fix 1068px issues) ===== */
-@media (max-width: 1180px) {
+/* -------------------------------------------------
+   Responsive behavior
+   - Around 1068px: keep logo + status on row 1
+     move nav buttons to row 2 to prevent overlap
+-------------------------------------------------- */
+@media (max-width: 1120px) {
   .nav-content {
     flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 12px;
-    padding: 8px 14px;
-    min-height: auto;
+    justify-content: space-between;
+    padding: 10px 14px;
+    gap: 10px;
   }
 
-  .nav-logo {
-    min-width: 180px;
+  .nav-logo { min-width: 200px; }
+
+  .status-badge {
+    order: 2;
+    margin-left: auto;
   }
 
   .nav-links {
@@ -485,97 +218,23 @@ body.nav-padding-managed {
     justify-content: center;
     flex-wrap: wrap;
     gap: 8px;
-  }
-
-  .status-badge {
-    margin-left: auto;
-    order: 2;
-  }
-
-  .navbar-toggle {
-    order: 2;
+    padding-bottom: 6px;
   }
 }
 
-/* Smaller screens: icon-first compact mode (no hamburger) */
-@media (max-width: 860px) {
-  .logo-slogan {
-    display: none;
-  }
-
-  .nav-btn,
-  .dropdown-toggle {
-    padding: 9px 10px;
-    border-radius: 12px;
-  }
-
-  .nav-label {
-    display: none; /* ✅ icons only */
-  }
-
-  .nav-links {
-    justify-content: center;
-  }
-
-  .dropdown-menu {
-    right: 0;
-    min-width: 220px;
-  }
+/* Smaller screens:
+   - keep icons, hide labels, maintain dropdown functionality */
+@media (max-width: 720px) {
+  .nav-logo .logo-slogan { display: none; }
+  .nav-btn, .dropdown-toggle { padding: 9px 11px; }
+  .nav-label { display: none; }
+  .nav-links { justify-content: center; }
+  .dropdown-menu { right: 0; min-width: 220px; }
 }
 
-@media (max-width: 520px) {
-  .nav-content {
-    padding: 8px 10px;
-  }
-
-  .logo-text {
-    font-size: 1.25em;
-    letter-spacing: 1px;
-  }
-
-  .status-badge {
-    padding: 6px 8px;
-  }
-
-  .nav-links {
-    gap: 6px;
-  }
-
-  .dropdown-menu {
-    width: min(320px, calc(100vw - 20px));
-  }
+/* Extra small */
+@media (max-width: 420px) {
+  .logo-text { font-size: 1.25em; }
+  .status-badge { font-size: 0.8rem; padding: 6px 10px; }
 }
 
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  .navbar,
-  .nav-btn,
-  .dropdown-toggle,
-  .dropdown-item,
-  .nav-pill,
-  .nav-cmd-item,
-  .toggle-icon {
-    transition: none !important;
-    animation: none !important;
-  }
-}
-
-@keyframes navDropIn {
-  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* Safety: notifications/toasts never block navbar */
-.notification-container,
-.notifications,
-.toast-container,
-.toast-wrapper,
-.toasts,
-#notifications {
-  pointer-events: none !important;
-  z-index: 9000 !important;
-}
-.notification,
-.toast {
-  pointer-events: auto !important;
-}
