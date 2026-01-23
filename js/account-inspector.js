@@ -1,10 +1,13 @@
 /* =========================================================
    FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
-   v2.3.0 (Cytoscape interactive graphs + configurable explorer)
-   - Replaced lightweight SVG flows with Cytoscape interactive graphs
+   v2.4.0 (Full merged)
+   - Cytoscape interactive graphs (on-demand)
    - Explorer host configurable in UI (preset + custom)
-   - Cytoscape loaded on-demand from CDN
+   - Concurrency pool (UI controlled) + inflight dedupe
+   - Session + persistent (IndexedDB) page cache for account_tx pages
+   - Respects XRPL._overloadedUntil from xrpl-connection.js (global backoff)
+   - Ledger-first defaults, activation lookup, pattern scanning, node modal, exports
    ========================================================= */
 
 (function () {
@@ -42,10 +45,19 @@
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
   const LOCAL_KEY_EXPLORER = "naluxrp_explorer";
 
+  // IndexedDB cache constants
+  const IDB_DB_NAME = "nalu_cache_v1";
+  const IDB_STORE_PAGES = "account_tx_pages";
+  const IDB_PAGE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days default TTL
+
+  // default concurrency
+  const DEFAULT_CONCURRENCY = 2;
+  let REQUEST_CONCURRENCY = DEFAULT_CONCURRENCY;
+
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.3.0-cyto";
+  const MODULE_VERSION = "unified-inspector@2.4.0-concurrency";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -55,6 +67,12 @@
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
   const sessionCache = { account_tx: new Map() }; // simple session-only cache
+
+  // inflight dedupe map for account_tx pages
+  const inflightPages = new Map();
+
+  // concurrency pool (created later)
+  let requestPool = null;
 
   const transportState = {
     wsConnected: false,
@@ -126,7 +144,7 @@
     $("uiModalTitle").textContent = title || "Details";
     $("uiModalBody").innerHTML = html || "";
     $("uiModalOverlay").style.display = "flex";
-    // allow scrolling to top
+    // scroll top
     $("uiModalBody").scrollTop = 0;
   }
 
@@ -168,6 +186,14 @@
     URL.revokeObjectURL(url);
   }
 
+  function explorerLinks(txHash) {
+    if (!txHash) return { xrpscan: null, bithomp: null };
+    return {
+      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
+      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
+    };
+  }
+
   // ---------------- EXPLORER CONFIG ----------------
   const EXPLORER_PRESETS = {
     xrpscan: {
@@ -200,9 +226,7 @@
   }
 
   function saveExplorerSettings(settings) {
-    try {
-      safeSetStorage(LOCAL_KEY_EXPLORER, JSON.stringify(settings || {}));
-    } catch (_) {}
+    try { safeSetStorage(LOCAL_KEY_EXPLORER, JSON.stringify(settings || {})); } catch (_) {}
   }
 
   function getExplorerUrlForAccount(acct) {
@@ -212,7 +236,6 @@
       if (preset && preset.acct) return preset.acct.replace("{acct}", encodeURIComponent(acct));
     }
     if (s.customAcct) return s.customAcct.replace("{acct}", encodeURIComponent(acct));
-    // fallback
     return `https://xrpscan.com/account/${encodeURIComponent(acct)}`;
   }
 
@@ -223,7 +246,6 @@
       if (preset && preset.tx) return preset.tx.replace("{tx}", encodeURIComponent(tx));
     }
     if (s.customTx) return s.customTx.replace("{tx}", encodeURIComponent(tx));
-    // fallback
     return `https://xrpscan.com/tx/${encodeURIComponent(tx)}`;
   }
 
@@ -511,7 +533,124 @@
     return true;
   }
 
-  async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
+  // ---------------- IDB (persistent page cache) ----------------
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      try {
+        const req = indexedDB.open(IDB_DB_NAME, 1);
+        req.onupgradeneeded = (ev) => {
+          const db = ev.target.result;
+          if (!db.objectStoreNames.contains(IDB_STORE_PAGES)) {
+            const store = db.createObjectStore(IDB_STORE_PAGES, { keyPath: "key" });
+            store.createIndex("timestamp", "timestamp", { unique: false });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error("idb open failed"));
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  async function idbGetPage(key) {
+    try {
+      const db = await idbOpen();
+      return new Promise((resolve) => {
+        const tx = db.transaction(IDB_STORE_PAGES, "readonly");
+        const store = tx.objectStore(IDB_STORE_PAGES);
+        const r = store.get(key);
+        r.onsuccess = () => {
+          const val = r.result;
+          if (!val) return resolve(null);
+          if (Date.now() - (val.timestamp || 0) > IDB_PAGE_TTL_MS) {
+            try {
+              const tx2 = db.transaction(IDB_STORE_PAGES, "readwrite");
+              tx2.objectStore(IDB_STORE_PAGES).delete(key);
+            } catch (_) {}
+            return resolve(null);
+          }
+          resolve(val.data);
+        };
+        r.onerror = () => resolve(null);
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function idbSetPage(key, data) {
+    try {
+      const db = await idbOpen();
+      return new Promise((resolve) => {
+        const tx = db.transaction(IDB_STORE_PAGES, "readwrite");
+        const store = tx.objectStore(IDB_STORE_PAGES);
+        store.put({ key, data, timestamp: Date.now() });
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ---------------- CONCURRENCY POOL + INFLIGHT DEDUPE ----------------
+  function createPool(maxConcurrency) {
+    let active = 0;
+    const queue = [];
+    async function run(task) {
+      return new Promise((resolve, reject) => {
+        const start = async () => {
+          active++;
+          try {
+            const res = await task();
+            resolve(res);
+          } catch (e) {
+            reject(e);
+          } finally {
+            active = Math.max(0, active - 1);
+            if (queue.length) {
+              const next = queue.shift();
+              next();
+            }
+          }
+        };
+        if (active < maxConcurrency) start();
+        else queue.push(start);
+      });
+    }
+    function setConcurrency(n) {
+      REQUEST_CONCURRENCY = Math.max(1, Math.floor(n));
+      // replace pool instance: for simplicity, create new wrapper that will use new concurrency
+      requestPool = createPool(REQUEST_CONCURRENCY);
+    }
+    return { run, getActive: () => active, getQueueLen: () => queue.length, setConcurrency };
+  }
+
+  // initialize pool
+  requestPool = createPool(REQUEST_CONCURRENCY);
+
+  // ---------------- XRPL transport helpers & smart fetch with caching ----------------
+  function makePageCacheKey(account, marker, ledgerMin, ledgerMax, limit) {
+    return `${account}|m:${marker || ""}|lmin:${ledgerMin ?? -1}|lmax:${ledgerMax ?? -1}|lim:${limit || PAGE_LIMIT}`;
+  }
+
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  async function waitIfOverloaded() {
+    try {
+      if (window.XRPL && window.XRPL._overloadedUntil && Date.now() < window.XRPL._overloadedUntil) {
+        const wait = window.XRPL._overloadedUntil - Date.now();
+        setStatus(`XRPL overloaded — pausing requests for ${Math.round(wait / 1000)}s`);
+        await sleep(wait + 200);
+      }
+    } catch (_) {}
+  }
+
+  // Raw account_tx pager using xrplRequest
+  async function fetchAccountTxPagedRaw(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
     const payload = {
       command: "account_tx",
       account: address,
@@ -522,12 +661,53 @@
     };
     if (marker) payload.marker = marker;
 
-    // Try shared wrapper first (ledger data directly)
     const rr = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
 
     const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
     const nextMarker = rr?.marker || null;
     return { txs, marker: nextMarker, source: transportState.lastSource || "unknown" };
+  }
+
+  // Cached + deduped page fetch
+  async function fetchAccountTxPagedCached(account, { marker, limit = PAGE_LIMIT, forward = false, ledgerMin = -1, ledgerMax = -1 } = {}) {
+    // check session cache quickly first
+    const cacheKey = makePageCacheKey(account, marker, ledgerMin, ledgerMax, limit);
+    if (sessionCache.account_tx.has(cacheKey)) {
+      return { txs: sessionCache.account_tx.get(cacheKey), marker: null, source: "session" };
+    }
+
+    // check IDB cache (persistent)
+    try {
+      const idb = await idbGetPage(cacheKey);
+      if (idb) {
+        sessionCache.account_tx.set(cacheKey, idb);
+        return { txs: idb, marker: null, source: "idb" };
+      }
+    } catch (_) {}
+
+    // inflight dedupe
+    if (inflightPages.has(cacheKey)) return inflightPages.get(cacheKey);
+
+    const p = (async () => {
+      await waitIfOverloaded();
+      return await requestPool.run(async () => {
+        if (sessionCache.account_tx.has(cacheKey)) {
+          return { txs: sessionCache.account_tx.get(cacheKey), marker: null, source: "session" };
+        }
+        const resp = await fetchAccountTxPagedRaw(account, { marker, limit, forward, ledgerMin, ledgerMax });
+        try {
+          if (Array.isArray(resp.txs) && resp.txs.length) {
+            sessionCache.account_tx.set(cacheKey, resp.txs);
+            idbSetPage(cacheKey, resp.txs).catch(() => {});
+          }
+        } catch (_) {}
+        return resp;
+      });
+    })();
+
+    inflightPages.set(cacheKey, p);
+    p.finally(() => inflightPages.delete(cacheKey));
+    return p;
   }
 
   // ---------------- ACCOUNT INFO ----------------
@@ -579,7 +759,6 @@
       accountInfoCache.set(address, normalized);
       return normalized;
     } catch (e) {
-      // leave null but cache negative result to avoid repeated failures
       accountInfoCache.set(address, null);
       return null;
     }
@@ -603,7 +782,7 @@
     while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
       pages += 1;
 
-      const resp = await fetchAccountTxPaged(address, {
+      const resp = await fetchAccountTxPagedCached(address, {
         marker,
         limit: ACTIVATION_PAGE_LIMIT,
         forward: true,
@@ -707,25 +886,7 @@
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
 
-      const cacheKey = `${address}_${marker || "nomarker"}_${pages}_${ledgerMin}_${ledgerMax}`;
-      // session cache for account_tx pages to avoid repeated fetches inside same run
-      if (sessionCache.account_tx.has(cacheKey)) {
-        const cached = sessionCache.account_tx.get(cacheKey);
-        scanned += cached.length;
-        for (const entry of cached) {
-          const tx = normalizeTxEntry(entry);
-          if (!tx) continue;
-          if (!withinConstraints(tx, constraints)) continue;
-          const from = tx.Account || tx.account;
-          if (from !== address) continue;
-          collected.push(tx);
-          if (collected.length >= needCount) break;
-        }
-        if (collected.length >= needCount) break;
-        // can't get next marker from cached unless we store it; fallthrough to fetch if necessary
-      }
-
-      const resp = await fetchAccountTxPaged(address, {
+      const resp = await fetchAccountTxPagedCached(address, {
         marker,
         limit: PAGE_LIMIT,
         forward: false,
@@ -735,9 +896,6 @@
 
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
-
-      // cache raw page for session
-      sessionCache.account_tx.set(cacheKey, resp.txs);
 
       for (const entry of resp.txs) {
         const tx = normalizeTxEntry(entry);
@@ -840,6 +998,9 @@
     while (q.length) {
       const { addr, level } = q.shift();
       processed += 1;
+
+      // Respect XRPL global overload pause
+      await waitIfOverloaded();
 
       setStatus(`Building… nodes:${processed}/${Math.min(maxAccounts, processed + q.length)} • edges:${g.edges.length} • ${addr.slice(0, 6)}… lvl ${level}/${depth}`);
       setProgress(processed / denom());
@@ -984,7 +1145,6 @@
       .slice(0, 120);
 
     // ---- burst detection (based on outgoingFirst txs per node) ----
-    // Burst = many outgoing txs clustered in a small ledger window (approx)
     const bursts = [];
     const BURST_LEDGER_WINDOW = 200;
     const BURST_MIN_TX = 12;
@@ -996,7 +1156,6 @@
       const ledgers = txs.map((t) => Number(t.ledger_index || 0)).filter((x) => x > 0).sort((a, b) => a - b);
       if (ledgers.length < BURST_MIN_TX) continue;
 
-      // sliding window
       let best = 0;
       let bestSpan = null;
 
@@ -1018,7 +1177,6 @@
     bursts.sort((a, b) => b.txs - a.txs);
 
     // ---- cycle detection (bounded DFS) ----
-    // Find cycles up to length 6, prioritizing those that include issuer.
     const cycles = [];
     const seenCycle = new Set();
 
@@ -1026,8 +1184,7 @@
     const nodeList = Array.from(g.nodes.keys()).slice(0, nodesLimit);
 
     function canonicalizeCycle(path) {
-      // rotate so smallest string is first (simple canonical)
-      const strs = path.slice(0, -1); // last repeats start
+      const strs = path.slice(0, -1);
       if (!strs.length) return "";
       let best = strs;
       for (let i = 1; i < strs.length; i++) {
@@ -1044,7 +1201,6 @@
       for (const ei of idxs) {
         const nxt = g.edges[ei].to;
 
-        // close cycle
         if (nxt === start && stack.length >= 2) {
           const cyc = stack.concat([start]);
           const key = canonicalizeCycle(cyc);
@@ -1066,7 +1222,6 @@
       }
     }
 
-    // Prefer starting at issuer, then a few high-activity nodes
     const startNodes = [g.issuer]
       .concat(
         nodeList
@@ -1085,7 +1240,6 @@
     cycles.sort((a, b) => a.length - b.length);
 
     // ---- reconsolidation hubs (classic) ----
-    // many parents -> hub -> few children
     const classicHubs = [];
     for (const addr of g.nodes.keys()) {
       const ins = inBy.get(addr) || [];
@@ -1197,7 +1351,6 @@
   function ensureCytoscapeLoaded() {
     return new Promise((resolve, reject) => {
       if (window.cytoscape) return resolve(window.cytoscape);
-      // load script
       const existing = document.querySelector('script[data-nalu-cyto]');
       if (existing) {
         existing.addEventListener("load", () => resolve(window.cytoscape));
@@ -1228,7 +1381,6 @@
     } catch (_) {}
   }
 
-  // create or update a cytoscape instance for given container and elements
   async function renderCytoscape(container, elements, opts = {}) {
     if (!container) return null;
     await ensureCytoscapeLoaded();
@@ -1279,7 +1431,6 @@
       layout: { name: opts.layout || "cose", animate: true, fit: true }
     });
 
-    // basic interaction: click node -> callback if provided
     if (typeof opts.onNodeClick === "function") {
       cy.on("tap", "node", (evt) => {
         const node = evt.target;
@@ -1287,7 +1438,6 @@
       });
     }
 
-    // zoom/fit controls if requested
     if (opts.fitAfter !== false) cy.fit();
 
     window._naluCyInstances[key] = cy;
@@ -1376,6 +1526,12 @@
                 <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
                 <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
                 <button id="uiExplorerSave" class="nav-btn" style="padding:6px 10px;border-radius:8px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
+              </div>
+
+              <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+                <label style="font-size:13px;font-weight:700;">Concurrency</label>
+                <input id="uiConcurrency" type="number" min="1" max="8" value="${REQUEST_CONCURRENCY}" style="width:80px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <div style="color:var(--text-secondary);font-size:12px;">Lower concurrency avoids hitting public nodes.</div>
               </div>
 
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
@@ -1475,12 +1631,12 @@
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
+      sessionCache.account_tx.clear();
       clearViews();
       setStatus("Cache cleared. <button id='uiUndoClear' class='nav-btn'>Undo</button>");
       const undoBtn = $("uiUndoClear");
       if (undoBtn) {
         undoBtn.addEventListener("click", () => {
-          // restore previous registry (shallow)
           for (const [k, v] of prevIssuerRegistry.entries()) issuerRegistry.set(k, v);
           setStatus("Cache restored (undo).");
           renderAll(issuerRegistry.get(activeIssuer) || {});
@@ -1493,6 +1649,15 @@
     $("uiFindPath").addEventListener("click", findPathClicked);
     $("uiPatterns").addEventListener("click", patternsClicked);
     $("uiExportGraph").addEventListener("click", exportActiveGraph);
+
+    // concurrency control wiring
+    $("uiConcurrency").addEventListener("change", () => {
+      const n = clampInt(Number(($("uiConcurrency") || {}).value || REQUEST_CONCURRENCY), 1, 8);
+      REQUEST_CONCURRENCY = n;
+      // create new pool with updated concurrency
+      requestPool = createPool(REQUEST_CONCURRENCY);
+      setStatus(`Concurrency set to ${n}`);
+    });
   }
 
   function clearViews() {
@@ -1559,7 +1724,6 @@
     if (mini) {
       mini.innerHTML = `<div id="cyMini" style="width:100%;height:84px;border-radius:8px;background:rgba(0,0,0,0.02);padding:6px;"></div>`;
       renderMiniFlow(g, g.issuer, "cyMini").catch((e) => {
-        // fallback: simple text
         mini.innerHTML = `<div style="opacity:.8">Flow preview unavailable</div>`;
         console.warn("cy mini failed", e);
       });
@@ -1683,7 +1847,6 @@
 
     Array.from(document.querySelectorAll(".uiMiniFlow")).forEach((btn) =>
       btn.addEventListener("click", () => {
-        // open small modal with a mini cytoscape flow
         renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }).catch(() => {});
       })
     );
@@ -1889,7 +2052,6 @@
     const maxNodes = 6;
     const container = (typeof containerId === "string" ? $(containerId) : containerId) || null;
     const openPanel = opts.openPanel;
-    // compute top inbound and outbound by sum(amount) (XRP only) — take top 3 each side
     const inbound = {};
     const outbound = {};
 
@@ -1906,7 +2068,6 @@
     const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 3);
 
     if (openPanel && !container) {
-      // open a modal that hosts a larger cy
       openModal(`Flow: ${account}`, `<div style="width:100%;height:480px;"><div id="cyMiniModal" style="width:100%;height:100%;"></div></div>`);
       await renderMiniFlowCytoscape(g, account, "cyMiniModal", inList, outList);
       return;
@@ -1914,7 +2075,6 @@
 
     if (!container) return;
 
-    // build cytoscape elements
     const elements = [];
     const nodesMap = new Map();
     const centerId = `n_${account}`;
@@ -1934,17 +2094,14 @@
       elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 8)), color: "rgba(249,115,22,0.6)" } });
     });
 
-    // render
     await renderCytoscape(container, elements, {
       layout: "cose",
       onNodeClick: (data) => {
-        // open modal for clicked address (resolve original id)
         const label = data.id || "";
         if (label.startsWith("n_")) {
           const acct = label.slice(2);
           showNodeModal(g, acct);
         } else {
-          // decode from id pattern
           const parts = (data.id || "").split("_");
           const possible = parts.slice(2).join("_");
           if (isValidXrpAddress(possible)) showNodeModal(g, possible);
@@ -1953,7 +2110,6 @@
     });
   }
 
-  // helper used by renderMiniFlow to render larger modal flow
   async function renderMiniFlowCytoscape(g, account, containerId, inList, outList) {
     const container = $(containerId);
     if (!container) return;
@@ -1982,7 +2138,6 @@
         if (id.startsWith("n_")) {
           showNodeModal(g, id.slice(2));
         } else {
-          // possible encoded
           const parts = id.split("_");
           const acct = parts.slice(2).join("_");
           if (isValidXrpAddress(acct)) showNodeModal(g, acct);
@@ -1992,13 +2147,11 @@
     });
   }
 
-  // Render flow diagram for an account in the node modal using Cytoscape
   async function renderFlowDiagramForNode(g, account, containerId) {
     const container = $(containerId);
     if (!container) return;
     container.innerHTML = "";
 
-    // compute top inbound and outbound by sum(amount) (XRP only) — take top 6 each side
     const inbound = {};
     const outbound = {};
 
@@ -2014,7 +2167,6 @@
     const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
     const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
 
-    // build elements
     const elements = [];
     const addNode = (id, label, color, size = 36) => elements.push({ data: { id, label, color, size } });
 
@@ -2038,7 +2190,6 @@
       onNodeClick: (data) => {
         const id = data.id || "";
         if (id === centerId) return;
-        // extract account from id
         const parts = id.split("_");
         const acct = parts.slice(2).join("_");
         if (isValidXrpAddress(acct)) showNodeModal(g, acct);
@@ -2099,7 +2250,6 @@
 
       activeIssuer = issuer;
 
-      // show something immediately in the tree container
       $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
       $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
 
@@ -2124,7 +2274,6 @@
         if (!ok) attemptSharedReconnect("build requested but ws offline");
       });
 
-      // Clear session caches for this build
       sessionCache.account_tx.clear();
 
       await buildIssuerTree(g);
