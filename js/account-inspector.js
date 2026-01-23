@@ -1,14 +1,10 @@
 /* =========================================================
    FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
-   v2.2.0 (UX + visual flows)
-   Upgrades:
-   - Expanded UX tips + status/progress improvements
-   - Lightweight flow diagram / chart showing where value came from and went to
-   - Explorer links on flows & nodes
-   - Export / copy improvements in node modal
-   - Minor performance: small session caches used for account_info / activation
-   - Undo for clear cache
+   v2.3.0 (Cytoscape interactive graphs + configurable explorer)
+   - Replaced lightweight SVG flows with Cytoscape interactive graphs
+   - Explorer host configurable in UI (preset + custom)
+   - Cytoscape loaded on-demand from CDN
    ========================================================= */
 
 (function () {
@@ -44,11 +40,12 @@
   // localStorage keys
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
+  const LOCAL_KEY_EXPLORER = "naluxrp_explorer";
 
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.2.0-visual";
+  const MODULE_VERSION = "unified-inspector@2.3.0-cyto";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -65,6 +62,9 @@
     lastError: null,
     lastSharedReconnectAttemptAt: 0
   };
+
+  // Cytoscape instances store
+  window._naluCyInstances = window._naluCyInstances || {};
 
   // ---------------- DOM ----------------
   const $ = (id) => document.getElementById(id);
@@ -168,12 +168,63 @@
     URL.revokeObjectURL(url);
   }
 
-  function explorerLinks(txHash) {
-    if (!txHash) return { xrpscan: null, bithomp: null };
-    return {
-      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
-      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
-    };
+  // ---------------- EXPLORER CONFIG ----------------
+  const EXPLORER_PRESETS = {
+    xrpscan: {
+      id: "xrpscan",
+      label: "XRPScan",
+      acct: "https://xrpscan.com/account/{acct}",
+      tx: "https://xrpscan.com/tx/{tx}"
+    },
+    bithomp: {
+      id: "bithomp",
+      label: "Bithomp",
+      acct: "https://bithomp.com/explorer/{acct}",
+      tx: "https://bithomp.com/explorer/{tx}"
+    },
+    custom: {
+      id: "custom",
+      label: "Custom"
+    }
+  };
+
+  function loadExplorerSettings() {
+    try {
+      const raw = safeGetStorage(LOCAL_KEY_EXPLORER);
+      if (!raw) return { selected: "xrpscan", customAcct: "", customTx: "" };
+      const p = JSON.parse(raw);
+      return { selected: p.selected || "xrpscan", customAcct: p.customAcct || "", customTx: p.customTx || "" };
+    } catch (_) {
+      return { selected: "xrpscan", customAcct: "", customTx: "" };
+    }
+  }
+
+  function saveExplorerSettings(settings) {
+    try {
+      safeSetStorage(LOCAL_KEY_EXPLORER, JSON.stringify(settings || {}));
+    } catch (_) {}
+  }
+
+  function getExplorerUrlForAccount(acct) {
+    const s = loadExplorerSettings();
+    if (s.selected && s.selected !== "custom") {
+      const preset = EXPLORER_PRESETS[s.selected];
+      if (preset && preset.acct) return preset.acct.replace("{acct}", encodeURIComponent(acct));
+    }
+    if (s.customAcct) return s.customAcct.replace("{acct}", encodeURIComponent(acct));
+    // fallback
+    return `https://xrpscan.com/account/${encodeURIComponent(acct)}`;
+  }
+
+  function getExplorerUrlForTx(tx) {
+    const s = loadExplorerSettings();
+    if (s.selected && s.selected !== "custom") {
+      const preset = EXPLORER_PRESETS[s.selected];
+      if (preset && preset.tx) return preset.tx.replace("{tx}", encodeURIComponent(tx));
+    }
+    if (s.customTx) return s.customTx.replace("{tx}", encodeURIComponent(tx));
+    // fallback
+    return `https://xrpscan.com/tx/${encodeURIComponent(tx)}`;
   }
 
   // ---------------- TIME / INPUT HELPERS ----------------
@@ -1142,7 +1193,108 @@
     if (autoBuildIfMissing) buildTreeClicked().catch(() => {});
   }
 
-  // ---------------- RENDER ----------------
+  // ---------------- CYTOSCAPE LOADER + HELPERS ----------------
+  function ensureCytoscapeLoaded() {
+    return new Promise((resolve, reject) => {
+      if (window.cytoscape) return resolve(window.cytoscape);
+      // load script
+      const existing = document.querySelector('script[data-nalu-cyto]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(window.cytoscape));
+        existing.addEventListener("error", (e) => reject(e));
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js";
+      s.async = true;
+      s.setAttribute("data-nalu-cyto", "1");
+      s.onload = () => {
+        if (window.cytoscape) resolve(window.cytoscape);
+        else reject(new Error("cytoscape failed to initialize"));
+      };
+      s.onerror = (e) => reject(e);
+      document.head.appendChild(s);
+    });
+  }
+
+  function destroyCyInstance(containerId) {
+    try {
+      const key = `cy__${containerId}`;
+      const prev = window._naluCyInstances[key];
+      if (prev && prev.destroy) {
+        prev.destroy();
+      }
+      delete window._naluCyInstances[key];
+    } catch (_) {}
+  }
+
+  // create or update a cytoscape instance for given container and elements
+  async function renderCytoscape(container, elements, opts = {}) {
+    if (!container) return null;
+    await ensureCytoscapeLoaded();
+    const key = `cy__${container.id || String(Math.random()).slice(2)}`;
+
+    destroyCyInstance(container.id);
+
+    const cy = window.cytoscape({
+      container,
+      elements,
+      style: [
+        {
+          selector: "node",
+          style: {
+            label: "data(label)",
+            "text-wrap": "wrap",
+            "text-max-width": 120,
+            "background-color": "data(color)",
+            width: "data(size)",
+            height: "data(size)",
+            "font-size": 11,
+            color: "#fff",
+            "text-valign": "center",
+            "text-halign": "center",
+            "overlay-padding": "6px"
+          }
+        },
+        {
+          selector: "edge",
+          style: {
+            width: "data(width)",
+            "line-color": "data(color)",
+            "curve-style": "bezier",
+            "target-arrow-shape": "triangle",
+            "target-arrow-color": "data(color)",
+            opacity: 0.9
+          }
+        },
+        {
+          selector: ".highlight",
+          style: {
+            "background-color": "#ffd54f",
+            "line-color": "#ffd54f",
+            "target-arrow-color": "#ffd54f"
+          }
+        }
+      ],
+      layout: { name: opts.layout || "cose", animate: true, fit: true }
+    });
+
+    // basic interaction: click node -> callback if provided
+    if (typeof opts.onNodeClick === "function") {
+      cy.on("tap", "node", (evt) => {
+        const node = evt.target;
+        opts.onNodeClick(node.data());
+      });
+    }
+
+    // zoom/fit controls if requested
+    if (opts.fitAfter !== false) cy.fit();
+
+    window._naluCyInstances[key] = cy;
+    return cy;
+  }
+
+  // ---------------- RESULTS / RENDER ----------------
   function ensurePage() {
     let page = document.getElementById("inspector");
     if (!page) {
@@ -1157,6 +1309,8 @@
 
   function renderPage() {
     const page = ensurePage();
+    const explorerSettings = loadExplorerSettings();
+
     page.innerHTML = `
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -1210,6 +1364,18 @@
                 <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
                 <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
                 <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+              </div>
+
+              <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+                <label style="font-size:13px;font-weight:700;">Explorer</label>
+                <select id="uiExplorerSelect" style="padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);">
+                  <option value="xrpscan">XRPScan</option>
+                  <option value="bithomp">Bithomp</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
+                <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
+                <button id="uiExplorerSave" class="nav-btn" style="padding:6px 10px;border-radius:8px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
               </div>
 
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
@@ -1267,11 +1433,24 @@
       </div>
     `;
 
+    // hydrate explorer UI defaults
+    $("uiExplorerSelect").value = explorerSettings.selected || "xrpscan";
+    $("uiExplorerAcct").value = explorerSettings.customAcct || "";
+    $("uiExplorerTx").value = explorerSettings.customTx || "";
+
     $("uiModalClose").addEventListener("click", closeModal);
 
     $("uiRetryWs").addEventListener("click", () => {
       attemptSharedReconnect("manual retry");
       setStatus("Retry requested.");
+    });
+
+    $("uiExplorerSave").addEventListener("click", () => {
+      const sel = $("uiExplorerSelect").value;
+      const acct = $("uiExplorerAcct").value.trim();
+      const tx = $("uiExplorerTx").value.trim();
+      saveExplorerSettings({ selected: sel, customAcct: acct, customTx: tx });
+      setStatus("Explorer saved.");
     });
 
     updateConnBadge();
@@ -1350,7 +1529,7 @@
 
     const actHtml = act
       ? (() => {
-          const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
+          const links = act.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
           const txLinks = links
             ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
                <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
@@ -1375,8 +1554,16 @@
       <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
     `;
 
-    // Render mini flow for issuer: top incoming/outgoing
-    renderMiniFlow(g, g.issuer, "uiFlowMini");
+    // Render mini flow for issuer: top incoming/outgoing using Cytoscape
+    const mini = $("uiFlowMini");
+    if (mini) {
+      mini.innerHTML = `<div id="cyMini" style="width:100%;height:84px;border-radius:8px;background:rgba(0,0,0,0.02);padding:6px;"></div>`;
+      renderMiniFlow(g, g.issuer, "cyMini").catch((e) => {
+        // fallback: simple text
+        mini.innerHTML = `<div style="opacity:.8">Flow preview unavailable</div>`;
+        console.warn("cy mini failed", e);
+      });
+    }
   }
 
   function renderTree(g) {
@@ -1495,7 +1682,10 @@
     );
 
     Array.from(document.querySelectorAll(".uiMiniFlow")).forEach((btn) =>
-      btn.addEventListener("click", () => renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }))
+      btn.addEventListener("click", () => {
+        // open small modal with a mini cytoscape flow
+        renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }).catch(() => {});
+      })
     );
   }
 
@@ -1516,14 +1706,15 @@
       slice
         .map((e) => {
           const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
+          const txLink = e.tx_hash ? getExplorerUrlForTx(e.tx_hash) : "#";
           return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
             <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
               • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
               • ledger ${escapeHtml(e.ledger_index)}
               • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
-              <span style="margin-left:8px;"><a href="${escapeHtml(explorerLinks(e.tx_hash).xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a></span>
+              <span style="margin-left:8px;"><a href="${escapeHtml(txLink)}" target="_blank" rel="noopener noreferrer">tx</a></span>
             </div>
-            <div style="opacity:.75;">${escapeHtml(e.date || "—")} �� ${escapeHtml(shortHash)}</div>
+            <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
           </div>`;
         })
         .join("") || `<div style="opacity:.7">No edges (try increasing per-node / clearing filters).</div>`;
@@ -1535,7 +1726,7 @@
     renderEdgeFilter(g);
   }
 
-  // ---------------- NODE MODAL + FLOW DIAGRAM ----------------
+  // ---------------- NODE MODAL + CYTOSCAPE FLOW ----------------
   function showNodeModal(g, addr) {
     if (!addr) return;
     const n = g.nodes.get(addr);
@@ -1567,7 +1758,7 @@
       )
     ].join("\n");
 
-    const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
+    const actLinks = act?.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
 
     const actBlock = act
       ? `
@@ -1607,7 +1798,7 @@
     const rows = outgoing
       .slice(0, 200)
       .map((x, i) => {
-        const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
+        const links = x.tx_hash ? { xrpscan: getExplorerUrlForTx(x.tx_hash) } : null;
         const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
         const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
         const amt = `${escapeHtml(x.currency)} ${Number.isFinite(Number(x.amount)) ? escapeHtml(Number(x.amount).toFixed(6)) : "—"}`;
@@ -1642,7 +1833,7 @@
             <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
             <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
             <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
-            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(explorerLinks(addr).xrpscan)}">Explorer</a>
+            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(getExplorerUrlForAccount(addr))}">Explorer</a>
           </div>
           <div style="margin-top:10px;opacity:.85;font-size:12px;">
             outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
@@ -1654,7 +1845,9 @@
 
         <div style="width:100%;margin-top:12px;">
           <div style="font-weight:900;margin-bottom:8px;">Flow: where value came from → ${escapeHtml(addr)} → where it went (top counterparties)</div>
-          <div id="uiFlowDiagram" style="width:100%;height:240px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.04);padding:6px;"></div>
+          <div id="uiFlowDiagram" style="width:100%;height:360px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.04);padding:6px;">
+            <div id="cyFlowContainer" style="width:100%;height:100%;"></div>
+          </div>
         </div>
       </div>
 
@@ -1683,13 +1876,125 @@
       openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
     };
 
-    // render flow diagram for this node
-    renderFlowDiagramForNode(g, addr, "uiFlowDiagram");
+    // render flow diagram for this node using Cytoscape
+    renderFlowDiagramForNode(g, addr, "cyFlowContainer").catch((e) => {
+      console.warn("Flow cytoscape error", e);
+      const c = $("cyFlowContainer");
+      if (c) c.innerHTML = `<div style="padding:12px;color:var(--text-secondary)">Flow preview unavailable</div>`;
+    });
   }
 
-  // Render a mini flow diagram for an account inside DOM container
-  function renderFlowDiagramForNode(g, account, containerId, opts = {}) {
-    const container = typeof containerId === "string" ? $(containerId) : containerId;
+  // Render a mini flow (small cytoscape) and optionally open a modal when openPanel true
+  async function renderMiniFlow(g, account, containerId, opts = {}) {
+    const maxNodes = 6;
+    const container = (typeof containerId === "string" ? $(containerId) : containerId) || null;
+    const openPanel = opts.openPanel;
+    // compute top inbound and outbound by sum(amount) (XRP only) — take top 3 each side
+    const inbound = {};
+    const outbound = {};
+
+    for (const e of g.edges) {
+      if (e.to === account && e.currency === "XRP") {
+        inbound[e.from] = (inbound[e.from] || 0) + Number(e.amount || 0);
+      }
+      if (e.from === account && e.currency === "XRP") {
+        outbound[e.to] = (outbound[e.to] || 0) + Number(e.amount || 0);
+      }
+    }
+
+    const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 3);
+    const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 3);
+
+    if (openPanel && !container) {
+      // open a modal that hosts a larger cy
+      openModal(`Flow: ${account}`, `<div style="width:100%;height:480px;"><div id="cyMiniModal" style="width:100%;height:100%;"></div></div>`);
+      await renderMiniFlowCytoscape(g, account, "cyMiniModal", inList, outList);
+      return;
+    }
+
+    if (!container) return;
+
+    // build cytoscape elements
+    const elements = [];
+    const nodesMap = new Map();
+    const centerId = `n_${account}`;
+
+    nodesMap.set(centerId, { data: { id: centerId, label: shortAddr(account), color: "#06b6d4", size: 36 } });
+    elements.push(nodesMap.get(centerId));
+
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      elements.push({ data: { id, label: shortAddr(it.a), color: "#3b82f6", size: 28 } });
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 8)), color: "rgba(59,130,246,0.6)" } });
+    });
+
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      elements.push({ data: { id, label: shortAddr(it.a), color: "#f97316", size: 28 } });
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 8)), color: "rgba(249,115,22,0.6)" } });
+    });
+
+    // render
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        // open modal for clicked address (resolve original id)
+        const label = data.id || "";
+        if (label.startsWith("n_")) {
+          const acct = label.slice(2);
+          showNodeModal(g, acct);
+        } else {
+          // decode from id pattern
+          const parts = (data.id || "").split("_");
+          const possible = parts.slice(2).join("_");
+          if (isValidXrpAddress(possible)) showNodeModal(g, possible);
+        }
+      }
+    });
+  }
+
+  // helper used by renderMiniFlow to render larger modal flow
+  async function renderMiniFlowCytoscape(g, account, containerId, inList, outList) {
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = "";
+
+    const elements = [];
+    const centerId = `n_${account}`;
+    elements.push({ data: { id: centerId, label: account, color: "#06b6d4", size: 48 } });
+
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      elements.push({ data: { id, label: it.a, color: "#3b82f6", size: 36 } });
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 12)), color: "rgba(59,130,246,0.6)" } });
+    });
+
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      elements.push({ data: { id, label: it.a, color: "#f97316", size: 36 } });
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 12)), color: "rgba(249,115,22,0.6)" } });
+    });
+
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        const id = data.id || "";
+        if (id.startsWith("n_")) {
+          showNodeModal(g, id.slice(2));
+        } else {
+          // possible encoded
+          const parts = id.split("_");
+          const acct = parts.slice(2).join("_");
+          if (isValidXrpAddress(acct)) showNodeModal(g, acct);
+        }
+      },
+      fitAfter: true
+    });
+  }
+
+  // Render flow diagram for an account in the node modal using Cytoscape
+  async function renderFlowDiagramForNode(g, account, containerId) {
+    const container = $(containerId);
     if (!container) return;
     container.innerHTML = "";
 
@@ -1709,222 +2014,36 @@
     const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
     const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
 
-    const totalIn = inList.reduce((s, x) => s + x.v, 0) || 1;
-    const totalOut = outList.reduce((s, x) => s + x.v, 0) || 1;
+    // build elements
+    const elements = [];
+    const addNode = (id, label, color, size = 36) => elements.push({ data: { id, label, color, size } });
 
-    // simple horizontal sankey-like layout: left (in accounts), center (account), right (out accounts)
-    const w = container.clientWidth || 800;
-    const h = container.clientHeight || 240;
-    const svgNS = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(svgNS, "svg");
-    svg.setAttribute("width", String(w));
-    svg.setAttribute("height", String(h));
-    svg.style.width = "100%";
-    svg.style.height = `${h}px`;
+    const centerId = `n_${account}`;
+    addNode(centerId, shortAddr(account), "#06b6d4", 52);
 
-    // positions
-    const leftX = 80;
-    const centerX = w / 2;
-    const rightX = w - 120;
-    const leftYStart = 20;
-    const rightYStart = 20;
-    const gap = Math.max(12, Math.floor((h - 40) / Math.max(inList.length, outList.length, 1)));
-
-    // render inbound nodes and flows
-    inList.forEach((item, i) => {
-      const y = leftYStart + i * gap;
-      const nodeGroup = document.createElementNS(svgNS, "g");
-      // rectangle for account
-      const rect = document.createElementNS(svgNS, "rect");
-      rect.setAttribute("x", String(leftX - 56));
-      rect.setAttribute("y", String(y - 10));
-      rect.setAttribute("width", "120");
-      rect.setAttribute("height", "20");
-      rect.setAttribute("fill", "#3b82f6");
-      rect.setAttribute("opacity", "0.95");
-      rect.style.cursor = "pointer";
-      nodeGroup.appendChild(rect);
-
-      const txt = document.createElementNS(svgNS, "text");
-      txt.setAttribute("x", String(leftX - 50));
-      txt.setAttribute("y", String(y + 4));
-      txt.setAttribute("fill", "#fff");
-      txt.setAttribute("font-size", "11");
-      txt.textContent = shortAddr(item.a);
-      nodeGroup.appendChild(txt);
-
-      nodeGroup.addEventListener("click", () => {
-        showNodeModal(g, item.a);
-      });
-
-      svg.appendChild(nodeGroup);
-
-      // flow path from left -> center
-      const width = Math.max(2, Math.round((item.v / totalIn) * 40));
-      const path = document.createElementNS(svgNS, "path");
-      const d = `M ${leftX + 70} ${y} C ${leftX + 110} ${y}, ${centerX - 110} ${h / 2}, ${centerX - 12} ${h / 2}`;
-      path.setAttribute("d", d);
-      path.setAttribute("stroke", "rgba(59,130,246,0.25)");
-      path.setAttribute("stroke-width", String(width));
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke-linecap", "round");
-      svg.appendChild(path);
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      addNode(id, shortAddr(it.a), "#3b82f6", 40);
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 12)), color: "rgba(59,130,246,0.6)" } });
     });
 
-    // center node
-    const centerGroup = document.createElementNS(svgNS, "g");
-    const cRect = document.createElementNS(svgNS, "rect");
-    cRect.setAttribute("x", String(centerX - 60));
-    cRect.setAttribute("y", String(h / 2 - 22));
-    cRect.setAttribute("width", "120");
-    cRect.setAttribute("height", "44");
-    cRect.setAttribute("fill", "#06b6d4");
-    cRect.setAttribute("rx", "8");
-    centerGroup.appendChild(cRect);
-    const cText = document.createElementNS(svgNS, "text");
-    cText.setAttribute("x", String(centerX - 46));
-    cText.setAttribute("y", String(h / 2 + 6));
-    cText.setAttribute("fill", "#000");
-    cText.setAttribute("font-size", "12");
-    cText.textContent = shortAddr(account);
-    centerGroup.appendChild(cText);
-    centerGroup.addEventListener("click", () => showNodeModal(g, account));
-    svg.appendChild(centerGroup);
-
-    // outbound
-    outList.forEach((item, i) => {
-      const y = rightYStart + i * gap;
-      const nodeGroup = document.createElementNS(svgNS, "g");
-      const rect = document.createElementNS(svgNS, "rect");
-      rect.setAttribute("x", String(rightX - 20));
-      rect.setAttribute("y", String(y - 10));
-      rect.setAttribute("width", "120");
-      rect.setAttribute("height", "20");
-      rect.setAttribute("fill", "#f97316");
-      rect.setAttribute("opacity", "0.95");
-      rect.style.cursor = "pointer";
-      nodeGroup.appendChild(rect);
-
-      const txt = document.createElementNS(svgNS, "text");
-      txt.setAttribute("x", String(rightX - 14));
-      txt.setAttribute("y", String(y + 4));
-      txt.setAttribute("fill", "#fff");
-      txt.setAttribute("font-size", "11");
-      txt.textContent = shortAddr(item.a);
-      nodeGroup.appendChild(txt);
-
-      nodeGroup.addEventListener("click", () => {
-        showNodeModal(g, item.a);
-      });
-
-      svg.appendChild(nodeGroup);
-
-      const width = Math.max(2, Math.round((item.v / totalOut) * 40));
-      const path = document.createElementNS(svgNS, "path");
-      const d = `M ${centerX + 12} ${h / 2} C ${centerX + 110} ${h / 2}, ${rightX - 120} ${y}, ${rightX - 20} ${y}`;
-      path.setAttribute("d", d);
-      path.setAttribute("stroke", "rgba(249,115,22,0.25)");
-      path.setAttribute("stroke-width", String(width));
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke-linecap", "round");
-      svg.appendChild(path);
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      addNode(id, shortAddr(it.a), "#f97316", 40);
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 12)), color: "rgba(249,115,22,0.6)" } });
     });
 
-    container.appendChild(svg);
-
-    // small legend / totals
-    const infoLine = document.createElement("div");
-    infoLine.style.marginTop = "6px";
-    infoLine.style.fontSize = "12px";
-    infoLine.style.opacity = "0.85";
-    infoLine.innerHTML = `Top inbound: ${inList.length} • Top outbound: ${outList.length} • Sum in: ${totalIn.toFixed(
-      2
-    )} XRP • Sum out: ${totalOut.toFixed(2)} XRP`;
-    container.appendChild(infoLine);
-  }
-
-  // Helper for mini flow in summary (no modal)
-  function renderMiniFlow(g, account, containerId, opts = {}) {
-    const container = typeof containerId === "string" ? $(containerId) : containerId;
-    if (!container) return;
-    container.innerHTML = "";
-    const div = document.createElement("div");
-    div.style.display = "flex";
-    div.style.alignItems = "center";
-    div.style.gap = "8px";
-    div.style.flexWrap = "wrap";
-    div.innerHTML = `<div style="font-weight:800;">Flow</div><div style="opacity:.75;font-size:12px;">(click for details)</div>`;
-    container.appendChild(div);
-
-    // place a small sparkline svg with minimal info
-    const w = 320;
-    const h = 72;
-    const svgNS = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(svgNS, "svg");
-    svg.setAttribute("width", String(w));
-    svg.setAttribute("height", String(h));
-    svg.style.borderRadius = "8px";
-    svg.style.background = "rgba(0,0,0,0.03)";
-    svg.style.cursor = "pointer";
-
-    // compute totals for incoming/outgoing
-    let inboundSum = 0;
-    let outboundSum = 0;
-    for (const e of g.edges) {
-      if (e.to === account && e.currency === "XRP") inboundSum += Number(e.amount || 0);
-      if (e.from === account && e.currency === "XRP") outboundSum += Number(e.amount || 0);
-    }
-    const maxv = Math.max(1, inboundSum, outboundSum);
-    const inW = Math.round((inboundSum / maxv) * (w - 40));
-    const outW = Math.round((outboundSum / maxv) * (w - 40));
-
-    // inbound bar (left)
-    const inRect = document.createElementNS(svgNS, "rect");
-    inRect.setAttribute("x", "10");
-    inRect.setAttribute("y", "12");
-    inRect.setAttribute("width", String(inW));
-    inRect.setAttribute("height", "20");
-    inRect.setAttribute("fill", "#3b82f6");
-    svg.appendChild(inRect);
-    const inText = document.createElementNS(svgNS, "text");
-    inText.setAttribute("x", "12");
-    inText.setAttribute("y", "28");
-    inText.setAttribute("fill", "#fff");
-    inText.setAttribute("font-size", "11");
-    inText.textContent = `in ${inboundSum.toFixed(2)} XRP`;
-    svg.appendChild(inText);
-
-    // center label
-    const cText = document.createElementNS(svgNS, "text");
-    cText.setAttribute("x", String(w / 2 - 20));
-    cText.setAttribute("y", "28");
-    cText.setAttribute("fill", "var(--text-secondary)");
-    cText.setAttribute("font-size", "11");
-    cText.textContent = shortAddr(account);
-    svg.appendChild(cText);
-
-    // outbound bar (right)
-    const outRect = document.createElementNS(svgNS, "rect");
-    outRect.setAttribute("x", String(w - 10 - outW));
-    outRect.setAttribute("y", "40");
-    outRect.setAttribute("width", String(outW));
-    outRect.setAttribute("height", "20");
-    outRect.setAttribute("fill", "#f97316");
-    svg.appendChild(outRect);
-    const outText = document.createElementNS(svgNS, "text");
-    outText.setAttribute("x", String(w - outW - 6));
-    outText.setAttribute("y", "56");
-    outText.setAttribute("fill", "#fff");
-    outText.setAttribute("font-size", "11");
-    outText.textContent = `out ${outboundSum.toFixed(2)} XRP`;
-    svg.appendChild(outText);
-
-    svg.addEventListener("click", () => {
-      // open node modal for details and flow
-      showNodeModal(g, account);
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        const id = data.id || "";
+        if (id === centerId) return;
+        // extract account from id
+        const parts = id.split("_");
+        const acct = parts.slice(2).join("_");
+        if (isValidXrpAddress(acct)) showNodeModal(g, acct);
+      }
     });
-
-    container.appendChild(svg);
   }
 
   // ---------------- EXPORT GRAPH ----------------
@@ -2051,7 +2170,7 @@
     `;
 
     Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-      btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
+      btn.addEventListener("click", () => showNodeModal(issuerRegistry.get(activeIssuer), btn.getAttribute("data-addr")))
     );
   }
 
@@ -2116,7 +2235,7 @@
         </div>
 
         <div style="margin-top:14px;">
-          <div style="font-weight:900;">Fan-in hubs (issuer → many ��� hub)</div>
+          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
           <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
             ${hubRows}
           </div>
