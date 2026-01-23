@@ -1,22 +1,31 @@
 /* =========================================================
    inspector-trace-tab.js — "🚨 Trace Funds" tab for Inspector
-   v1.2.0 (All upgrades)
-   ✅ Incident window presets (15m/1h/6h/24h/7d) -> auto ledger min/max
-   ✅ Amount + currency filters (Only XRP, Include issued, Min XRP)
-   ✅ Stop conditions (stop expanding at hub / fan-in thresholds)
-   ✅ Path view (click "Path" to reconstruct shortest hop path)
-   ✅ Case Save/Load/Delete (localStorage) with inputs + optional results
-   ✅ Copy/Paste UX + Inspect pivots
+   v1.3.0 (All upgrades)
+   - Expanded help + Quick start + Troubleshooting
+   - Progress bar + live counters + keyboard shortcuts (Enter/Esc)
+   - Date/time window pickers -> ledger conversion
+   - Auto-apply window option
+   - Explorer links (xrpscan) for accounts & txs
+   - Export/import cases, copy-all JSON
+   - In-session caching of account_tx responses
+   - Limited concurrency for account fetches
+   - Simple SVG graph preview for up to 200 edges (click nodes to Inspect/Path/Exclude)
+   - Confirm delete with Undo
    ========================================================= */
 
 (function () {
-  const VERSION = "inspector-trace-tab@1.2.0";
+  const VERSION = "inspector-trace-tab@1.3.0";
   const TAB_ID = "nalu-trace";
   const TAB_LABEL = "Trace Funds";
   const TAB_ICON = "🚨";
 
   // XRPL close cadence varies; use a safe estimate for time->ledger conversion
   const EST_LEDGER_SECONDS = 4;
+
+  const EXPLORER = {
+    account: (a) => `https://xrpscan.com/account/${a}`,
+    tx: (h) => `https://xrpscan.com/tx/${h}`
+  };
 
   const DEFAULTS = {
     maxHops: 4,
@@ -39,17 +48,23 @@
     stopOnHub: true,
     hubDegree: 18, // total degree in traced graph
     stopOnFanIn: true,
-    fanInDegree: 12 // in-degree threshold in traced graph
+    fanInDegree: 12, // in-degree threshold in traced graph
 
-    // note: we keep stop conditions cheap by using local graph stats only
+    // advanced
+    concurrency: 3,
+    autoApplyWindow: false
   };
 
   // LocalStorage keys
   const LS_CASES = "nalu_trace_cases_v1";
 
+  // Session caches and state
   let traceRunning = false;
   let traceCancelled = false;
   let lastResult = null;
+  let sessionCache = new Map(); // key -> edges
+  let lastDeletedCase = null;
+  let undoDeleteTimer = null;
 
   function el(id) { return document.getElementById(id); }
 
@@ -91,7 +106,7 @@
     const raw = String(text || "")
       .replaceAll(";", ",")
       .replaceAll("|", ",")
-      .split(/[\s,\n\r\t]+/g)
+      .split(/[\s,\n\r\t,]+/g)
       .map(s => s.trim())
       .filter(Boolean);
 
@@ -436,15 +451,45 @@
         </div>
 
         <div class="about-acc-body" id="traceHelpBodyInInspector" style="display:none;">
-          <ul class="about-bullets">
-            <li><strong>Victim</strong> = main starting node (hop 0)</li>
-            <li><strong>Linked seeds</strong> (optional) = additional starting nodes you want traced too</li>
-            <li><strong>Window preset</strong> converts time -> ledger range using a safe estimate</li>
-            <li><strong>Filters</strong> help reduce noise (e.g., only XRP + minimum XRP)</li>
-            <li><strong>Stop conditions</strong> prevent runaway tracing and highlight likely service endpoints</li>
-            <li><strong>Path view</strong> reconstructs shortest-hop paths for reporting</li>
-            <li><strong>Cases</strong> store inputs + results locally so you can return later</li>
-          </ul>
+          <div style="display:grid; gap:8px;">
+            <div>
+              <strong>Quick start</strong>
+              <ol style="margin:6px 0 0 18px; color:var(--text-secondary);">
+                <li>Paste the victim address (or press Paste).</li>
+                <li>Apply a time window (or enter start/end times) → this converts to ledger range.</li>
+                <li>Set simple filters (Only XRP, Min XRP) to reduce noise.</li>
+                <li>Press Start trace. Use Cancel (or Esc) to stop early.</li>
+                <li>Click Path on destinations to reconstruct shortest-hop paths for reporting.</li>
+              </ol>
+            </div>
+
+            <div>
+              <strong>What the tracer captures</strong>
+              <ul style="margin:6px 0 0 18px; color:var(--text-secondary);">
+                <li>Outgoing Payment transactions from each visited account in the ledger range.</li>
+                <li>Only payments that match your coin/currency filters (XRP vs issued assets).</li>
+                <li>Basic parent pointers so you can rebuild shortest-hop paths to any target captured.</li>
+              </ul>
+            </div>
+
+            <div>
+              <strong>Troubleshooting</strong>
+              <ul style="margin:6px 0 0 18px; color:var(--text-secondary);">
+                <li><strong>No validated ledger:</strong> Apply window manually with ledger numbers or wait for server_info to respond.</li>
+                <li><strong>Empty results:</strong> widen the window, increase per-account tx limit, or disable Only XRP if issued assets might have been used.</li>
+                <li><strong>Slow trace / rate-limit:</strong> lower Max edges / Per-account tx or reduce concurrency (advanced).</li>
+              </ul>
+            </div>
+
+            <div>
+              <strong>Shortcuts & tips</strong>
+              <ul style="margin:6px 0 0 18px; color:var(--text-secondary);">
+                <li>Enter: start trace (unless focus is in the seeds textarea). Esc: cancel trace.</li>
+                <li>Use inspector 'Use inspector' to load the current inspected account as victim.</li>
+                <li>Saved cases include inputs and optionally cached results for quick re-open; you can export/import cases as JSON.</li>
+              </ul>
+            </div>
+          </div>
         </div>
 
         <!-- CASE MANAGER -->
@@ -460,6 +505,10 @@
             </select>
             <button id="traceLoadCaseBtn" class="about-btn" type="button">Load</button>
             <button id="traceDeleteCaseBtn" class="about-btn" type="button" style="opacity:0.9;">Delete</button>
+            <button id="traceExportCaseBtn" class="about-btn" type="button">Export case</button>
+            <label class="about-btn" style="display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:14px;">
+              Import <input id="traceImportCaseFile" type="file" accept="application/json" style="display:none;" />
+            </label>
           </div>
           <div id="traceCaseMeta" style="margin-top:8px; color: var(--text-secondary); font-size: 0.92rem;"></div>
         </div>
@@ -495,7 +544,7 @@
             </div>
           </div>
 
-          <!-- WINDOW PRESETS -->
+          <!-- WINDOW PRESETS + date/time -->
           <div style="grid-column: 1 / -1; margin-top: 6px; padding: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.10); background: rgba(0,0,0,0.22);">
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
               <div style="flex: 1 1 220px;">
@@ -515,6 +564,11 @@
                 <button id="traceApplyWindow" class="about-btn" type="button">Apply window</button>
               </div>
 
+              <label style="display:flex; gap:8px; align-items:center; color:var(--text-secondary);">
+                <input id="traceAutoApplyWindow" type="checkbox" />
+                Auto-apply window on open
+              </label>
+
               <div style="flex: 1 1 320px; color: var(--text-secondary); font-size: 0.92rem;">
                 <div id="traceWindowNote">Tip: Apply window first, then trace. (Uses ~${EST_LEDGER_SECONDS}s/ledger estimate)</div>
               </div>
@@ -530,6 +584,17 @@
                 <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Ledger max</label>
                 <input id="traceLedgerMaxInInspector" type="number" value="${DEFAULTS.ledgerMax}"
                   style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+              </div>
+            </div>
+
+            <div style="margin-top:10px; display:grid; grid-template-columns: 1fr 1fr; gap:8px; align-items:center;">
+              <div>
+                <label style="display:block; color: var(--text-secondary); font-weight:800; margin-bottom:6px;">Start (ISO)</label>
+                <input id="traceStartISO" type="datetime-local" style="width:100%; padding:10px; border-radius:10px;" />
+              </div>
+              <div>
+                <label style="display:block; color: var(--text-secondary); font-weight:800; margin-bottom:6px;">End (ISO)</label>
+                <input id="traceEndISO" type="datetime-local" style="width:100%; padding:10px; border-radius:10px;" />
               </div>
             </div>
           </div>
@@ -557,6 +622,16 @@
                   Applies to XRP amounts. Issued assets are included/excluded via toggles.
                 </div>
               </div>
+
+              <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+                <label style="color:var(--text-secondary); font-weight:800;">Group by dest</label>
+                <input id="traceGroupByDest" type="checkbox" />
+              </div>
+            </div>
+
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+              <label style="display:block; color: var(--text-secondary); font-weight: 800;">Exclude addresses (comma/newline)</label>
+              <input id="traceExcludeList" type="text" placeholder="r... , r... , ..." style="flex:1 1 420px; padding:8px; border-radius:10px;" />
             </div>
           </div>
 
@@ -619,9 +694,17 @@
             <button id="traceCancelInInspector" class="about-btn" type="button" style="opacity:0.85;">Cancel</button>
             <button id="traceExportJsonInInspector" class="about-btn" type="button" disabled>Export JSON</button>
             <button id="traceExportCsvInInspector" class="about-btn" type="button" disabled>Export CSV</button>
+            <button id="traceCopyAllJson" class="about-btn" type="button" disabled>Copy all JSON</button>
           </div>
 
           <div style="grid-column: 1 / -1; margin-top: 10px;">
+            <div id="traceProgressWrapper" style="display:none; margin-bottom:6px;">
+              <div style="height:10px; background:rgba(255,255,255,0.06); border-radius:6px; overflow:hidden;">
+                <div id="traceProgressBar" style="width:0%; height:100%; background:linear-gradient(90deg,#3b82f6,#06b6d4);"></div>
+              </div>
+              <div id="traceProgressText" style="font-size:0.92rem; color:var(--text-secondary); margin-top:6px;"></div>
+            </div>
+
             <div id="traceStatusInInspector" style="color: var(--text-secondary);"></div>
           </div>
         </div>
@@ -629,6 +712,9 @@
 
       <!-- PATH PANEL -->
       <div id="tracePathPanel" style="margin-top: 14px;"></div>
+
+      <!-- GRAPH PREVIEW -->
+      <div id="traceGraphPreview" style="margin-top:14px;"></div>
 
       <!-- RESULTS -->
       <div id="traceResultsInInspector" style="margin-top: 14px;"></div>
@@ -720,17 +806,93 @@
       await applyWindowPreset();
     });
 
+    // Auto apply window
+    const auto = el("traceAutoApplyWindow");
+    if (auto) {
+      auto.checked = DEFAULTS.autoApplyWindow;
+    }
+
     // Trace buttons
     el("traceRunInInspector")?.addEventListener("click", runTrace);
     el("traceCancelInInspector")?.addEventListener("click", cancelTrace);
+
+    // Export & copy all
+    el("traceCopyAllJson")?.addEventListener("click", async () => {
+      if (!lastResult) return setTraceStatus("⚠️ Run a trace first.", false);
+      try {
+        await writeClipboardText(JSON.stringify(serializeResult(lastResult), null, 2));
+        setTraceStatus("✅ Copied full trace JSON to clipboard.", false);
+      } catch (e) {
+        setTraceStatus(`⚠️ ${escapeHtml(e.message || String(e))}`, false);
+      }
+    });
 
     // Case manager
     el("traceSaveCase")?.addEventListener("click", saveCase);
     el("traceLoadCaseBtn")?.addEventListener("click", loadSelectedCase);
     el("traceDeleteCaseBtn")?.addEventListener("click", deleteSelectedCase);
+    el("traceExportCaseBtn")?.addEventListener("click", () => {
+      const sel = el("traceLoadCaseSelect");
+      const cases = loadCases();
+      let c = null;
+      if (sel && sel.value) c = cases.find(x => x.id === sel.value);
+      if (!c) {
+        setTraceStatus("⚠️ Select a case to export.", false);
+        return;
+      }
+      const blob = new Blob([JSON.stringify(c, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `nalu_trace_case_${c.id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+    el("traceImportCaseFile")?.addEventListener("change", async (ev) => {
+      const f = ev.target.files?.[0];
+      if (!f) return;
+      try {
+        const txt = await f.text();
+        const parsed = JSON.parse(txt);
+        if (!parsed || !parsed.id) {
+          setTraceStatus("⚠️ Invalid case file.", false);
+          return;
+        }
+        const cases = loadCases();
+        cases.push(parsed);
+        saveCases(cases);
+        refreshCaseSelect();
+        setTraceStatus("✅ Imported case.", false);
+      } catch (e) {
+        setTraceStatus(`⚠️ ${escapeHtml(e.message || String(e))}`, false);
+      } finally {
+        ev.target.value = "";
+      }
+    });
 
     refreshCaseSelect();
     setCaseMeta();
+
+    // Keyboard shortcuts: Enter to run (unless inside textarea), Esc to cancel
+    document.addEventListener("keydown", handleGlobalKeys);
+
+    // Bind dynamic actions in results (if any)
+    bindResultActions();
+  }
+
+  function handleGlobalKeys(e) {
+    if (e.key === "Escape") {
+      if (traceRunning) cancelTrace();
+    } else if (e.key === "Enter") {
+      const active = document.activeElement;
+      const tag = active?.tagName?.toLowerCase();
+      if (tag === "textarea") return;
+      if ((active?.getAttribute?.("contenteditable") === "true")) return;
+      // run only if not focused in inputs that expect enter
+      runTrace();
+    }
   }
 
   function setTraceStatus(msg, isError) {
@@ -751,30 +913,32 @@
       "traceApplyWindow",
       "traceSaveCase",
       "traceLoadCaseBtn",
-      "traceDeleteCaseBtn"
+      "traceDeleteCaseBtn",
+      "traceExportCaseBtn",
+      "traceImportCaseFile",
+      "traceExportJsonInInspector",
+      "traceExportCsvInInspector",
+      "traceCopyAllJson"
     ].forEach((id) => {
       const b = el(id);
       if (b) b.disabled = !!disabled;
     });
 
     const cancelBtn = el("traceCancelInInspector");
-    if (cancelBtn) cancelBtn.disabled = false;
-
-    const ej = el("traceExportJsonInInspector");
-    const ec = el("traceExportCsvInInspector");
-    if (ej) ej.disabled = true;
-    if (ec) ec.disabled = true;
+    if (cancelBtn) cancelBtn.disabled = !disabled ? false : false; // cancel should stay available when running
   }
 
   function clearResults() {
     const r = el("traceResultsInInspector");
     const p = el("tracePathPanel");
+    const g = el("traceGraphPreview");
     if (r) r.innerHTML = "";
     if (p) p.innerHTML = "";
+    if (g) g.innerHTML = "";
   }
 
   // -----------------------------
-  // Window preset logic
+  // Window preset logic + time -> ledger conversion
   // -----------------------------
   function presetToSeconds(preset) {
     switch (preset) {
@@ -825,6 +989,40 @@
     setTraceStatus(`✅ Window set: ledger ${min} → ${max}`, false);
   }
 
+  // Convert ISO datetime inputs to ledger min/max using validated ledger mapping (approx)
+  async function applyIsoWindowToLedgers() {
+    const start = el("traceStartISO")?.value;
+    const end = el("traceEndISO")?.value;
+    if (!start && !end) {
+      setTraceStatus("⚠️ Enter a Start and/or End time to convert to ledger range.", false);
+      return;
+    }
+
+    setTraceStatus("⏳ Fetching validated ledger for time->ledger conversion…", false);
+    const currentLedger = await getValidatedLedgerIndex();
+    if (!Number.isFinite(currentLedger)) {
+      setTraceStatus("⚠️ Could not fetch validated ledger index.", false);
+      return;
+    }
+
+    const nowTs = Date.now() / 1000;
+    const getLedgerForTs = (ts) => {
+      const diff = nowTs - ts;
+      const ledgersBack = Math.round(diff / EST_LEDGER_SECONDS);
+      return Math.max(0, currentLedger - ledgersBack);
+    };
+
+    const startTs = start ? Math.floor(new Date(start).getTime() / 1000) : null;
+    const endTs = end ? Math.floor(new Date(end).getTime() / 1000) : null;
+
+    const min = startTs ? getLedgerForTs(startTs) : Number(el("traceLedgerMinInInspector")?.value ?? -1);
+    const max = endTs ? getLedgerForTs(endTs) : Number(el("traceLedgerMaxInInspector")?.value ?? -1);
+
+    el("traceLedgerMinInInspector").value = String(min);
+    el("traceLedgerMaxInInspector").value = String(max);
+    setTraceStatus(`✅ Converted times → ledgers: ${min} → ${max}`, false);
+  }
+
   // -----------------------------
   // Case management
   // -----------------------------
@@ -858,7 +1056,9 @@
     const current = sel.value;
     sel.innerHTML = `<option value="">Load case…</option>` + cases.map(c => {
       const label = `${c.name || "Untitled"} • ${new Date(c.savedAt || Date.now()).toLocaleString()}`;
-      return `<option value="${escapeHtml(c.id)}">${escapeHtml(label)}</option>`;
+      // include small preview in title attribute (top dests)
+      const preview = (c.result && c.result.edges) ? ` • edges ${c.result.edges.length}` : "";
+      return `<option value="${escapeHtml(c.id)}" title="${escapeHtml(preview)}">${escapeHtml(label)}</option>`;
     }).join("");
 
     // restore selection if possible
@@ -889,7 +1089,13 @@
       stopOnHub: !!el("traceStopHub")?.checked,
       hubDegree: clampInt(el("traceHubDegree")?.value, 3, 999, DEFAULTS.hubDegree),
       stopOnFanIn: !!el("traceStopFanIn")?.checked,
-      fanInDegree: clampInt(el("traceFanInDegree")?.value, 3, 999, DEFAULTS.fanInDegree)
+      fanInDegree: clampInt(el("traceFanInDegree")?.value, 3, 999, DEFAULTS.fanInDegree),
+
+      excludeList: parseAccountsFromText(el("traceExcludeList")?.value || ""),
+      groupByDest: !!el("traceGroupByDest")?.checked,
+
+      concurrency: clampInt(el("traceConcurrency")?.value || DEFAULTS.concurrency, 1, 12, DEFAULTS.concurrency),
+      autoApplyWindow: !!el("traceAutoApplyWindow")?.checked
     };
   }
 
@@ -915,6 +1121,10 @@
     if (el("traceHubDegree")) el("traceHubDegree").value = String(inputs.hubDegree ?? DEFAULTS.hubDegree);
     if (el("traceStopFanIn")) el("traceStopFanIn").checked = !!inputs.stopOnFanIn;
     if (el("traceFanInDegree")) el("traceFanInDegree").value = String(inputs.fanInDegree ?? DEFAULTS.fanInDegree);
+
+    if (el("traceExcludeList")) el("traceExcludeList").value = (inputs.excludeList || []).join(", ");
+    if (el("traceGroupByDest")) el("traceGroupByDest").checked = !!inputs.groupByDest;
+    if (el("traceAutoApplyWindow")) el("traceAutoApplyWindow").checked = !!inputs.autoApplyWindow;
 
     // enforce onlyXrp UI rules
     const only = !!el("traceOnlyXrp")?.checked;
@@ -997,12 +1207,31 @@
     }
 
     const name = cases[idx]?.name || "Untitled";
-    cases.splice(idx, 1);
+    lastDeletedCase = cases.splice(idx, 1)[0];
     saveCases(cases);
     sel.value = "";
     refreshCaseSelect();
     setCaseMeta();
-    setTraceStatus(`✅ Deleted case: ${escapeHtml(name)}`, false);
+
+    // show undo
+    setTraceStatus(`✅ Deleted case: ${escapeHtml(name)}. <button id="traceUndoDelete" class="about-btn" style="margin-left:8px;">Undo</button>`, false);
+    const btn = el("traceUndoDelete");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        if (!lastDeletedCase) return;
+        const cs = loadCases();
+        cs.push(lastDeletedCase);
+        saveCases(cs);
+        lastDeletedCase = null;
+        refreshCaseSelect();
+        setTraceStatus("✅ Undo: case restored.", false);
+        clearTimeout(undoDeleteTimer);
+      });
+    }
+
+    // clear undo after 10s
+    clearTimeout(undoDeleteTimer);
+    undoDeleteTimer = setTimeout(() => { lastDeletedCase = null; setTraceStatus("Deleted (undo expired).", false); }, 10000);
   }
 
   function setCaseMeta(caseObj) {
@@ -1023,10 +1252,16 @@
   }
 
   // -----------------------------
-  // Trace engine (Payments BFS)
+  // Trace engine (Payments BFS) with concurrency & caching
   // -----------------------------
   async function runTrace() {
     if (traceRunning) return;
+
+    // if ISO start/end fields have values, convert them to ledgers before running
+    const hasIso = (el("traceStartISO")?.value || "") || (el("traceEndISO")?.value || "");
+    if (hasIso) {
+      await applyIsoWindowToLedgers();
+    }
 
     const inputs = getCurrentInputs();
 
@@ -1041,8 +1276,10 @@
     traceRunning = true;
     traceCancelled = false;
     lastResult = null;
+    sessionCache = new Map(); // new session cache for each run
 
     setTraceStatus(`⏳ Starting trace… (victim + ${seeds.length} linked)`, false);
+    updateTraceProgress(0, "Starting…");
     disableTraceControls(true);
     clearResults();
 
@@ -1055,11 +1292,13 @@
         ledgerMax: Number.isFinite(inputs.ledgerMax) ? inputs.ledgerMax : -1,
         perAccountTxLimit: inputs.perAccountTxLimit,
         maxEdges: inputs.maxEdges,
+        concurrency: inputs.concurrency,
 
         // filters
         onlyXrp: inputs.onlyXrp,
         includeIssued: inputs.includeIssued,
         minXrp: inputs.minXrp,
+        excludeList: inputs.excludeList,
 
         // stop conditions
         stopOnHub: inputs.stopOnHub,
@@ -1088,6 +1327,8 @@
     } finally {
       traceRunning = false;
       disableTraceControls(false);
+      updateTraceProgress(100, "Done");
+      setTimeout(clearTraceProgress, 1200);
       refreshCaseSelect();
       setCaseMeta();
     }
@@ -1097,12 +1338,13 @@
     if (!traceRunning) return;
     traceCancelled = true;
     setTraceStatus("🟡 Cancelling…", false);
+    updateTraceProgress(null, "Cancelling…");
   }
 
   async function traceOutgoingPaymentsBFS(opts) {
     const {
-      victim, seeds, maxHops, ledgerMin, ledgerMax, perAccountTxLimit, maxEdges,
-      onlyXrp, includeIssued, minXrp,
+      victim, seeds, maxHops, ledgerMin, ledgerMax, perAccountTxLimit, maxEdges, concurrency,
+      onlyXrp, includeIssued, minXrp, excludeList,
       stopOnHub, hubDegree, stopOnFanIn, fanInDegree
     } = opts;
 
@@ -1169,82 +1411,112 @@
       return true;
     }
 
+    // Queue processing with limited concurrency: process in BFS-style levels but allow up to concurrency accounts at once
     while (queue.length) {
       if (traceCancelled) break;
       if (edges.length >= maxEdges) break;
 
-      const { account, depth, root } = queue.shift();
-      maxDepthReached = Math.max(maxDepthReached, depth);
-
-      setTraceStatus(
-        `🔍 Depth ${depth}/${maxHops} • edges ${edges.length}/${maxEdges} • ${escapeHtml(shortAddr(account))}`,
-        false
-      );
-
-      if (depth >= maxHops) {
-        terminals.add(account);
-        if (!terminalReasons.has(account)) terminalReasons.set(account, "max-hops reached");
-        continue;
+      // prepare a batch
+      const batch = [];
+      for (let i = 0; i < (concurrency || DEFAULTS.concurrency) && queue.length; i++) {
+        batch.push(queue.shift());
       }
 
-      // stop conditions check (for nodes beyond root)
-      if (!shouldExpand(account)) continue;
+      // map to promises
+      const promises = batch.map(async (item) => {
+        const { account, depth, root } = item;
+        maxDepthReached = Math.max(maxDepthReached, depth);
 
-      const outgoing = await fetchOutgoingPaymentEdges(account, {
-        ledgerMin,
-        ledgerMax,
-        perAccountTxLimit,
-        onlyXrp,
-        includeIssued,
-        minXrp,
-        victim // apply minXrp mainly to victim flows; still keep edge if below? we filter here for simplicity
+        setTraceStatus(
+          `🔍 Depth ${depth}/${maxHops} • edges ${edges.length}/${maxEdges} • ${escapeHtml(shortAddr(account))}`,
+          false
+        );
+        updateTraceProgress(Math.min(99, Math.round((edges.length / Math.max(1, maxEdges)) * 90)), `Depth ${depth} • edges ${edges.length}`);
+
+        if (depth >= maxHops) {
+          terminals.add(account);
+          if (!terminalReasons.has(account)) terminalReasons.set(account, "max-hops reached");
+          return;
+        }
+
+        if (!shouldExpand(account)) return;
+
+        // check exclude list
+        if (excludeList && excludeList.includes(account)) {
+          terminals.add(account);
+          terminalReasons.set(account, "excluded by user");
+          return;
+        }
+
+        const key = `${account}_${ledgerMin}_${ledgerMax}_${onlyXrp ? 'xrp' : 'all'}_${perAccountTxLimit}_${minXrp}`;
+        if (sessionCache.has(key)) {
+          return { account, depth, root, outgoing: sessionCache.get(key) };
+        }
+
+        const outgoing = await fetchOutgoingPaymentEdges(account, {
+          ledgerMin,
+          ledgerMax,
+          perAccountTxLimit,
+          onlyXrp,
+          includeIssued,
+          minXrp,
+          victim
+        });
+
+        sessionCache.set(key, outgoing);
+        return { account, depth, root, outgoing };
       });
 
-      for (const e of outgoing) {
+      const results = await Promise.all(promises);
+
+      for (const res of results) {
         if (traceCancelled) break;
-        if (edges.length >= maxEdges) break;
+        if (!res) continue;
+        const { account, depth, root, outgoing } = res;
 
-        const edge = {
-          ...e,
-          depth,
-          root
-        };
+        for (const e of (outgoing || [])) {
+          if (traceCancelled) break;
+          if (edges.length >= maxEdges) break;
 
-        edges.push(edge);
-        nodes.add(edge.from);
-        nodes.add(edge.to);
+          const edge = {
+            ...e,
+            depth,
+            root
+          };
 
-        bump(outDeg, edge.from);
-        bump(inDeg, edge.to);
-        recomputeDegree(edge.from);
-        recomputeDegree(edge.to);
+          edges.push(edge);
+          nodes.add(edge.from);
+          nodes.add(edge.to);
 
-        // Update parent map for shortest path for that root:
-        // only set parent first time we see node for that root
-        const pMap = parentsByRoot.get(root);
-        const dMap = depthByRoot.get(root);
-        if (pMap && dMap && !dMap.has(edge.to)) {
-          dMap.set(edge.to, (dMap.get(edge.from) ?? depth) + 1);
-          pMap.set(edge.to, { prev: edge.from, edge });
+          bump(outDeg, edge.from);
+          bump(inDeg, edge.to);
+          recomputeDegree(edge.from);
+          recomputeDegree(edge.to);
+
+          // Update parent map for shortest path for that root:
+          const pMap = parentsByRoot.get(root);
+          const dMap = depthByRoot.get(root);
+          if (pMap && dMap && !dMap.has(edge.to)) {
+            dMap.set(edge.to, (dMap.get(edge.from) ?? depth) + 1);
+            pMap.set(edge.to, { prev: edge.from, edge });
+          }
+
+          // Enqueue if not visited AND allowed to expand later
+          if (!visited.has(edge.to)) {
+            visited.add(edge.to);
+            queue.push({ account: edge.to, depth: depth + 1, root });
+
+            // if it becomes terminal by stats immediately, mark terminal but still keep node
+            shouldExpand(edge.to); // may mark terminals
+          }
         }
-
-        // Enqueue if not visited AND allowed to expand later
-        if (!visited.has(edge.to)) {
-          visited.add(edge.to);
-          queue.push({ account: edge.to, depth: depth + 1, root });
-
-          // if it becomes terminal by stats immediately, mark terminal but still keep node
-          shouldExpand(edge.to); // may mark terminals
-        }
-
-        // If a node has no outgoing edges later, it ends up terminal naturally.
       }
 
-      await sleep(60);
+      // small pause to avoid hammering connections
+      await sleep(30);
     }
 
     // Build endpoint sets: nodes that were reached but never expanded or were terminal
-    // (We already tracked terminals)
     if (!terminals.has(victim)) terminals.add(victim);
 
     return {
@@ -1391,7 +1663,6 @@
         if (isXrp && Number.isFinite(minXrp) && minXrp > 0) {
           const ax = parsed.xrp;
           if (Number.isFinite(ax)) {
-            // If they want "victim/outgoing", apply to victim only. Otherwise set victim = null to apply to all.
             const applyToThisEdge = (account === victim);
             if (applyToThisEdge && ax < minXrp) continue;
           }
@@ -1455,7 +1726,7 @@
   }
 
   // -----------------------------
-  // Results + exports + path view
+  // Results + exports + path view + graph preview
   // -----------------------------
   function renderTraceResults(result) {
     const r = el("traceResultsInInspector");
@@ -1490,7 +1761,7 @@
                 ${summary.topDests.slice(0, 10).map(d => `
                   <div class="whale-item" style="gap:10px;">
                     <span style="min-width:0;">
-                      ${escapeHtml(d.to)}
+                      <a href="${escapeHtml(EXPLORER.account(d.to))}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.to)}</a>
                       <span style="color:var(--text-secondary)">(${escapeHtml(shortAddr(d.to))})</span>
                     </span>
                     <span style="display:flex; gap:8px; align-items:center;">
@@ -1520,7 +1791,7 @@
                 ${terminalList.slice(0, 10).map(t => `
                   <div class="whale-item" style="gap:10px;">
                     <span style="min-width:0;">
-                      ${escapeHtml(t.node)}
+                      <a href="${escapeHtml(EXPLORER.account(t.node))}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.node)}</a>
                       <span style="color:var(--text-secondary)">(${escapeHtml(shortAddr(t.node))})</span>
                       <div style="color:var(--text-secondary); font-size:0.88rem; margin-top:2px;">
                         ${escapeHtml(t.reason)}
@@ -1544,15 +1815,16 @@
         <div class="about-card-top">
           <div class="about-card-icon">🧾</div>
           <div class="about-card-title">Extracted payment edges</div>
-          <div style="color: var(--text-secondary); font-weight: 800;">Actions: Copy • Inspect • Path</div>
+          <div style="color: var(--text-secondary); font-weight: 800;">Actions: Copy • Inspect • Path • Explorer</div>
         </div>
         <div class="about-card-body" style="overflow:auto;">
-          ${renderEdgesTable(result.edges)}
+          ${renderEdgesTable(result.edges, { groupByDest: !!el("traceGroupByDest")?.checked })}
         </div>
       </div>
     `;
 
     bindResultActions();
+    renderGraphPreview(result);
   }
 
   function summarizeEdges(edges, victim) {
@@ -1599,8 +1871,31 @@
     });
   }
 
-  function renderEdgesTable(edges) {
-    const rows = edges.slice(0, 1200).map((e) => `
+  function renderEdgesTable(edges, opts = {}) {
+    const { groupByDest = false } = opts;
+    const rows = (groupByDest ? groupEdgesByDest(edges) : edges).slice(0, 1200).map((e) => {
+      if (e.grouped) {
+        return `
+          <tr>
+            <td colspan="6" style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.01);">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <strong>${escapeHtml(e.to)}</strong>
+                  <div style="color:var(--text-secondary); font-size:0.92rem;">${escapeHtml(shortAddr(e.to))} • ${e.edges.length} incoming edges</div>
+                </div>
+                <div style="display:flex; gap:8px;">
+                  <button class="about-btn nalu-path" data-target="${escapeHtml(e.to)}" type="button">Path</button>
+                  <button class="about-btn nalu-copy" data-copy="${escapeHtml(e.to)}" type="button">Copy</button>
+                  <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(e.to)}" type="button">Inspect</button>
+                  <a class="about-btn" href="${escapeHtml(EXPLORER.account(e.to))}" target="_blank" rel="noopener noreferrer">Explorer</a>
+                </div>
+              </div>
+            </td>
+          </tr>
+        `;
+      }
+
+      return `
       <tr>
         <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--text-secondary);">
           ${escapeHtml(shortAddr(e.root))}<div style="font-size:0.82rem; opacity:0.9;">root</div>
@@ -1610,6 +1905,7 @@
           <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
             <button class="about-btn nalu-copy" data-copy="${escapeHtml(e.from)}" type="button">Copy</button>
             <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(e.from)}" type="button">Inspect</button>
+            <a class="about-btn" href="${escapeHtml(EXPLORER.account(e.from))}" target="_blank" rel="noopener noreferrer">Explorer</a>
           </div>
         </td>
         <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">
@@ -1618,6 +1914,7 @@
             <button class="about-btn nalu-path" data-target="${escapeHtml(e.to)}" type="button">Path</button>
             <button class="about-btn nalu-copy" data-copy="${escapeHtml(e.to)}" type="button">Copy</button>
             <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(e.to)}" type="button">Inspect</button>
+            <a class="about-btn" href="${escapeHtml(EXPLORER.account(e.to))}" target="_blank" rel="noopener noreferrer">Explorer</a>
           </div>
         </td>
         <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">
@@ -1629,11 +1926,13 @@
           ${e.tx_hash ? `
             <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
               <button class="about-btn nalu-copy" data-copy="${escapeHtml(e.tx_hash)}" type="button">Copy Tx</button>
+              <a class="about-btn" href="${escapeHtml(EXPLORER.tx(e.tx_hash))}" target="_blank" rel="noopener noreferrer">Explorer</a>
             </div>
           ` : ""}
         </td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
 
     return `
       <table style="width:100%; border-collapse: collapse; min-width: 980px;">
@@ -1651,6 +1950,22 @@
       </table>
       ${edges.length > 1200 ? `<div style="margin-top:10px; color:var(--text-secondary);">Showing first 1200 edges. Export for full data.</div>` : ""}
     `;
+  }
+
+  function groupEdgesByDest(edges) {
+    const byDest = new Map();
+    for (const e of edges) {
+      const arr = byDest.get(e.to) || [];
+      arr.push(e);
+      byDest.set(e.to, arr);
+    }
+    const out = [];
+    for (const [to, arr] of byDest.entries()) {
+      out.push({ grouped: true, to, edges: arr });
+      // push first few as individual rows as well (optional)
+      for (const e of arr) out.push(e);
+    }
+    return out;
   }
 
   function bindResultActions() {
@@ -1687,6 +2002,18 @@
         if (!isXRPLAccount(target)) return;
         if (!lastResult) return setTraceStatus("⚠️ Run a trace first to build paths.", false);
         renderPathToTarget(lastResult, target);
+      });
+    });
+
+    // Graph preview interactivity: add ability to exclude node
+    document.querySelectorAll(".nalu-exclude[data-exclude]").forEach(btn => {
+      if (btn.__bound) return;
+      btn.__bound = true;
+      btn.addEventListener("click", () => {
+        const a = btn.getAttribute("data-exclude");
+        const cur = el("traceExcludeList")?.value || "";
+        el("traceExcludeList").value = cur ? (cur + ", " + a) : a;
+        setTraceStatus(`✅ Added ${shortAddr(a)} to exclude list. Rerun trace to apply.`, false);
       });
     });
   }
@@ -1750,6 +2077,7 @@
                   <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(step.from)}" type="button">Inspect from</button>
                   <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(step.to)}" type="button">Inspect to</button>
                   ${step.tx_hash ? `<button class="about-btn nalu-copy" data-copy="${escapeHtml(step.tx_hash)}" type="button">Copy Tx</button>` : ""}
+                  ${step.tx_hash ? `<a class="about-btn" href="${escapeHtml(EXPLORER.tx(step.tx_hash))}" target="_blank" rel="noopener noreferrer">Explorer</a>` : ""}
                 </div>
               </div>
             `).join("")}
@@ -1811,6 +2139,7 @@
   function wireExportButtons(result) {
     const ej = el("traceExportJsonInInspector");
     const ec = el("traceExportCsvInInspector");
+    const copyAll = el("traceCopyAllJson");
     if (ej) {
       ej.disabled = false;
       ej.onclick = () => downloadJSON(serializeResult(result), `nalu_trace_${result.victim}_${Date.now()}.json`);
@@ -1818,6 +2147,9 @@
     if (ec) {
       ec.disabled = false;
       ec.onclick = () => downloadCSV(result.edges, `nalu_trace_edges_${result.victim}_${Date.now()}.csv`);
+    }
+    if (copyAll) {
+      copyAll.disabled = false;
     }
   }
 
@@ -1893,6 +2225,157 @@
   }
 
   // -----------------------------
+  // Graph preview (simple SVG)
+  // -----------------------------
+  function renderGraphPreview(result) {
+    const container = el("traceGraphPreview");
+    if (!container) return;
+    container.innerHTML = "";
+
+    const maxEdges = 200;
+    const edges = result.edges.slice(0, maxEdges);
+    if (!edges.length) return;
+
+    // build node list
+    const nodes = Array.from(new Set(edges.flatMap(e => [e.from, e.to])));
+    const w = Math.min(900, Math.max(400, nodes.length * 10 + 200));
+    const h = 300;
+
+    // simple circular layout
+    const centerX = w / 2;
+    const centerY = h / 2;
+    const radius = Math.min(w, h) / 2 - 40;
+
+    const nodePos = {};
+    nodes.forEach((n, i) => {
+      const ang = (i / nodes.length) * Math.PI * 2;
+      nodePos[n] = { x: centerX + Math.cos(ang) * radius, y: centerY + Math.sin(ang) * radius };
+    });
+
+    // create SVG
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+    svg.style.border = "1px solid rgba(255,255,255,0.04)";
+    svg.style.borderRadius = "8px";
+    svg.style.background = "rgba(0,0,0,0.06)";
+
+    // draw edges (lines)
+    for (const e of edges) {
+      const a = nodePos[e.from];
+      const b = nodePos[e.to];
+      if (!a || !b) continue;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(a.x));
+      line.setAttribute("y1", String(a.y));
+      line.setAttribute("x2", String(b.x));
+      line.setAttribute("y2", String(b.y));
+      line.setAttribute("stroke", "rgba(255,255,255,0.06)");
+      line.setAttribute("stroke-width", "1");
+      svg.appendChild(line);
+    }
+
+    // draw nodes
+    nodes.forEach(n => {
+      const p = nodePos[n];
+      if (!p) return;
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.style.cursor = "pointer";
+
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", String(p.x));
+      circle.setAttribute("cy", String(p.y));
+      circle.setAttribute("r", "8");
+      circle.setAttribute("fill", "#06b6d4");
+      circle.setAttribute("opacity", n === result.victim ? "1" : "0.85");
+      g.appendChild(circle);
+
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", String(p.x + 12));
+      text.setAttribute("y", String(p.y + 4));
+      text.setAttribute("fill", "var(--text-secondary)");
+      text.setAttribute("font-size", "11");
+      text.textContent = shortAddr(n);
+      g.appendChild(text);
+
+      g.addEventListener("click", () => {
+        // actions: inspect / path / exclude
+        setTraceStatus(`Node: ${n} — actions: Inspect • Path • Exclude`, false);
+        // quick action UI
+        renderNodeActionCard(n);
+      });
+
+      svg.appendChild(g);
+    });
+
+    const wrapper = document.createElement("div");
+    wrapper.style.marginTop = "12px";
+    const title = document.createElement("div");
+    title.style.fontWeight = "950";
+    title.style.color = "var(--text-primary)";
+    title.style.marginBottom = "8px";
+    title.textContent = "Graph preview (first 200 edges) — click a node for actions";
+    wrapper.appendChild(title);
+    wrapper.appendChild(svg);
+    container.appendChild(wrapper);
+  }
+
+  function renderNodeActionCard(account) {
+    const panel = el("tracePathPanel");
+    if (!panel) return;
+    panel.innerHTML = `
+      <div class="about-card">
+        <div class="about-card-top">
+          <div class="about-card-icon">🔗</div>
+          <div class="about-card-title">Node actions</div>
+          <div></div>
+        </div>
+        <div class="about-card-body">
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+            <button class="about-btn nalu-inspect" data-inspect="${escapeHtml(account)}">Inspect</button>
+            <button class="about-btn nalu-path" data-target="${escapeHtml(account)}">Path</button>
+            <button class="about-btn nalu-copy" data-copy="${escapeHtml(account)}">Copy</button>
+            <button class="about-btn nalu-exclude" data-exclude="${escapeHtml(account)}">Add to exclude</button>
+            <a class="about-btn" href="${escapeHtml(EXPLORER.account(account))}" target="_blank" rel="noopener noreferrer">Explorer</a>
+          </div>
+        </div>
+      </div>
+    `;
+    bindResultActions();
+  }
+
+  // -----------------------------
+  // Utilities
+  // -----------------------------
+  function serializeResultForCase(result) {
+    return serializeResult(result);
+  }
+
+  // -----------------------------
+  // Progress helpers
+  // -----------------------------
+  function updateTraceProgress(percent, text) {
+    const wrapper = el("traceProgressWrapper");
+    const bar = el("traceProgressBar");
+    const txt = el("traceProgressText");
+    if (!wrapper || !bar || !txt) return;
+    if (percent == null) {
+      wrapper.style.display = "none";
+      bar.style.width = "0%";
+      txt.textContent = "";
+      return;
+    }
+    wrapper.style.display = "block";
+    const p = Math.max(0, Math.min(100, Number(percent) || 0));
+    bar.style.width = `${p}%`;
+    txt.textContent = text || "";
+  }
+
+  function clearTraceProgress() {
+    updateTraceProgress(null, "");
+  }
+
+  // -----------------------------
   // Install: watch inspector activation
   // -----------------------------
   function install() {
@@ -1914,4 +2397,5 @@
     install();
     console.log(`✅ ${VERSION} loaded`);
   });
+
 })();
