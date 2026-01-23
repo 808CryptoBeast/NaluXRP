@@ -1,11 +1,6 @@
 /* =========================================
-   NaluXrp 🌊 – XRPL Connection Module (FULL)
+   NaluXrp 🌊 – XRPL Connection Module (Deep)
    Always Connected + Raw Transaction Streaming
-   - Sequential ledger queue to reduce skipping
-   - Safer retries/backoff on ledgerNotFound / load errors
-   - Prefers Ripple public servers before xrplcluster
-   - Graceful global backoff when server is overloaded
-   - Shared request wrapper (window.requestXrpl) with concurrency, inflight dedupe, backoff
    ========================================= */
 
 window.XRPL = {
@@ -14,20 +9,12 @@ window.XRPL = {
   connecting: false,
   server: null,
   reconnectAttempts: 0,
-  maxReconnectAttempts: 999,
+  maxReconnectAttempts: 999, // Never give up!
   lastLedgerTime: Date.now(),
   lastLedgerIndex: 0,
   lastCloseTimeSec: null,
   ledgerPollInterval: null,
   reconnectTimeout: null,
-
-  // Internal queue controls
-  _ledgerQueue: [],                 // sorted ascending unique
-  _processingQueue: false,
-  _retryMap: new Map(),             // ledgerIndex -> attempts
-  _lastServerInfoAt: 0,
-  _overloadedUntil: 0,              // ms timestamp when overload pause expires
-
   state: {
     ledgerIndex: 0,
     ledgerTime: null,
@@ -50,10 +37,10 @@ window.XRPL = {
     ledgerHistory: [],
     txCountHistory: [],
 
-    recentTransactions: [],
-    recentLedgers: []
+    // 🔥 Deep analytics extras
+    recentTransactions: [],   // normalized per-tx window
+    recentLedgers: []         // small ledger summary history
   },
-
   mode: "connecting",
   modeReason: "Initializing",
   network: "xrpl-mainnet"
@@ -61,28 +48,16 @@ window.XRPL = {
 
 /* ---------- CONSTANTS ---------- */
 
-const RAW_TX_WINDOW_SIZE = 800;
-const MAX_LEDGER_HISTORY = 60;
-
-const POLL_MS = 4000;
-const SERVER_INFO_TIMEOUT = 9000;
-const LEDGER_FETCH_TIMEOUT = 15000;
-
-// queue/backfill behavior
-const MAX_BACKFILL_ENQUEUE = 6;       // if we're behind, only enqueue a few at a time
-const MAX_QUEUE_SIZE = 20;
-const MAX_LEDGER_FETCH_RETRIES = 5;
+const RAW_TX_WINDOW_SIZE = 800;   // how many recent tx we keep for analytics
+const MAX_LEDGER_HISTORY = 60;    // how many recent ledger summaries we keep
 
 /* ---------- NETWORK PROFILES ---------- */
 
 const XRPL_SERVER_PROFILES = {
   "xrpl-mainnet": [
-    // Prefer Ripple public endpoints first
+    { url: "wss://xrplcluster.com", name: "XRPL Cluster" },
     { url: "wss://s2.ripple.com", name: "Ripple S2" },
     { url: "wss://s1.ripple.com", name: "Ripple S1" },
-
-    // Fallbacks
-    { url: "wss://xrplcluster.com", name: "XRPL Cluster" },
     { url: "wss://xrpl.link", name: "XRPL Link" }
   ],
   "xrpl-testnet": [
@@ -98,7 +73,9 @@ const XRPL_SERVER_PROFILES = {
 
 function getCurrentServerList() {
   const list = XRPL_SERVER_PROFILES[window.XRPL.network];
-  return Array.isArray(list) && list.length ? list : XRPL_SERVER_PROFILES["xrpl-mainnet"];
+  return Array.isArray(list) && list.length
+    ? list
+    : XRPL_SERVER_PROFILES["xrpl-mainnet"];
 }
 
 function safeNotify(message, type = "info", timeout = 3000) {
@@ -161,28 +138,56 @@ function parseXrpAmount(amount) {
 
 /* ---------- TX EXTRACTION / NORMALIZATION ---------- */
 
+/**
+ * Normalize any possible XRPL tx entry shape into { tx, meta }
+ */
 function extractTxAndMeta(entry) {
-  if (!entry || typeof entry !== "object") return { tx: null, meta: null };
+  if (!entry || typeof entry !== "object") {
+    return { tx: null, meta: null };
+  }
 
+  // (1) Standard XRPL "tx_json + meta"
   if (entry.tx_json && typeof entry.tx_json === "object") {
-    return { tx: entry.tx_json, meta: entry.meta || entry.metaData || null };
+    return {
+      tx: entry.tx_json,
+      meta: entry.meta || entry.metaData || null
+    };
   }
 
+  // (2) Already a transaction-like object
   if (entry.TransactionType) {
-    return { tx: entry, meta: entry.meta || entry.metaData || null };
+    return {
+      tx: entry,
+      meta: entry.meta || entry.metaData || null
+    };
   }
 
+  // (3) Embedded in `tx`
   if (entry.tx && typeof entry.tx === "object" && entry.tx.TransactionType) {
-    return { tx: entry.tx, meta: entry.meta || entry.metaData || null };
+    return {
+      tx: entry.tx,
+      meta: entry.meta || entry.metaData || null
+    };
   }
 
-  if (entry.transaction && typeof entry.transaction === "object" && entry.transaction.TransactionType) {
-    return { tx: entry.transaction, meta: entry.meta || entry.metaData || null };
+  // (4) Embedded in `transaction`
+  if (
+    entry.transaction &&
+    typeof entry.transaction === "object" &&
+    entry.transaction.TransactionType
+  ) {
+    return {
+      tx: entry.transaction,
+      meta: entry.meta || entry.metaData || null
+    };
   }
 
   return { tx: null, meta: null };
 }
 
+/**
+ * Normalized transaction structure used by analytics + flow detection
+ */
 function normalizeTransaction(entry, ledgerIndex, closeTime) {
   const { tx, meta } = extractTxAndMeta(entry);
   if (!tx || !tx.TransactionType) return null;
@@ -211,7 +216,8 @@ function normalizeTransaction(entry, ledgerIndex, closeTime) {
   const amountXRP = parseXrpAmount(delivered);
 
   const sourceTag = tx.SourceTag != null ? tx.SourceTag : tx.Source_Tag;
-  const destinationTag = tx.DestinationTag != null ? tx.DestinationTag : tx.Destination_Tag;
+  const destinationTag =
+    tx.DestinationTag != null ? tx.DestinationTag : tx.Destination_Tag;
 
   return {
     hash: hash || undefined,
@@ -225,7 +231,10 @@ function normalizeTransaction(entry, ledgerIndex, closeTime) {
     feeDrops,
     feeXRP,
     success,
-    result: meta && typeof meta.TransactionResult === "string" ? meta.TransactionResult : null,
+    result:
+      meta && typeof meta.TransactionResult === "string"
+        ? meta.TransactionResult
+        : null,
     sequence: tx.Sequence != null ? tx.Sequence : null,
     sourceTag: sourceTag != null ? sourceTag : null,
     destinationTag: destinationTag != null ? destinationTag : null,
@@ -247,66 +256,9 @@ function setXRPLNetwork(networkId) {
   window.XRPL.reconnectAttempts = 0;
   setMode("connecting", "Network switched");
 
-  // reset queue
-  window.XRPL._ledgerQueue = [];
-  window.XRPL._retryMap.clear();
-
-  cleanupConnection().then(() => connectXRPL());
-}
-
-/* ---------- QUEUE HELPERS (SEQUENTIAL) ---------- */
-
-function enqueueLedger(index, reason = "") {
-  const n = Number(index);
-  if (!Number.isFinite(n) || n <= 0) return;
-
-  // prevent queue explosion
-  if (window.XRPL._ledgerQueue.length >= MAX_QUEUE_SIZE) {
-    // keep only expected next + newest
-    const expected = window.XRPL.lastLedgerIndex + 1;
-    window.XRPL._ledgerQueue = window.XRPL._ledgerQueue.filter((x) => x === expected);
-  }
-
-  if (!window.XRPL._ledgerQueue.includes(n)) {
-    window.XRPL._ledgerQueue.push(n);
-    window.XRPL._ledgerQueue.sort((a, b) => a - b);
-  }
-
-  if (reason) {
-    console.log(`🧾 Queue ledger ${n} (${reason}) → q=[${window.XRPL._ledgerQueue.slice(0, 8).join(", ")}${window.XRPL._ledgerQueue.length > 8 ? "…" : ""}]`);
-  }
-
-  processLedgerQueue();
-}
-
-function enqueueBackfillRange(from, to, reason = "backfill") {
-  if (to <= from) return;
-
-  const diff = to - from;
-  if (diff <= MAX_BACKFILL_ENQUEUE) {
-    for (let i = from; i <= to; i++) enqueueLedger(i, reason);
-    return;
-  }
-
-  // enqueue a small sequential chunk + the newest, so we don’t spam
-  for (let i = from; i < from + MAX_BACKFILL_ENQUEUE; i++) enqueueLedger(i, reason);
-  enqueueLedger(to, reason + ":latest");
-}
-
-function nowMs() {
-  return Date.now();
-}
-
-function isOverloaded() {
-  return window.XRPL._overloadedUntil && nowMs() < window.XRPL._overloadedUntil;
-}
-
-function setOverloaded(ms, reason = "server overload") {
-  const until = nowMs() + Math.max(0, Number(ms) || 0);
-  window.XRPL._overloadedUntil = until;
-  setMode("throttled", `${reason} until ${new Date(until).toISOString()}`);
-  safeNotify(`Server overloaded — pausing requests for ${Math.round(ms)}ms`, "warn", 6000);
-  console.warn(`⏸️ XRPL overloaded: pausing requests for ${ms}ms`);
+  cleanupConnection().then(function () {
+    connectXRPL();
+  });
 }
 
 /* ---------- MAIN CONNECTION ---------- */
@@ -345,15 +297,19 @@ async function attemptConnection(server) {
     await cleanupConnection();
 
     window.XRPL.client = new xrpl.Client(server.url, {
-      timeout: SERVER_INFO_TIMEOUT,
-      connectionTimeout: SERVER_INFO_TIMEOUT + 6000
+      timeout: 10000,
+      connectionTimeout: 15000
     });
 
     setupConnectionListeners();
 
     await Promise.race([
       window.XRPL.client.connect(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), SERVER_INFO_TIMEOUT + 6000))
+      new Promise(function (_, reject) {
+        setTimeout(function () {
+          reject(new Error("Timeout"));
+        }, 15000);
+      })
     ]);
 
     const info = await verifyConnectionAndSubscribe();
@@ -372,15 +328,6 @@ async function attemptConnection(server) {
     dispatchConnectionEvent();
 
     console.log("✅ Connected to", server.name);
-
-    // After connect, enqueue current ledger to ensure stream starts
-    try {
-      const seq = info.validated_ledger?.seq;
-      if (seq && seq > window.XRPL.lastLedgerIndex) {
-        enqueueBackfillRange(window.XRPL.lastLedgerIndex + 1, seq, "post-connect");
-      }
-    } catch (_) {}
-
     return true;
   } catch (err) {
     console.warn("❌", server.name, "failed:", err.message);
@@ -395,11 +342,20 @@ async function verifyConnectionAndSubscribe() {
   const client = window.XRPL.client;
   if (!client) return null;
 
-  const response = await client.request({ command: "server_info", timeout: SERVER_INFO_TIMEOUT });
-  if (!response.result || !response.result.info) throw new Error("Invalid server_info");
+  const response = await client.request({
+    command: "server_info",
+    timeout: 10000
+  });
+
+  if (!response.result || !response.result.info) {
+    throw new Error("Invalid server_info");
+  }
 
   try {
-    await client.request({ command: "subscribe", streams: ["ledger"] });
+    await client.request({
+      command: "subscribe",
+      streams: ["ledger"]
+    });
     console.log("✅ Subscribed to ledger stream");
   } catch (e) {
     console.warn("⚠️ Subscription failed, using polling:", e.message);
@@ -425,25 +381,37 @@ function updateInitialState(info) {
   s.validators = info.peers || 0;
   s.quorum = info.validation_quorum || 0.8;
 
-  console.log("📊 Initial: Ledger #", s.ledgerIndex, ",", s.txPerLedger, "tx");
+  console.log(
+    "📊 Initial: Ledger #",
+    s.ledgerIndex,
+    ",",
+    s.txPerLedger,
+    "tx"
+  );
+
+  // Send initial state to dashboard + analytics
   sendStateToDashboard();
 }
 
 /* ---------- ACTIVE POLLING ---------- */
 
 function startActivePolling() {
-  if (window.XRPL.ledgerPollInterval) clearInterval(window.XRPL.ledgerPollInterval);
+  if (window.XRPL.ledgerPollInterval) {
+    clearInterval(window.XRPL.ledgerPollInterval);
+  }
 
-  window.XRPL.ledgerPollInterval = setInterval(async () => {
+  window.XRPL.ledgerPollInterval = setInterval(async function () {
     if (!window.XRPL.connected || !window.XRPL.client) return;
     try {
       await checkForNewLedger();
     } catch (e) {
       console.warn("Polling error:", e.message);
     }
-  }, POLL_MS);
+  }, 4000);
 
-  setTimeout(() => checkForNewLedger(), 1000);
+  setTimeout(function () {
+    checkForNewLedger();
+  }, 1000);
 }
 
 /* ---------- CHECK FOR NEW LEDGER ---------- */
@@ -451,46 +419,30 @@ function startActivePolling() {
 async function checkForNewLedger() {
   if (!window.XRPL.connected || !window.XRPL.client) return;
 
-  // Respect global overload pause
-  if (isOverloaded()) {
-    const wait = window.XRPL._overloadedUntil - nowMs();
-    console.warn(`⏸️ checkForNewLedger paused due to overload for ${Math.round(wait)}ms`);
-    return;
-  }
-
   try {
-    const resp = await window.XRPL.client.request({ command: "server_info", timeout: SERVER_INFO_TIMEOUT });
+    const resp = await window.XRPL.client.request({
+      command: "server_info",
+      timeout: 8000
+    });
+
     const info = resp.result.info;
-    if (!info) return;
-
-    window.XRPL._lastServerInfoAt = Date.now();
-
     const currentLedger = info.validated_ledger?.seq;
+
     if (!currentLedger) return;
 
     if (currentLedger > window.XRPL.lastLedgerIndex) {
       console.log("🆕 New ledger:", "#" + currentLedger);
-
-      // Enqueue missing ledgers sequentially (but don’t spam)
-      enqueueBackfillRange(window.XRPL.lastLedgerIndex + 1, currentLedger, "server_info");
-      processLedgerQueue();
+      await fetchAndProcessLedger(currentLedger, info);
     } else {
       window.XRPL.lastLedgerTime = Date.now();
     }
   } catch (error) {
-    const msg = String(error?.message || error || "").toLowerCase();
-    console.warn("Check ledger error:", msg);
-
-    // If server_info contains overload signals, set global backoff
-    if (msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit") || msg.includes("load")) {
-      const jitter = Math.round(Math.random() * 3000);
-      const pb = 8000 + jitter;
-      setOverloaded(pb, "server_info reported high load");
-      return;
-    }
-
-    if (msg.includes("timeout") || msg.includes("closed")) {
-      handleDisconnection("ws_disconnected");
+    console.warn("Check ledger error:", error.message);
+    if (
+      error.message.includes("timeout") ||
+      error.message.includes("closed")
+    ) {
+      handleDisconnection();
     }
   }
 }
@@ -500,39 +452,48 @@ async function checkForNewLedger() {
 async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
   if (!window.XRPL.client) return;
 
-  const idx = Number(ledgerIndex);
-  if (!Number.isFinite(idx) || idx <= 0) return;
-
-  const attempt = (window.XRPL._retryMap.get(idx) || 0) + 1;
-  window.XRPL._retryMap.set(idx, attempt);
-
-  console.log(`🔍 Fetching ledger # ${idx} with transactions... (attempt ${attempt})`);
-
-  // If server is overloaded globally, skip processing now
-  if (isOverloaded()) {
-    console.warn(`⏸️ Skipping fetch for ledger ${idx} due to overload until ${new Date(window.XRPL._overloadedUntil).toISOString()}`);
-    return false;
-  }
-
   try {
+    console.log(
+      "🔍 Fetching ledger #",
+      ledgerIndex,
+      "with transactions..."
+    );
+
     const ledgerResp = await window.XRPL.client.request({
       command: "ledger",
-      ledger_index: idx,
+      ledger_index: ledgerIndex,
       transactions: true,
       expand: true,
-      binary: false,
-      timeout: LEDGER_FETCH_TIMEOUT
+      binary: false
     });
 
     const ledgerData = ledgerResp.result.ledger;
-    if (!ledgerData) throw new Error("No ledger data in response");
+    if (!ledgerData) {
+      console.warn("⚠️ No ledger data in response");
+      return;
+    }
 
-    const closeDate = ledgerData.close_time ? rippleTimeToDate(ledgerData.close_time) : new Date();
+    console.log("📊 Ledger data structure:", {
+      ledger_index: ledgerData.ledger_index,
+      has_transactions: !!ledgerData.transactions,
+      transactions_type: typeof ledgerData.transactions,
+      transactions_length: Array.isArray(ledgerData.transactions)
+        ? ledgerData.transactions.length
+        : "not an array",
+      transaction_hash: ledgerData.transaction_hash
+    });
+
+    const closeDate = ledgerData.close_time
+      ? rippleTimeToDate(ledgerData.close_time)
+      : new Date();
+
     const closeTimeSec = Math.floor(closeDate.getTime() / 1000);
-
     let durationSec = 4.0;
     if (window.XRPL.lastCloseTimeSec != null) {
-      durationSec = Math.max(1, closeTimeSec - window.XRPL.lastCloseTimeSec);
+      durationSec = Math.max(
+        1,
+        closeTimeSec - window.XRPL.lastCloseTimeSec
+      );
     }
     window.XRPL.lastCloseTimeSec = closeTimeSec;
 
@@ -540,138 +501,126 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
     const totalTx = txMetrics.totalTx;
     const tps = totalTx > 0 ? totalTx / durationSec : 0;
 
+    console.log(
+      "✅ Processed ledger #",
+      ledgerIndex,
+      ":",
+      totalTx,
+      "transactions,",
+      tps.toFixed(2),
+      "TPS"
+    );
+
     const s = window.XRPL.state;
-    s.ledgerIndex = Number(ledgerData.ledger_index || idx);
+    s.ledgerIndex = Number(ledgerData.ledger_index || ledgerIndex);
     s.ledgerTime = closeDate;
     s.txPerLedger = totalTx;
     s.txnPerSec = tps;
+    s.transactionTypes = { ...txMetrics.aggregatedTypes };
 
-    // IMPORTANT: always overwrite transaction types for this ledger
-    s.transactionTypes = {
-      Payment: txMetrics.aggregatedTypes.Payment || 0,
-      Offer: txMetrics.aggregatedTypes.Offer || 0,
-      NFT: txMetrics.aggregatedTypes.NFT || 0,
-      TrustSet: txMetrics.aggregatedTypes.TrustSet || 0,
-      Other: txMetrics.aggregatedTypes.Other || 0
-    };
+    if (txMetrics.avgFeeXRP > 0) {
+      s.feeAvg = txMetrics.avgFeeXRP;
+    }
 
-    if (txMetrics.avgFeeXRP > 0) s.feeAvg = txMetrics.avgFeeXRP;
-
+    // ---- History arrays for charts ----
     updateHistory("tpsHistory", tps);
     updateHistory("feeHistory", s.feeAvg);
     updateHistory("ledgerHistory", s.ledgerIndex);
     updateHistory("txCountHistory", totalTx);
 
+    // ---- Close time history for orb / timing analytics ----
     if (!Array.isArray(s.closeTimes)) s.closeTimes = [];
-    s.closeTimes.push({ label: "#" + s.ledgerIndex, value: durationSec });
+    s.closeTimes.push({
+      label: "#" + s.ledgerIndex,
+      value: durationSec
+    });
     if (s.closeTimes.length > 25) s.closeTimes.shift();
 
+    // ---- Deep analytics: recent ledger summary ----
     if (!Array.isArray(s.recentLedgers)) s.recentLedgers = [];
     s.recentLedgers.push({
       ledgerIndex: s.ledgerIndex,
       closeTime: closeDate.toISOString(),
-      totalTx,
-      tps,
+      totalTx: totalTx,
+      tps: tps,
       avgFeeXRP: txMetrics.avgFeeXRP,
       successRate: txMetrics.successRate
     });
     if (s.recentLedgers.length > MAX_LEDGER_HISTORY) {
-      s.recentLedgers.splice(0, s.recentLedgers.length - MAX_LEDGER_HISTORY);
+      s.recentLedgers.splice(
+        0,
+        s.recentLedgers.length - MAX_LEDGER_HISTORY
+      );
     }
 
+    // ---- Deep analytics: append normalized per-transaction data ----
     const normalizedBatch = txMetrics.normalized || [];
-    if (!Array.isArray(s.recentTransactions)) s.recentTransactions = [];
+    if (!Array.isArray(s.recentTransactions)) {
+      s.recentTransactions = [];
+    }
     if (normalizedBatch.length) {
-      s.recentTransactions.push(...normalizedBatch);
+      Array.prototype.push.apply(s.recentTransactions, normalizedBatch);
       if (s.recentTransactions.length > RAW_TX_WINDOW_SIZE) {
-        s.recentTransactions.splice(0, s.recentTransactions.length - RAW_TX_WINDOW_SIZE);
+        s.recentTransactions.splice(
+          0,
+          s.recentTransactions.length - RAW_TX_WINDOW_SIZE
+        );
       }
     }
 
-    // only after successful processing:
     window.XRPL.lastLedgerIndex = s.ledgerIndex;
     window.XRPL.lastLedgerTime = Date.now();
 
-    // Refresh server info occasionally (don’t spam)
+    // ---- Optionally refresh server info for load / fee / validators ----
     let info = serverInfoHint || null;
-    const shouldRefresh = Date.now() - (window.XRPL._lastServerInfoAt || 0) > 12000;
-    if (!info && shouldRefresh) {
+    if (!info) {
       try {
-        const resp = await window.XRPL.client.request({ command: "server_info", timeout: SERVER_INFO_TIMEOUT });
+        const resp = await window.XRPL.client.request({
+          command: "server_info",
+          timeout: 8000
+        });
         info = resp.result.info;
-      } catch (_) {}
+      } catch (e) {
+        info = null;
+      }
     }
 
     if (info) {
-      s.feeAvg = (info.validated_ledger && info.validated_ledger.base_fee_xrp) || s.feeAvg;
+      s.feeAvg =
+        (info.validated_ledger &&
+          info.validated_ledger.base_fee_xrp) ||
+        s.feeAvg;
       s.loadFee = (info.load_factor || 1000000) / 1000000;
       s.validators = info.peers || s.validators;
     }
 
-    // Emit batch event for consumers
+    console.log(
+      "📊 Ledger #",
+      s.ledgerIndex,
+      "|",
+      totalTx,
+      "tx |",
+      durationSec.toFixed(2),
+      "s | TPS",
+      tps.toFixed(2)
+    );
+    console.log("📈 Transaction types:", s.transactionTypes);
+
+    // ---- Emit raw tx batch event for advanced consumers ----
     window.dispatchEvent(
       new CustomEvent("xrpl-tx-batch", {
-        detail: { ledgerIndex: s.ledgerIndex, closeTime: closeDate, transactions: normalizedBatch }
+        detail: {
+          ledgerIndex: s.ledgerIndex,
+          closeTime: closeDate,
+          transactions: normalizedBatch
+        }
       })
     );
 
-    // Push updated state
+    // ---- Push updated state to dashboard + analytics ----
     sendStateToDashboard();
-    // cleanup retry count for successful ledger
-    window.XRPL._retryMap.delete(idx);
-    return true;
   } catch (error) {
-    const msg = String(error?.message || error || "");
-    console.warn("Fetch ledger error:", msg);
-
-    // Retry logic
-    const lower = msg.toLowerCase();
-    const isNotFound = lower.includes("ledgernotfound");
-    const isLoad = lower.includes("placing too much load") || lower.includes("too much load") || lower.includes("too_many_requests") || lower.includes("rate limit") || lower.includes("load");
-    const isClosed = lower.includes("websocket was closed") || lower.includes("disconnected") || lower.includes("notconnected");
-
-    if (isClosed) {
-      handleDisconnection("ws_disconnected");
-      return false;
-    }
-
-    // If the server indicates it's overloaded, set a global backoff pause
-    if (isLoad) {
-      // compute backoff with attempt-based exponential + jitter
-      const backoffBase = Math.min(1200 * attempt, 7000);
-      const jitter = Math.round(Math.random() * 2000);
-      let backoff = backoffBase + jitter;
-
-      // attempt to read server_info briefly to add penalty if load_factor elevated
-      try {
-        const infoResp = await window.XRPL.client.request({ command: "server_info", timeout: 1200 });
-        const info = infoResp?.result?.info;
-        if (info && info.load_factor) {
-          const lf = Number(info.load_factor) || 1;
-          if (lf > 1) backoff += Math.round((lf - 1) * 1500);
-        }
-      } catch (_) {
-        // ignore
-      }
-
-      // Set a global pause so all modules back off for a bit
-      const pauseMs = Math.min(Math.max(backoff, 3000), 20000);
-      setOverloaded(pauseMs, "ledger fetch reported overloaded");
-      // keep ledger in queue (we will try again later after pause)
-      return false;
-    }
-
-    if ((isNotFound || isLoad) && attempt <= MAX_LEDGER_FETCH_RETRIES) {
-      const backoff = Math.min(1200 * attempt, 7000);
-      await new Promise((r) => setTimeout(r, backoff));
-      // keep ledger in queue; don’t advance
-      return false;
-    }
-
-    // Give up after max retries: remove it from queue so we don’t freeze forever.
-    window.XRPL._ledgerQueue = window.XRPL._ledgerQueue.filter((x) => x !== idx);
-    window.XRPL._retryMap.delete(idx);
-    return false;
+    console.warn("Fetch ledger error:", error.message);
   }
 }
 
@@ -680,19 +629,41 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
 function analyzeLedgerTransactions(ledger) {
   const txs = ledger.transactions || [];
 
-  const aggregatedTypes = { Payment: 0, Offer: 0, NFT: 0, TrustSet: 0, Other: 0 };
+  console.log("🔍 Analyzing ledger transactions:", {
+    ledgerIndex: ledger.ledger_index,
+    transactionsLength: txs.length
+  });
+
+  const aggregatedTypes = {
+    Payment: 0,
+    Offer: 0,
+    NFT: 0,
+    TrustSet: 0,
+    Other: 0
+  };
+
   let totalTx = 0;
   let successCount = 0;
   let totalFeeDrops = 0;
+
+  // Keep normalized txs here for deep analytics
   const normalized = [];
 
   function classify(txType) {
     if (!txType) return "Other";
     if (txType === "Payment") return "Payment";
-    if (txType === "OfferCreate" || txType === "OfferCancel" || (typeof txType === "string" && txType.indexOf("AMM") === 0)) {
+    if (
+      txType === "OfferCreate" ||
+      txType === "OfferCancel" ||
+      (typeof txType === "string" && txType.indexOf("AMM") === 0)
+    ) {
       return "Offer";
     }
-    if (typeof txType === "string" && (txType.indexOf("NFToken") === 0 || txType.indexOf("NFT") === 0)) {
+    if (
+      typeof txType === "string" &&
+      (txType.indexOf("NFToken") === 0 ||
+        txType.indexOf("NFT") === 0)
+    ) {
       return "NFT";
     }
     if (txType === "TrustSet") return "TrustSet";
@@ -701,37 +672,80 @@ function analyzeLedgerTransactions(ledger) {
 
   for (let i = 0; i < txs.length; i++) {
     const entry = txs[i];
-    const { tx, meta } = extractTxAndMeta(entry);
-    if (!tx || !tx.TransactionType) continue;
+    const extracted = extractTxAndMeta(entry);
+    const tx = extracted.tx;
+    const meta = extracted.meta;
+
+    if (!tx || !tx.TransactionType) {
+      if (i < 2) {
+        console.warn(
+          "⚠️ Transaction",
+          i,
+          "has no valid TransactionType",
+          entry
+        );
+      }
+      continue;
+    }
 
     totalTx += 1;
 
     const cat = classify(tx.TransactionType);
-    aggregatedTypes[cat] = (aggregatedTypes[cat] || 0) + 1;
+    if (!aggregatedTypes[cat]) aggregatedTypes[cat] = 0;
+    aggregatedTypes[cat] += 1;
 
     if (meta && typeof meta.TransactionResult === "string") {
-      if (meta.TransactionResult.indexOf("tes") === 0) successCount += 1;
+      if (meta.TransactionResult.indexOf("tes") === 0) {
+        successCount += 1;
+      }
     } else {
+      // if we don't have meta, assume success (common in some responses)
       successCount += 1;
     }
 
     if (tx.Fee != null) {
       const feeDrops = Number(tx.Fee);
-      if (!Number.isNaN(feeDrops)) totalFeeDrops += feeDrops;
+      if (!Number.isNaN(feeDrops)) {
+        totalFeeDrops += feeDrops;
+      }
     }
 
     const n = normalizeTransaction(
       entry,
       ledger.ledger_index,
-      ledger.close_time ? rippleTimeToDate(ledger.close_time) : null
+      ledger.close_time
+        ? rippleTimeToDate(ledger.close_time)
+        : null
     );
-    if (n) normalized.push(n);
+    if (n) {
+      normalized.push(n);
+    }
   }
 
-  const avgFeeXRP = totalTx > 0 && totalFeeDrops > 0 ? totalFeeDrops / 1_000_000 / totalTx : 0;
-  const successRate = totalTx > 0 ? (successCount / totalTx) * 100 : 100;
+  const avgFeeXRP =
+    totalTx > 0 && totalFeeDrops > 0
+      ? totalFeeDrops / 1_000_000 / totalTx
+      : 0;
 
-  return { totalTx, aggregatedTypes, avgFeeXRP, successRate, normalized };
+  const successRate =
+    totalTx > 0 ? (successCount / totalTx) * 100 : 100;
+
+  const result = {
+    totalTx: totalTx,
+    aggregatedTypes: aggregatedTypes,
+    avgFeeXRP: avgFeeXRP,
+    successRate: successRate,
+    normalized: normalized
+  };
+
+  console.log("📊 Transaction analysis result:", {
+    totalTx: totalTx,
+    avgFeeXRP: avgFeeXRP,
+    successRate: successRate,
+    byType: aggregatedTypes
+  });
+
+  return result;
 }
 
 /* ---------- SEND STATE TO DASHBOARD + ANALYTICS ---------- */
@@ -739,10 +753,20 @@ function analyzeLedgerTransactions(ledger) {
 function sendStateToDashboard() {
   const s = window.XRPL.state;
 
+  console.log("📨 Sending XRPL state to dashboard:", {
+    ledgerIndex: s.ledgerIndex,
+    txPerLedger: s.txPerLedger,
+    transactionTypes: s.transactionTypes,
+    recentTxCount: Array.isArray(s.recentTransactions)
+      ? s.recentTransactions.length
+      : 0
+  });
+
+  // Ensure transactionTypes is properly formatted for Dashboard
   const txTypes = {
     Payment: s.transactionTypes.Payment || 0,
     Offer: s.transactionTypes.Offer || 0,
-    OfferCreate: 0,
+    OfferCreate: 0, // aggregated into Offer already
     OfferCancel: 0,
     NFT: s.transactionTypes.NFT || 0,
     NFTokenMint: 0,
@@ -751,6 +775,7 @@ function sendStateToDashboard() {
     Other: s.transactionTypes.Other || 0
   };
 
+  // Build dashboard view model (for NaluDashboard)
   const dashboardState = {
     ledgerIndex: s.ledgerIndex,
     ledgerAge: "just now",
@@ -768,7 +793,19 @@ function sendStateToDashboard() {
     loadFactor: s.loadFee,
     loadNote: s.loadFee > 1.2 ? "Elevated" : "Normal",
     closeTimes: s.closeTimes || [],
-    txTypes,
+    txTypes: txTypes,
+    amm: {},          // can be filled by future modules
+    trustlines: {},
+    nfts: {},
+    whales: [],
+    latency: {
+      avgMs: 0,
+      fastShare: 0.7,
+      mediumShare: 0.2,
+      slowShare: 0.1
+    },
+    orderbook: [],
+    gateways: [],
     latestLedger: {
       ledgerIndex: s.ledgerIndex,
       closeTime: s.ledgerTime || new Date(),
@@ -777,23 +814,36 @@ function sendStateToDashboard() {
       avgFee: s.feeAvg,
       successRate: 99.9
     },
+
+    // optional: deep analytics helpers (dashboard may ignore)
     recentTransactions: s.recentTransactions || [],
     recentLedgers: s.recentLedgers || []
   };
 
-  if (window.NaluDashboard && typeof window.NaluDashboard.applyXRPLState === "function") {
+  console.log("📦 Complete dashboard state:", dashboardState);
+
+  // Direct call into Dashboard module
+  if (
+    window.NaluDashboard &&
+    typeof window.NaluDashboard.applyXRPLState === "function"
+  ) {
     try {
       window.NaluDashboard.applyXRPLState(dashboardState);
     } catch (e) {
-      console.warn("Dashboard applyXRPLState error:", e && e.message ? e.message : e);
+      console.warn(
+        "Dashboard applyXRPLState error:",
+        e && e.message ? e.message : e
+      );
     }
   }
 
+  // Broadcast full raw XRPL.state snapshot for analytics & others
   window.dispatchEvent(
     new CustomEvent("xrpl-ledger", {
       detail: {
         ...window.XRPL.state,
-        txTypes,
+        // also include formatted txTypes & ledger summary for convenience
+        txTypes: txTypes,
         latestLedger: dashboardState.latestLedger
       }
     })
@@ -808,37 +858,33 @@ function setupConnectionListeners() {
 
   client.removeAllListeners();
 
-  client.on("ledgerClosed", (ledger) => {
+  client.on("ledgerClosed", function (ledger) {
     try {
       const idx = Number(ledger.ledger_index);
-      if (!idx) return;
-
-      // enqueue sequentially, don’t process out-of-order
-      if (idx > window.XRPL.lastLedgerIndex) {
-        console.log("📨 ledgerClosed event:", idx, "→ queue", idx);
-        enqueueLedger(idx, "ledgerClosed");
-      }
+      if (!idx || idx <= window.XRPL.lastLedgerIndex) return;
+      console.log("📨 ledgerClosed event:", idx);
+      fetchAndProcessLedger(idx, null);
     } catch (e) {
       console.warn("Ledger closed handler error:", e.message);
     }
   });
 
-  client.on("error", (error) => {
+  client.on("error", function (error) {
     console.warn("🔌 WebSocket error:", error.message);
   });
 
-  client.on("disconnected", (code) => {
+  client.on("disconnected", function (code) {
     console.warn("🔌 Disconnected (code " + code + ")");
-    handleDisconnection("ws_disconnected");
+    handleDisconnection();
   });
 }
 
 /* ---------- DISCONNECTION HANDLING ---------- */
 
-function handleDisconnection(reason = "ws_disconnected") {
+function handleDisconnection() {
   if (!window.XRPL.connected) return;
 
-  console.warn("🔌 Handling disconnection...", reason);
+  console.warn("🔌 Handling disconnection...");
   window.XRPL.connected = false;
 
   if (window.XRPL.ledgerPollInterval) {
@@ -847,18 +893,31 @@ function handleDisconnection(reason = "ws_disconnected") {
   }
 
   updateConnectionStatus(false, "Disconnected");
-  setMode("connecting", "Disconnected: " + reason);
   dispatchConnectionEvent();
 
+  // Always reconnect
   window.XRPL.reconnectAttempts += 1;
-  const delay = Math.min(3000 * window.XRPL.reconnectAttempts, 10000);
+  const delay = Math.min(
+    3000 * window.XRPL.reconnectAttempts,
+    10000
+  );
 
-  console.log("🔄 Reconnecting in", delay, "ms (attempt", window.XRPL.reconnectAttempts, ")");
+  console.log(
+    "🔄 Reconnecting in",
+    delay,
+    "ms (attempt",
+    window.XRPL.reconnectAttempts,
+    ")"
+  );
 
-  if (window.XRPL.reconnectTimeout) clearTimeout(window.XRPL.reconnectTimeout);
+  if (window.XRPL.reconnectTimeout) {
+    clearTimeout(window.XRPL.reconnectTimeout);
+  }
 
-  window.XRPL.reconnectTimeout = setTimeout(() => {
-    if (!window.XRPL.connected) connectXRPL();
+  window.XRPL.reconnectTimeout = setTimeout(function () {
+    if (!window.XRPL.connected) {
+      connectXRPL();
+    }
   }, delay);
 }
 
@@ -869,12 +928,17 @@ function handleConnectionFailure() {
   updateConnectionStatus(false, "Retrying...");
   setMode("connecting", "All servers failed, retrying");
 
-  const delay = Math.min(5000 * (window.XRPL.reconnectAttempts + 1), 30000);
+  const delay = Math.min(
+    5000 * (window.XRPL.reconnectAttempts + 1),
+    30000
+  );
   console.log("🔄 Retrying all servers in", delay, "ms");
 
-  if (window.XRPL.reconnectTimeout) clearTimeout(window.XRPL.reconnectTimeout);
+  if (window.XRPL.reconnectTimeout) {
+    clearTimeout(window.XRPL.reconnectTimeout);
+  }
 
-  window.XRPL.reconnectTimeout = setTimeout(() => {
+  window.XRPL.reconnectTimeout = setTimeout(function () {
     window.XRPL.reconnectAttempts += 1;
     connectXRPL();
   }, delay);
@@ -899,7 +963,9 @@ async function cleanupConnection() {
     try {
       window.XRPL.client.removeAllListeners();
       await window.XRPL.client.disconnect();
-    } catch (_) {}
+    } catch (e) {
+      /* ignore */
+    }
     window.XRPL.client = null;
   }
 
@@ -939,198 +1005,56 @@ async function reconnectXRPL() {
   return connectXRPL();
 }
 
-/* ---------- SHARED REQUEST WRAPPER: window.requestXrpl ----------
-   Single shared entrypoint for other modules (inspector, trace tab).
-   - concurrency limiter
-   - inflight dedupe
-   - backoff + jitter + server_info hint
-   - HTTP fallback to public RPC endpoints
--------------------------------------------------------------- */
+/* ---------- PUBLIC API ---------- */
 
-(function () {
-  const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
-  const XRPL_REQUEST_CONCURRENCY = 3; // default concurrency (adjustable by consumers if needed)
-  const XRPL_MAX_RETRIES = 5;
-  const XRPL_BACKOFF_BASE_MS = 500;
-  const XRPL_MAX_BACKOFF_MS = 10000;
+function getXRPLState() {
+  return {
+    ...window.XRPL.state,
+    connected: window.XRPL.connected,
+    server: window.XRPL.server?.name || "Unknown",
+    serverUrl: window.XRPL.server?.url || null,
+    lastUpdate: window.XRPL.lastLedgerTime,
+    mode: window.XRPL.mode,
+    modeReason: window.XRPL.modeReason,
+    network: window.XRPL.network
+  };
+}
 
-  let __xrpl_active = 0;
-  const __xrpl_queue = [];
-  const __inflight = new Map(); // key -> Promise
+function isXRPLConnected() {
+  return (
+    window.XRPL.connected &&
+    Date.now() - window.XRPL.lastLedgerTime < 60000
+  );
+}
 
-  function acquireSlot() {
-    return new Promise((resolve) => {
-      if (__xrpl_active < XRPL_REQUEST_CONCURRENCY) {
-        __xrpl_active++;
-        return resolve();
-      }
-      __xrpl_queue.push(resolve);
-    });
-  }
-  function releaseSlot() {
-    __xrpl_active = Math.max(0, __xrpl_active - 1);
-    if (__xrpl_queue.length > 0 && __xrpl_active < XRPL_REQUEST_CONCURRENCY) {
-      __xrpl_active++;
-      const r = __xrpl_queue.shift();
-      if (typeof r === "function") r();
-    }
-  }
+/* ---------- INITIALIZATION ---------- */
 
-  async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+document.addEventListener("DOMContentLoaded", function () {
+  console.log(
+    "🌊 Initializing XRPL connection on:",
+    window.XRPL.network
+  );
 
-  function isTransientError(err) {
-    if (!err) return false;
-    const msg = String(err.message || err || "").toLowerCase();
-    if (!msg) return false;
-    if (msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit")) return true;
-    if (msg.includes("timeout") || msg.includes("ecanceled") || msg.includes("econnreset") || msg.includes("disconnected") || msg.includes("closed")) return true;
-    return false;
+  if (typeof xrpl === "undefined") {
+    console.error("❌ xrpl.js library not loaded!");
+    updateConnectionStatus(false, "Library not loaded");
+    return;
   }
 
-  async function fetchServerLoadHint(timeout = 1200) {
-    try {
-      if (window.XRPL?.client?.request) {
-        const resp = await window.XRPL.client.request({ command: "server_info", timeout });
-        return resp?.result?.info || null;
-      }
-    } catch (_) {}
-    // No further fallback here; callers can use HTTP endpoints if needed
-    return null;
-  }
-
-  async function attemptHttpRpc(payload, { timeoutMs = 15000, retries = 1 } = {}) {
-    // Try a list of HTTP RPC endpoints (POST JSON-RPC style payload)
-    const body = { method: payload.command || payload.method || "unknown", params: [payload] };
-    for (const base of RPC_HTTP_ENDPOINTS) {
-      const url = base.endsWith("/") ? base : base + "/";
-      let attempt = 0;
-      while (attempt <= retries) {
-        attempt++;
-        try {
-          const controller = new AbortController();
-          const id = setTimeout(() => controller.abort(), timeoutMs);
-          const resp = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify(body),
-            signal: controller.signal
-          });
-          clearTimeout(id);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const j = await resp.json();
-          // unwrap shapes like account-inspector expects
-          const out = j?.result?.result ?? j?.result ?? j;
-          return out;
-        } catch (e) {
-          if (attempt > retries) break;
-          await sleep(200 * attempt);
-        }
-      }
-    }
-    return null;
-  }
-
-  async function _requestXrplInternal(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
-    // Preferred: direct ws client
-    if (window.XRPL?.client?.request) {
-      try {
-        const out = await window.XRPL.client.request({ ...(payload || {}), timeout: timeoutMs });
-        return out?.result || out;
-      } catch (e) {
-        throw e;
-      }
-    }
-
-    // Fallback: HTTP RPC endpoints
-    if (allowHttpFallback) {
-      const out = await attemptHttpRpc(payload, { timeoutMs, retries: 1 });
-      if (out) return out;
-    }
-
-    throw new Error("No XRPL transport available");
-  }
-
-  async function requestXrpl(payload, { timeoutMs = 20000, retries = 3, allowHttpFallback = true } = {}) {
-    const key = JSON.stringify({ payload, timeoutMs, allowHttpFallback });
-    if (__inflight.has(key)) return __inflight.get(key);
-
-    const p = (async () => {
-      // Respect global overloaded pause
-      try {
-        if (window.XRPL && window.XRPL._overloadedUntil && Date.now() < window.XRPL._overloadedUntil) {
-          const wait = window.XRPL._overloadedUntil - Date.now();
-          await sleep(wait + 150);
-        }
-      } catch (_) {}
-
-      await acquireSlot();
-      try {
-        let attempt = 0;
-        let lastErr = null;
-        const maxAttempts = Math.max(1, Math.min(XRPL_MAX_RETRIES, retries + 1));
-
-        while (attempt < maxAttempts) {
-          attempt++;
-          try {
-            const out = await _requestXrplInternal(payload, { timeoutMs, allowHttpFallback });
-            // success
-            return out;
-          } catch (err) {
-            lastErr = err;
-            if (!isTransientError(err)) throw err;
-
-            const msg = String(err.message || "").toLowerCase();
-            if ((msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit")) && typeof setOverloaded === "function") {
-              const jitter = Math.round(Math.random() * 2000);
-              const base = Math.min(XRPL_BACKOFF_BASE_MS * attempt, XRPL_MAX_BACKOFF_MS);
-              const pauseMs = Math.min(Math.max(base + jitter, 3000), 30000);
-              try { setOverloaded(pauseMs, "request wrapper triggered overload"); } catch (_) {}
-            }
-
-            if (attempt >= maxAttempts) break;
-
-            let penalty = 0;
-            try {
-              const info = await fetchServerLoadHint(1000);
-              const lf = info && (info.load_factor || info.state?.load_factor) ? Number(info.load_factor || info.state?.load_factor) : null;
-              if (lf && lf > 1) penalty = Math.round((lf - 1) * 1000);
-            } catch (_) {}
-
-            const backoff = Math.min(XRPL_BACKOFF_BASE_MS * attempt + Math.round(Math.random() * 400) + penalty, XRPL_MAX_BACKOFF_MS);
-            await sleep(backoff);
-          }
-        }
-
-        throw lastErr || new Error("XRPL request failed");
-      } finally {
-        releaseSlot();
-      }
-    })();
-
-    __inflight.set(key, p);
-    p.finally(() => __inflight.delete(key));
-    return p;
-  }
-
-  if (typeof window !== "undefined") {
-    window.requestXrpl = requestXrpl;
-    // optional helper to let callers adjust concurrency (not persisted)
-    window.setXrplRequestConcurrency = function (n) {
-      // Note: concurrency here is internal constant; to change, modify XRPL_REQUEST_CONCURRENCY above.
-      // We provide a no-op shim to avoid errors if callers call it.
-      console.warn("setXrplRequestConcurrency is a shim in this build. To change concurrency, restart with adjusted constant in js/xrpl-connection.js.");
-    };
-  }
-})();
+  // Start connection shortly after load
+  setTimeout(function () {
+    connectXRPL();
+  }, 500);
+});
 
 /* ---------- KEEP ALIVE ---------- */
 
-setInterval(() => {
+setInterval(function () {
   if (!window.XRPL.connected && !window.XRPL.connecting) {
     console.log("💓 Keep-alive: Reconnecting...");
     connectXRPL();
   }
-}, 30000);
+}, 30000); // Check every 30 seconds
 
 /* ---------- EXPORTS ---------- */
 
@@ -1140,4 +1064,6 @@ window.getXRPLState = getXRPLState;
 window.isXRPLConnected = isXRPLConnected;
 window.setXRPLNetwork = setXRPLNetwork;
 
-console.log("🌊 XRPL Connection module loaded (sequential queue + overload backoff + shared request wrapper)");
+console.log(
+  "🌊 XRPL Connection module loaded (Auto-reconnect + raw tx streaming enabled)"
+);
