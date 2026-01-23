@@ -1,12 +1,14 @@
 /* =========================================================
    FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
-   - Issuer list mode (dropdown, cached graphs)
-   - Ledger-first defaults: MOST RECENT N outgoing txs from issuer (ALL types)
-   - Tree edges derived from txs with counterparties (Payment / TrustSet / OfferCreate issuers)
-   - Node inspector: activated_by + acct info + outgoing list (UI-first)
-   - Transport: shared WS preferred (window.requestXrpl), HTTP JSON-RPC fallback (proxy or public)
-   - Patterns: burst + cycles + reconsolidation hubs
+   v2.2.0 (UX + visual flows)
+   Upgrades:
+   - Expanded UX tips + status/progress improvements
+   - Lightweight flow diagram / chart showing where value came from and went to
+   - Explorer links on flows & nodes
+   - Export / copy improvements in node modal
+   - Minor performance: small session caches used for account_info / activation
+   - Undo for clear cache
    ========================================================= */
 
 (function () {
@@ -46,7 +48,7 @@
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.1.1-ledger-first-fixed";
+  const MODULE_VERSION = "unified-inspector@2.2.0-visual";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -55,6 +57,7 @@
   const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
+  const sessionCache = { account_tx: new Map() }; // simple session-only cache
 
   const transportState = {
     wsConnected: false,
@@ -91,7 +94,7 @@
 
   function setStatus(s) {
     const el = $("uiStatus");
-    if (el) el.textContent = s;
+    if (el) el.innerHTML = s;
   }
 
   function setProgress(p) {
@@ -123,6 +126,8 @@
     $("uiModalTitle").textContent = title || "Details";
     $("uiModalBody").innerHTML = html || "";
     $("uiModalOverlay").style.display = "flex";
+    // allow scrolling to top
+    $("uiModalBody").scrollTop = 0;
   }
 
   function closeModal() {
@@ -512,15 +517,21 @@
     };
   }
 
-  async function fetchAccountInfo(address) {
+  async function fetchAccountInfo(address, { force = false } = {}) {
     if (!isValidXrpAddress(address)) return null;
-    if (accountInfoCache.has(address)) return accountInfoCache.get(address);
+    if (!force && accountInfoCache.has(address)) return accountInfoCache.get(address);
 
-    const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
-    const data = out?.account_data || out?.result?.account_data || null;
-    const normalized = normalizeAccountInfo(data);
-    accountInfoCache.set(address, normalized);
-    return normalized;
+    try {
+      const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
+      const data = out?.account_data || out?.result?.account_data || null;
+      const normalized = normalizeAccountInfo(data);
+      accountInfoCache.set(address, normalized);
+      return normalized;
+    } catch (e) {
+      // leave null but cache negative result to avoid repeated failures
+      accountInfoCache.set(address, null);
+      return null;
+    }
   }
 
   // ---------------- ACTIVATION (activated_by) ----------------
@@ -645,6 +656,24 @@
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
 
+      const cacheKey = `${address}_${marker || "nomarker"}_${pages}_${ledgerMin}_${ledgerMax}`;
+      // session cache for account_tx pages to avoid repeated fetches inside same run
+      if (sessionCache.account_tx.has(cacheKey)) {
+        const cached = sessionCache.account_tx.get(cacheKey);
+        scanned += cached.length;
+        for (const entry of cached) {
+          const tx = normalizeTxEntry(entry);
+          if (!tx) continue;
+          if (!withinConstraints(tx, constraints)) continue;
+          const from = tx.Account || tx.account;
+          if (from !== address) continue;
+          collected.push(tx);
+          if (collected.length >= needCount) break;
+        }
+        if (collected.length >= needCount) break;
+        // can't get next marker from cached unless we store it; fallthrough to fetch if necessary
+      }
+
       const resp = await fetchAccountTxPaged(address, {
         marker,
         limit: PAGE_LIMIT,
@@ -655,6 +684,9 @@
 
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
+
+      // cache raw page for session
+      sessionCache.account_tx.set(cacheKey, resp.txs);
 
       for (const entry of resp.txs) {
         const tx = normalizeTxEntry(entry);
@@ -1132,7 +1164,7 @@
           <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-first)</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
-          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
+          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
             <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
             <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
             <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
@@ -1151,7 +1183,7 @@
               <details style="margin-top:10px;">
                 <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
                 <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
+                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></textarea>
                   <div style="display:flex;flex-direction:column;gap:8px;">
                     <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
                     <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
@@ -1172,12 +1204,12 @@
 
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
                 <label style="font-size:13px;">Date</label>
-                <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiStart" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiEnd" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
                 <label style="font-size:13px;margin-left:8px;">Ledger</label>
-                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
               </div>
 
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
@@ -1190,11 +1222,11 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuer Tree</div>
-                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
               </div>
 
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
                 <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
                 <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
               </div>
@@ -1204,8 +1236,9 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:10px;">
-            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
+            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
               <div style="opacity:.8">Tree summary appears here.</div>
+              <div id="uiFlowMini" style="margin-top:10px;"></div>
             </div>
 
             <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
@@ -1256,12 +1289,24 @@
       hydrateIssuerSelect();
       setStatus(`Saved issuer list (${arr.length})`);
     });
+
+    // Clear cache with undo
     $("uiClearCache").addEventListener("click", () => {
+      const prevIssuerRegistry = new Map(issuerRegistry);
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
       clearViews();
-      setStatus("Cache cleared");
+      setStatus("Cache cleared. <button id='uiUndoClear' class='nav-btn'>Undo</button>");
+      const undoBtn = $("uiUndoClear");
+      if (undoBtn) {
+        undoBtn.addEventListener("click", () => {
+          // restore previous registry (shallow)
+          for (const [k, v] of prevIssuerRegistry.entries()) issuerRegistry.set(k, v);
+          setStatus("Cache restored (undo).");
+          renderAll(issuerRegistry.get(activeIssuer) || {});
+        });
+      }
     });
 
     $("uiBuild").addEventListener("click", () => buildTreeClicked().catch(() => {}));
@@ -1276,6 +1321,8 @@
     $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
     $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
     $("uiEdgeItems").innerHTML = "";
+    const mini = $("uiFlowMini");
+    if (mini) mini.innerHTML = "";
   }
 
   function renderAll(g) {
@@ -1285,6 +1332,10 @@
   }
 
   function renderSummary(g) {
+    if (!g) {
+      $("uiSummary").innerHTML = `<div style="opacity:.8">No graph</div>`;
+      return;
+    }
     const issuer = g.issuer;
     const edges = g.edges.length;
     const accounts = g.nodes.size;
@@ -1323,6 +1374,9 @@
       <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
       <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
     `;
+
+    // Render mini flow for issuer: top incoming/outgoing
+    renderMiniFlow(g, g.issuer, "uiFlowMini");
   }
 
   function renderTree(g) {
@@ -1380,18 +1434,13 @@
       const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
 
       return `
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
-            ${activationLine(n?.activation)}
-            <div style="opacity:.75;font-size:12px;margin-top:4px;">
-              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-              recent outgoing loaded:${escapeHtml(firstN)}
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+        <div>
+          <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
+          ${activationLine(n?.activation)}
+          <div style="opacity:.75;font-size:12px;margin-top:4px;">
+            edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
+            edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
+            recent outgoing loaded:${escapeHtml(firstN)}
           </div>
         </div>
       `;
@@ -1407,10 +1456,14 @@
           <div style="display:flex;align-items:flex-start;gap:8px;">
             ${
               hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
+                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▸</button>`
                 : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
             }
             <div style="flex:1;">${nodeRow(addr)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+              <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+              <button class="uiMiniFlow" data-addr="${escapeHtml(addr)}" title="Flow" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Flow</button>
+            </div>
           </div>
           ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
         </div>
@@ -1440,6 +1493,10 @@
     Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
       btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
     );
+
+    Array.from(document.querySelectorAll(".uiMiniFlow")).forEach((btn) =>
+      btn.addEventListener("click", () => renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }))
+    );
   }
 
   function renderEdgeFilter(g) {
@@ -1464,8 +1521,9 @@
               • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
               • ledger ${escapeHtml(e.ledger_index)}
               • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
+              <span style="margin-left:8px;"><a href="${escapeHtml(explorerLinks(e.tx_hash).xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a></span>
             </div>
-            <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
+            <div style="opacity:.75;">${escapeHtml(e.date || "—")} �� ${escapeHtml(shortHash)}</div>
           </div>`;
         })
         .join("") || `<div style="opacity:.7">No edges (try increasing per-node / clearing filters).</div>`;
@@ -1477,6 +1535,7 @@
     renderEdgeFilter(g);
   }
 
+  // ---------------- NODE MODAL + FLOW DIAGRAM ----------------
   function showNodeModal(g, addr) {
     if (!addr) return;
     const n = g.nodes.get(addr);
@@ -1542,7 +1601,7 @@
       `;
 
     const metaLine = n.outgoingMeta
-      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.mode)}</div>`
+      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.mode || "")}</div>`
       : "";
 
     const rows = outgoing
@@ -1576,13 +1635,14 @@
           ${metaLine}
         </div>
 
-        <div style="width:320px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+        <div style="width:360px;min-width:300px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
           <div style="font-weight:900;">Actions</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
             <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
             <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
             <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
             <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
+            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(explorerLinks(addr).xrpscan)}">Explorer</a>
           </div>
           <div style="margin-top:10px;opacity:.85;font-size:12px;">
             outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
@@ -1590,6 +1650,11 @@
           <div style="margin-top:6px;opacity:.75;font-size:12px;">
             note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
           </div>
+        </div>
+
+        <div style="width:100%;margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:8px;">Flow: where value came from → ${escapeHtml(addr)} → where it went (top counterparties)</div>
+          <div id="uiFlowDiagram" style="width:100%;height:240px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.04);padding:6px;"></div>
         </div>
       </div>
 
@@ -1617,6 +1682,249 @@
       const rawObj = { address: addr, node: n };
       openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
     };
+
+    // render flow diagram for this node
+    renderFlowDiagramForNode(g, addr, "uiFlowDiagram");
+  }
+
+  // Render a mini flow diagram for an account inside DOM container
+  function renderFlowDiagramForNode(g, account, containerId, opts = {}) {
+    const container = typeof containerId === "string" ? $(containerId) : containerId;
+    if (!container) return;
+    container.innerHTML = "";
+
+    // compute top inbound and outbound by sum(amount) (XRP only) — take top 6 each side
+    const inbound = {};
+    const outbound = {};
+
+    for (const e of g.edges) {
+      if (e.to === account && e.currency === "XRP") {
+        inbound[e.from] = (inbound[e.from] || 0) + Number(e.amount || 0);
+      }
+      if (e.from === account && e.currency === "XRP") {
+        outbound[e.to] = (outbound[e.to] || 0) + Number(e.amount || 0);
+      }
+    }
+
+    const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
+    const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
+
+    const totalIn = inList.reduce((s, x) => s + x.v, 0) || 1;
+    const totalOut = outList.reduce((s, x) => s + x.v, 0) || 1;
+
+    // simple horizontal sankey-like layout: left (in accounts), center (account), right (out accounts)
+    const w = container.clientWidth || 800;
+    const h = container.clientHeight || 240;
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+    svg.style.width = "100%";
+    svg.style.height = `${h}px`;
+
+    // positions
+    const leftX = 80;
+    const centerX = w / 2;
+    const rightX = w - 120;
+    const leftYStart = 20;
+    const rightYStart = 20;
+    const gap = Math.max(12, Math.floor((h - 40) / Math.max(inList.length, outList.length, 1)));
+
+    // render inbound nodes and flows
+    inList.forEach((item, i) => {
+      const y = leftYStart + i * gap;
+      const nodeGroup = document.createElementNS(svgNS, "g");
+      // rectangle for account
+      const rect = document.createElementNS(svgNS, "rect");
+      rect.setAttribute("x", String(leftX - 56));
+      rect.setAttribute("y", String(y - 10));
+      rect.setAttribute("width", "120");
+      rect.setAttribute("height", "20");
+      rect.setAttribute("fill", "#3b82f6");
+      rect.setAttribute("opacity", "0.95");
+      rect.style.cursor = "pointer";
+      nodeGroup.appendChild(rect);
+
+      const txt = document.createElementNS(svgNS, "text");
+      txt.setAttribute("x", String(leftX - 50));
+      txt.setAttribute("y", String(y + 4));
+      txt.setAttribute("fill", "#fff");
+      txt.setAttribute("font-size", "11");
+      txt.textContent = shortAddr(item.a);
+      nodeGroup.appendChild(txt);
+
+      nodeGroup.addEventListener("click", () => {
+        showNodeModal(g, item.a);
+      });
+
+      svg.appendChild(nodeGroup);
+
+      // flow path from left -> center
+      const width = Math.max(2, Math.round((item.v / totalIn) * 40));
+      const path = document.createElementNS(svgNS, "path");
+      const d = `M ${leftX + 70} ${y} C ${leftX + 110} ${y}, ${centerX - 110} ${h / 2}, ${centerX - 12} ${h / 2}`;
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", "rgba(59,130,246,0.25)");
+      path.setAttribute("stroke-width", String(width));
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke-linecap", "round");
+      svg.appendChild(path);
+    });
+
+    // center node
+    const centerGroup = document.createElementNS(svgNS, "g");
+    const cRect = document.createElementNS(svgNS, "rect");
+    cRect.setAttribute("x", String(centerX - 60));
+    cRect.setAttribute("y", String(h / 2 - 22));
+    cRect.setAttribute("width", "120");
+    cRect.setAttribute("height", "44");
+    cRect.setAttribute("fill", "#06b6d4");
+    cRect.setAttribute("rx", "8");
+    centerGroup.appendChild(cRect);
+    const cText = document.createElementNS(svgNS, "text");
+    cText.setAttribute("x", String(centerX - 46));
+    cText.setAttribute("y", String(h / 2 + 6));
+    cText.setAttribute("fill", "#000");
+    cText.setAttribute("font-size", "12");
+    cText.textContent = shortAddr(account);
+    centerGroup.appendChild(cText);
+    centerGroup.addEventListener("click", () => showNodeModal(g, account));
+    svg.appendChild(centerGroup);
+
+    // outbound
+    outList.forEach((item, i) => {
+      const y = rightYStart + i * gap;
+      const nodeGroup = document.createElementNS(svgNS, "g");
+      const rect = document.createElementNS(svgNS, "rect");
+      rect.setAttribute("x", String(rightX - 20));
+      rect.setAttribute("y", String(y - 10));
+      rect.setAttribute("width", "120");
+      rect.setAttribute("height", "20");
+      rect.setAttribute("fill", "#f97316");
+      rect.setAttribute("opacity", "0.95");
+      rect.style.cursor = "pointer";
+      nodeGroup.appendChild(rect);
+
+      const txt = document.createElementNS(svgNS, "text");
+      txt.setAttribute("x", String(rightX - 14));
+      txt.setAttribute("y", String(y + 4));
+      txt.setAttribute("fill", "#fff");
+      txt.setAttribute("font-size", "11");
+      txt.textContent = shortAddr(item.a);
+      nodeGroup.appendChild(txt);
+
+      nodeGroup.addEventListener("click", () => {
+        showNodeModal(g, item.a);
+      });
+
+      svg.appendChild(nodeGroup);
+
+      const width = Math.max(2, Math.round((item.v / totalOut) * 40));
+      const path = document.createElementNS(svgNS, "path");
+      const d = `M ${centerX + 12} ${h / 2} C ${centerX + 110} ${h / 2}, ${rightX - 120} ${y}, ${rightX - 20} ${y}`;
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", "rgba(249,115,22,0.25)");
+      path.setAttribute("stroke-width", String(width));
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke-linecap", "round");
+      svg.appendChild(path);
+    });
+
+    container.appendChild(svg);
+
+    // small legend / totals
+    const infoLine = document.createElement("div");
+    infoLine.style.marginTop = "6px";
+    infoLine.style.fontSize = "12px";
+    infoLine.style.opacity = "0.85";
+    infoLine.innerHTML = `Top inbound: ${inList.length} • Top outbound: ${outList.length} • Sum in: ${totalIn.toFixed(
+      2
+    )} XRP • Sum out: ${totalOut.toFixed(2)} XRP`;
+    container.appendChild(infoLine);
+  }
+
+  // Helper for mini flow in summary (no modal)
+  function renderMiniFlow(g, account, containerId, opts = {}) {
+    const container = typeof containerId === "string" ? $(containerId) : containerId;
+    if (!container) return;
+    container.innerHTML = "";
+    const div = document.createElement("div");
+    div.style.display = "flex";
+    div.style.alignItems = "center";
+    div.style.gap = "8px";
+    div.style.flexWrap = "wrap";
+    div.innerHTML = `<div style="font-weight:800;">Flow</div><div style="opacity:.75;font-size:12px;">(click for details)</div>`;
+    container.appendChild(div);
+
+    // place a small sparkline svg with minimal info
+    const w = 320;
+    const h = 72;
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+    svg.style.borderRadius = "8px";
+    svg.style.background = "rgba(0,0,0,0.03)";
+    svg.style.cursor = "pointer";
+
+    // compute totals for incoming/outgoing
+    let inboundSum = 0;
+    let outboundSum = 0;
+    for (const e of g.edges) {
+      if (e.to === account && e.currency === "XRP") inboundSum += Number(e.amount || 0);
+      if (e.from === account && e.currency === "XRP") outboundSum += Number(e.amount || 0);
+    }
+    const maxv = Math.max(1, inboundSum, outboundSum);
+    const inW = Math.round((inboundSum / maxv) * (w - 40));
+    const outW = Math.round((outboundSum / maxv) * (w - 40));
+
+    // inbound bar (left)
+    const inRect = document.createElementNS(svgNS, "rect");
+    inRect.setAttribute("x", "10");
+    inRect.setAttribute("y", "12");
+    inRect.setAttribute("width", String(inW));
+    inRect.setAttribute("height", "20");
+    inRect.setAttribute("fill", "#3b82f6");
+    svg.appendChild(inRect);
+    const inText = document.createElementNS(svgNS, "text");
+    inText.setAttribute("x", "12");
+    inText.setAttribute("y", "28");
+    inText.setAttribute("fill", "#fff");
+    inText.setAttribute("font-size", "11");
+    inText.textContent = `in ${inboundSum.toFixed(2)} XRP`;
+    svg.appendChild(inText);
+
+    // center label
+    const cText = document.createElementNS(svgNS, "text");
+    cText.setAttribute("x", String(w / 2 - 20));
+    cText.setAttribute("y", "28");
+    cText.setAttribute("fill", "var(--text-secondary)");
+    cText.setAttribute("font-size", "11");
+    cText.textContent = shortAddr(account);
+    svg.appendChild(cText);
+
+    // outbound bar (right)
+    const outRect = document.createElementNS(svgNS, "rect");
+    outRect.setAttribute("x", String(w - 10 - outW));
+    outRect.setAttribute("y", "40");
+    outRect.setAttribute("width", String(outW));
+    outRect.setAttribute("height", "20");
+    outRect.setAttribute("fill", "#f97316");
+    svg.appendChild(outRect);
+    const outText = document.createElementNS(svgNS, "text");
+    outText.setAttribute("x", String(w - outW - 6));
+    outText.setAttribute("y", "56");
+    outText.setAttribute("fill", "#fff");
+    outText.setAttribute("font-size", "11");
+    outText.textContent = `out ${outboundSum.toFixed(2)} XRP`;
+    svg.appendChild(outText);
+
+    svg.addEventListener("click", () => {
+      // open node modal for details and flow
+      showNodeModal(g, account);
+    });
+
+    container.appendChild(svg);
   }
 
   // ---------------- EXPORT GRAPH ----------------
@@ -1696,6 +2004,9 @@
       waitForSharedConn(1500).then((ok) => {
         if (!ok) attemptSharedReconnect("build requested but ws offline");
       });
+
+      // Clear session caches for this build
+      sessionCache.account_tx.clear();
 
       await buildIssuerTree(g);
 
@@ -1805,7 +2116,7 @@
         </div>
 
         <div style="margin-top:14px;">
-          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
+          <div style="font-weight:900;">Fan-in hubs (issuer → many ��� hub)</div>
           <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
             ${hubRows}
           </div>
@@ -1831,7 +2142,7 @@
   // ---------------- INIT ----------------
   function initInspector() {
     renderPage();
-    setStatus("Ready");
+    setStatus("Ready — Tip: paste issuers, set window/ledger and press Build.");
   }
 
   window.initInspector = initInspector;
