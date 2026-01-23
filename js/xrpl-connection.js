@@ -4,6 +4,8 @@
    - Sequential ledger queue to reduce skipping
    - Safer retries/backoff on ledgerNotFound / load errors
    - Prefers Ripple public servers before xrplcluster
+   - Graceful global backoff when server is overloaded
+   - Shared request wrapper (window.requestXrpl) with concurrency, inflight dedupe, backoff
    ========================================= */
 
 window.XRPL = {
@@ -24,6 +26,7 @@ window.XRPL = {
   _processingQueue: false,
   _retryMap: new Map(),             // ledgerIndex -> attempts
   _lastServerInfoAt: 0,
+  _overloadedUntil: 0,              // ms timestamp when overload pause expires
 
   state: {
     ledgerIndex: 0,
@@ -290,33 +293,20 @@ function enqueueBackfillRange(from, to, reason = "backfill") {
   enqueueLedger(to, reason + ":latest");
 }
 
-async function processLedgerQueue() {
-  if (window.XRPL._processingQueue) return;
-  if (!window.XRPL.connected || !window.XRPL.client) return;
+function nowMs() {
+  return Date.now();
+}
 
-  window.XRPL._processingQueue = true;
+function isOverloaded() {
+  return window.XRPL._overloadedUntil && nowMs() < window.XRPL._overloadedUntil;
+}
 
-  try {
-    while (window.XRPL.connected && window.XRPL.client && window.XRPL._ledgerQueue.length) {
-      const expected = window.XRPL.lastLedgerIndex + 1;
-
-      // Only process expected next to prevent “skips”
-      if (!window.XRPL._ledgerQueue.includes(expected)) {
-        // If queue contains higher numbers but expected is missing, we wait.
-        // This prevents processing out-of-order and “copying” old stats forward.
-        break;
-      }
-
-      await fetchAndProcessLedger(expected, null);
-
-      // On success, fetchAndProcessLedger updates lastLedgerIndex.
-      // Remove expected from queue (it might already be removed inside; safe anyway)
-      window.XRPL._ledgerQueue = window.XRPL._ledgerQueue.filter((x) => x !== expected);
-      window.XRPL._retryMap.delete(expected);
-    }
-  } finally {
-    window.XRPL._processingQueue = false;
-  }
+function setOverloaded(ms, reason = "server overload") {
+  const until = nowMs() + Math.max(0, Number(ms) || 0);
+  window.XRPL._overloadedUntil = until;
+  setMode("throttled", `${reason} until ${new Date(until).toISOString()}`);
+  safeNotify(`Server overloaded — pausing requests for ${Math.round(ms)}ms`, "warn", 6000);
+  console.warn(`⏸️ XRPL overloaded: pausing requests for ${ms}ms`);
 }
 
 /* ---------- MAIN CONNECTION ---------- */
@@ -461,13 +451,22 @@ function startActivePolling() {
 async function checkForNewLedger() {
   if (!window.XRPL.connected || !window.XRPL.client) return;
 
+  // Respect global overload pause
+  if (isOverloaded()) {
+    const wait = window.XRPL._overloadedUntil - nowMs();
+    console.warn(`⏸️ checkForNewLedger paused due to overload for ${Math.round(wait)}ms`);
+    return;
+  }
+
   try {
     const resp = await window.XRPL.client.request({ command: "server_info", timeout: SERVER_INFO_TIMEOUT });
     const info = resp.result.info;
-    const currentLedger = info.validated_ledger?.seq;
-    if (!currentLedger) return;
+    if (!info) return;
 
     window.XRPL._lastServerInfoAt = Date.now();
+
+    const currentLedger = info.validated_ledger?.seq;
+    if (!currentLedger) return;
 
     if (currentLedger > window.XRPL.lastLedgerIndex) {
       console.log("🆕 New ledger:", "#" + currentLedger);
@@ -479,8 +478,18 @@ async function checkForNewLedger() {
       window.XRPL.lastLedgerTime = Date.now();
     }
   } catch (error) {
-    console.warn("Check ledger error:", error.message);
-    if (String(error.message || "").toLowerCase().includes("timeout") || String(error.message || "").toLowerCase().includes("closed")) {
+    const msg = String(error?.message || error || "").toLowerCase();
+    console.warn("Check ledger error:", msg);
+
+    // If server_info contains overload signals, set global backoff
+    if (msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit") || msg.includes("load")) {
+      const jitter = Math.round(Math.random() * 3000);
+      const pb = 8000 + jitter;
+      setOverloaded(pb, "server_info reported high load");
+      return;
+    }
+
+    if (msg.includes("timeout") || msg.includes("closed")) {
       handleDisconnection("ws_disconnected");
     }
   }
@@ -498,6 +507,12 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
   window.XRPL._retryMap.set(idx, attempt);
 
   console.log(`🔍 Fetching ledger # ${idx} with transactions... (attempt ${attempt})`);
+
+  // If server is overloaded globally, skip processing now
+  if (isOverloaded()) {
+    console.warn(`⏸️ Skipping fetch for ledger ${idx} due to overload until ${new Date(window.XRPL._overloadedUntil).toISOString()}`);
+    return false;
+  }
 
   try {
     const ledgerResp = await window.XRPL.client.request({
@@ -602,6 +617,8 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
 
     // Push updated state
     sendStateToDashboard();
+    // cleanup retry count for successful ledger
+    window.XRPL._retryMap.delete(idx);
     return true;
   } catch (error) {
     const msg = String(error?.message || error || "");
@@ -610,11 +627,37 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
     // Retry logic
     const lower = msg.toLowerCase();
     const isNotFound = lower.includes("ledgernotfound");
-    const isLoad = lower.includes("too much load") || lower.includes("load");
+    const isLoad = lower.includes("placing too much load") || lower.includes("too much load") || lower.includes("too_many_requests") || lower.includes("rate limit") || lower.includes("load");
     const isClosed = lower.includes("websocket was closed") || lower.includes("disconnected") || lower.includes("notconnected");
 
     if (isClosed) {
       handleDisconnection("ws_disconnected");
+      return false;
+    }
+
+    // If the server indicates it's overloaded, set a global backoff pause
+    if (isLoad) {
+      // compute backoff with attempt-based exponential + jitter
+      const backoffBase = Math.min(1200 * attempt, 7000);
+      const jitter = Math.round(Math.random() * 2000);
+      let backoff = backoffBase + jitter;
+
+      // attempt to read server_info briefly to add penalty if load_factor elevated
+      try {
+        const infoResp = await window.XRPL.client.request({ command: "server_info", timeout: 1200 });
+        const info = infoResp?.result?.info;
+        if (info && info.load_factor) {
+          const lf = Number(info.load_factor) || 1;
+          if (lf > 1) backoff += Math.round((lf - 1) * 1500);
+        }
+      } catch (_) {
+        // ignore
+      }
+
+      // Set a global pause so all modules back off for a bit
+      const pauseMs = Math.min(Math.max(backoff, 3000), 20000);
+      setOverloaded(pauseMs, "ledger fetch reported overloaded");
+      // keep ledger in queue (we will try again later after pause)
       return false;
     }
 
@@ -625,10 +668,9 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
       return false;
     }
 
-    // Give up after max retries: allow stream to move forward,
-    // but we DO NOT update lastLedgerIndex here (avoids copying).
-    // Remove it from queue so we don’t freeze forever.
+    // Give up after max retries: remove it from queue so we don’t freeze forever.
     window.XRPL._ledgerQueue = window.XRPL._ledgerQueue.filter((x) => x !== idx);
+    window.XRPL._retryMap.delete(idx);
     return false;
   }
 }
@@ -897,38 +939,189 @@ async function reconnectXRPL() {
   return connectXRPL();
 }
 
-/* ---------- PUBLIC API ---------- */
+/* ---------- SHARED REQUEST WRAPPER: window.requestXrpl ----------
+   Single shared entrypoint for other modules (inspector, trace tab).
+   - concurrency limiter
+   - inflight dedupe
+   - backoff + jitter + server_info hint
+   - HTTP fallback to public RPC endpoints
+-------------------------------------------------------------- */
 
-function getXRPLState() {
-  return {
-    ...window.XRPL.state,
-    connected: window.XRPL.connected,
-    server: window.XRPL.server?.name || "Unknown",
-    serverUrl: window.XRPL.server?.url || null,
-    lastUpdate: window.XRPL.lastLedgerTime,
-    mode: window.XRPL.mode,
-    modeReason: window.XRPL.modeReason,
-    network: window.XRPL.network
-  };
-}
+(function () {
+  const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
+  const XRPL_REQUEST_CONCURRENCY = 3; // default concurrency (adjustable by consumers if needed)
+  const XRPL_MAX_RETRIES = 5;
+  const XRPL_BACKOFF_BASE_MS = 500;
+  const XRPL_MAX_BACKOFF_MS = 10000;
 
-function isXRPLConnected() {
-  return window.XRPL.connected && Date.now() - window.XRPL.lastLedgerTime < 60000;
-}
+  let __xrpl_active = 0;
+  const __xrpl_queue = [];
+  const __inflight = new Map(); // key -> Promise
 
-/* ---------- INITIALIZATION ---------- */
-
-document.addEventListener("DOMContentLoaded", () => {
-  console.log("🌊 Initializing XRPL connection on:", window.XRPL.network);
-
-  if (typeof xrpl === "undefined") {
-    console.error("❌ xrpl.js library not loaded!");
-    updateConnectionStatus(false, "Library not loaded");
-    return;
+  function acquireSlot() {
+    return new Promise((resolve) => {
+      if (__xrpl_active < XRPL_REQUEST_CONCURRENCY) {
+        __xrpl_active++;
+        return resolve();
+      }
+      __xrpl_queue.push(resolve);
+    });
+  }
+  function releaseSlot() {
+    __xrpl_active = Math.max(0, __xrpl_active - 1);
+    if (__xrpl_queue.length > 0 && __xrpl_active < XRPL_REQUEST_CONCURRENCY) {
+      __xrpl_active++;
+      const r = __xrpl_queue.shift();
+      if (typeof r === "function") r();
+    }
   }
 
-  setTimeout(() => connectXRPL(), 500);
-});
+  async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  function isTransientError(err) {
+    if (!err) return false;
+    const msg = String(err.message || err || "").toLowerCase();
+    if (!msg) return false;
+    if (msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit")) return true;
+    if (msg.includes("timeout") || msg.includes("ecanceled") || msg.includes("econnreset") || msg.includes("disconnected") || msg.includes("closed")) return true;
+    return false;
+  }
+
+  async function fetchServerLoadHint(timeout = 1200) {
+    try {
+      if (window.XRPL?.client?.request) {
+        const resp = await window.XRPL.client.request({ command: "server_info", timeout });
+        return resp?.result?.info || null;
+      }
+    } catch (_) {}
+    // No further fallback here; callers can use HTTP endpoints if needed
+    return null;
+  }
+
+  async function attemptHttpRpc(payload, { timeoutMs = 15000, retries = 1 } = {}) {
+    // Try a list of HTTP RPC endpoints (POST JSON-RPC style payload)
+    const body = { method: payload.command || payload.method || "unknown", params: [payload] };
+    for (const base of RPC_HTTP_ENDPOINTS) {
+      const url = base.endsWith("/") ? base : base + "/";
+      let attempt = 0;
+      while (attempt <= retries) {
+        attempt++;
+        try {
+          const controller = new AbortController();
+          const id = setTimeout(() => controller.abort(), timeoutMs);
+          const resp = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal
+          });
+          clearTimeout(id);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const j = await resp.json();
+          // unwrap shapes like account-inspector expects
+          const out = j?.result?.result ?? j?.result ?? j;
+          return out;
+        } catch (e) {
+          if (attempt > retries) break;
+          await sleep(200 * attempt);
+        }
+      }
+    }
+    return null;
+  }
+
+  async function _requestXrplInternal(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
+    // Preferred: direct ws client
+    if (window.XRPL?.client?.request) {
+      try {
+        const out = await window.XRPL.client.request({ ...(payload || {}), timeout: timeoutMs });
+        return out?.result || out;
+      } catch (e) {
+        throw e;
+      }
+    }
+
+    // Fallback: HTTP RPC endpoints
+    if (allowHttpFallback) {
+      const out = await attemptHttpRpc(payload, { timeoutMs, retries: 1 });
+      if (out) return out;
+    }
+
+    throw new Error("No XRPL transport available");
+  }
+
+  async function requestXrpl(payload, { timeoutMs = 20000, retries = 3, allowHttpFallback = true } = {}) {
+    const key = JSON.stringify({ payload, timeoutMs, allowHttpFallback });
+    if (__inflight.has(key)) return __inflight.get(key);
+
+    const p = (async () => {
+      // Respect global overloaded pause
+      try {
+        if (window.XRPL && window.XRPL._overloadedUntil && Date.now() < window.XRPL._overloadedUntil) {
+          const wait = window.XRPL._overloadedUntil - Date.now();
+          await sleep(wait + 150);
+        }
+      } catch (_) {}
+
+      await acquireSlot();
+      try {
+        let attempt = 0;
+        let lastErr = null;
+        const maxAttempts = Math.max(1, Math.min(XRPL_MAX_RETRIES, retries + 1));
+
+        while (attempt < maxAttempts) {
+          attempt++;
+          try {
+            const out = await _requestXrplInternal(payload, { timeoutMs, allowHttpFallback });
+            // success
+            return out;
+          } catch (err) {
+            lastErr = err;
+            if (!isTransientError(err)) throw err;
+
+            const msg = String(err.message || "").toLowerCase();
+            if ((msg.includes("placing too much load") || msg.includes("too much load") || msg.includes("too_many_requests") || msg.includes("rate limit")) && typeof setOverloaded === "function") {
+              const jitter = Math.round(Math.random() * 2000);
+              const base = Math.min(XRPL_BACKOFF_BASE_MS * attempt, XRPL_MAX_BACKOFF_MS);
+              const pauseMs = Math.min(Math.max(base + jitter, 3000), 30000);
+              try { setOverloaded(pauseMs, "request wrapper triggered overload"); } catch (_) {}
+            }
+
+            if (attempt >= maxAttempts) break;
+
+            let penalty = 0;
+            try {
+              const info = await fetchServerLoadHint(1000);
+              const lf = info && (info.load_factor || info.state?.load_factor) ? Number(info.load_factor || info.state?.load_factor) : null;
+              if (lf && lf > 1) penalty = Math.round((lf - 1) * 1000);
+            } catch (_) {}
+
+            const backoff = Math.min(XRPL_BACKOFF_BASE_MS * attempt + Math.round(Math.random() * 400) + penalty, XRPL_MAX_BACKOFF_MS);
+            await sleep(backoff);
+          }
+        }
+
+        throw lastErr || new Error("XRPL request failed");
+      } finally {
+        releaseSlot();
+      }
+    })();
+
+    __inflight.set(key, p);
+    p.finally(() => __inflight.delete(key));
+    return p;
+  }
+
+  if (typeof window !== "undefined") {
+    window.requestXrpl = requestXrpl;
+    // optional helper to let callers adjust concurrency (not persisted)
+    window.setXrplRequestConcurrency = function (n) {
+      // Note: concurrency here is internal constant; to change, modify XRPL_REQUEST_CONCURRENCY above.
+      // We provide a no-op shim to avoid errors if callers call it.
+      console.warn("setXrplRequestConcurrency is a shim in this build. To change concurrency, restart with adjusted constant in js/xrpl-connection.js.");
+    };
+  }
+})();
 
 /* ---------- KEEP ALIVE ---------- */
 
@@ -947,4 +1140,4 @@ window.getXRPLState = getXRPLState;
 window.isXRPLConnected = isXRPLConnected;
 window.setXRPLNetwork = setXRPLNetwork;
 
-console.log("🌊 XRPL Connection module loaded (sequential queue + safer retries)");
+console.log("🌊 XRPL Connection module loaded (sequential queue + overload backoff + shared request wrapper)");
