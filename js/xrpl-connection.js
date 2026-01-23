@@ -43,7 +43,15 @@ window.XRPL = {
   },
   mode: "connecting",
   modeReason: "Initializing",
-  network: "xrpl-mainnet"
+  network: "xrpl-mainnet",
+
+  // Pause control: set of reasons that requested pause
+  _pauseReasons: new Set(),
+  processingPaused: false,
+  processingPauseReason: null,
+
+  // Global overload marker (keeps older backoff semantics working if set elsewhere)
+  _overloadedUntil: 0
 };
 
 /* ---------- CONSTANTS ---------- */
@@ -393,6 +401,90 @@ function updateInitialState(info) {
   sendStateToDashboard();
 }
 
+/* ---------- PAUSE / RESUME PROCESSING API ---------- */
+/*
+  Usage:
+    window.pauseXRPLProcessing("inspector");
+    window.resumeXRPLProcessing("inspector");
+    window.isXRPLProcessingPaused();
+  Notes:
+    - Multiple callers can request pause with distinct reasons; processing resumes when all reasons removed.
+    - Pausing stops polling and processing of incoming ledger events (without closing WS).
+*/
+(function () {
+  function updateProcessingPausedState() {
+    const paused = window.XRPL._pauseReasons && window.XRPL._pauseReasons.size > 0;
+    window.XRPL.processingPaused = !!paused;
+    window.XRPL.processingPauseReason = paused ? Array.from(window.XRPL._pauseReasons).join(",") : null;
+
+    if (window.XRPL.processingPaused) {
+      // stop polling loop if running
+      if (window.XRPL.ledgerPollInterval) {
+        clearInterval(window.XRPL.ledgerPollInterval);
+        window.XRPL.ledgerPollInterval = null;
+      }
+      setMode("paused", `processing paused (${window.XRPL.processingPauseReason})`);
+      dispatchConnectionEvent();
+      console.log("⏸️ XRPL processing paused:", window.XRPL.processingPauseReason);
+    } else {
+      // resume polling
+      startActivePolling();
+      setMode("live", "processing active");
+      dispatchConnectionEvent();
+      console.log("▶️ XRPL processing resumed");
+      // Try a quick ledger check to catch up
+      try { checkForNewLedger(); } catch (_) {}
+    }
+  }
+
+  window.pauseXRPLProcessing = function (reason) {
+    try {
+      if (!reason) reason = "manual";
+      if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
+      window.XRPL._pauseReasons.add(String(reason));
+      updateProcessingPausedState();
+    } catch (e) {
+      console.warn("pauseXRPLProcessing error", e);
+    }
+  };
+
+  window.resumeXRPLProcessing = function (reason) {
+    try {
+      if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
+      if (reason == null) {
+        // clear all
+        window.XRPL._pauseReasons.clear();
+      } else {
+        window.XRPL._pauseReasons.delete(String(reason));
+      }
+      updateProcessingPausedState();
+    } catch (e) {
+      console.warn("resumeXRPLProcessing error", e);
+    }
+  };
+
+  window.isXRPLProcessingPaused = function () {
+    return !!(window.XRPL && window.XRPL.processingPaused);
+  };
+
+  // Auto-pause on visibility hidden, resume on visible (add visibility reason)
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", function () {
+      try {
+        if (document.hidden) {
+          if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
+          window.XRPL._pauseReasons.add("__visibility__");
+          updateProcessingPausedState();
+        } else {
+          if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
+          window.XRPL._pauseReasons.delete("__visibility__");
+          updateProcessingPausedState();
+        }
+      } catch (_) {}
+    });
+  }
+})();
+
 /* ---------- ACTIVE POLLING ---------- */
 
 function startActivePolling() {
@@ -402,6 +494,7 @@ function startActivePolling() {
 
   window.XRPL.ledgerPollInterval = setInterval(async function () {
     if (!window.XRPL.connected || !window.XRPL.client) return;
+    if (window.XRPL.processingPaused) return; // respect explicit pause
     try {
       await checkForNewLedger();
     } catch (e) {
@@ -418,6 +511,7 @@ function startActivePolling() {
 
 async function checkForNewLedger() {
   if (!window.XRPL.connected || !window.XRPL.client) return;
+  if (window.XRPL.processingPaused) return; // respect explicit pause
 
   try {
     const resp = await window.XRPL.client.request({
@@ -451,6 +545,10 @@ async function checkForNewLedger() {
 
 async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
   if (!window.XRPL.client) return;
+  if (window.XRPL.processingPaused) {
+    console.log("Skipping fetchAndProcessLedger because processing is paused:", ledgerIndex);
+    return;
+  }
 
   try {
     console.log(
@@ -863,6 +961,11 @@ function setupConnectionListeners() {
       const idx = Number(ledger.ledger_index);
       if (!idx || idx <= window.XRPL.lastLedgerIndex) return;
       console.log("📨 ledgerClosed event:", idx);
+      // Respect pause requests: if paused, skip processing now
+      if (window.XRPL.processingPaused) {
+        console.log("Skipping ledgerClosed processing because XRPL processing is paused:", idx);
+        return;
+      }
       fetchAndProcessLedger(idx, null);
     } catch (e) {
       console.warn("Ledger closed handler error:", e.message);
