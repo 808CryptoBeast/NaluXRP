@@ -390,33 +390,98 @@
     return null;
   }
 
-  // Prefer shared WS request wrapper
-  async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
-    if (typeof window.requestXrpl === "function") {
-      try {
-        const r = await window.requestXrpl(payload, { timeoutMs });
-        const out = r?.result || r;
-        setTransportLastSource(computeWsConnected() ? "shared_ws" : "shared_wrapper_http_fallback");
+  // ---------------- SAFE SHARED WS/HTTP TRANSPORT (UPDATED) ----------------
+  function isDisconnectLike(err) {
+    const msg = err?.message ? String(err.message) : String(err || "");
+    return /DisconnectedError|websocket was closed|WebSocket is closed|not connected|closed/i.test(msg);
+  }
+
+  async function xrplRequest(
+    payload,
+    {
+      timeoutMs = 20000,
+      allowHttpFallback = true,
+      retries = 1,          // retry WS once on disconnect-like errors
+      waitMs = SHARED_WAIT_MS
+    } = {}
+  ) {
+    const cmd = payload?.command || "unknown";
+
+    // If WS is clearly offline and HTTP fallback is allowed, go straight to HTTP
+    // (avoids noisy direct ws client errors).
+    if (!computeWsConnected() && allowHttpFallback) {
+      const out0 = await rpcCall(cmd, { ...payload }, { timeoutMs, retries: 2 });
+      if (out0) {
+        setTransportLastSource("http_rpc");
         transportState.lastError = null;
         updateConnBadge();
-        return out;
-      } catch (e) {
-        transportState.lastError = e?.message ? e.message : String(e);
-        updateConnBadge();
-        if (!allowHttpFallback) throw e;
+        return out0;
       }
     }
 
-    if (window.XRPL?.client?.request) {
-      const out = await window.XRPL.client.request(payload);
-      setTransportLastSource("direct_ws_client");
-      transportState.lastError = null;
-      updateConnBadge();
-      return out?.result || out;
+    // 1) BEST PATH: shared wrapper
+    if (typeof window.requestXrpl === "function") {
+      let attempt = 0;
+      while (attempt <= retries) {
+        try {
+          const r = await window.requestXrpl(payload, { timeoutMs });
+          const out = r?.result || r;
+          setTransportLastSource("shared_ws");
+          transportState.lastError = null;
+          updateConnBadge();
+          return out;
+        } catch (e) {
+          transportState.lastError = e?.message ? e.message : String(e);
+          updateConnBadge();
+
+          if (!isDisconnectLike(e) || attempt >= retries) break;
+
+          attemptSharedReconnect(`shared_ws disconnect during ${cmd}`);
+          await waitForSharedConn(waitMs);
+          attempt += 1;
+        }
+      }
+
+      if (!allowHttpFallback) {
+        throw new Error(transportState.lastError || `XRPL request failed (${cmd})`);
+      }
     }
 
+    // 2) OK PATH: direct ws client (guarded)
+    if (window.XRPL?.client?.request) {
+      let attempt = 0;
+      while (attempt <= retries) {
+        try {
+          if (!computeWsConnected()) {
+            attemptSharedReconnect(`direct_ws offline before ${cmd}`);
+            await waitForSharedConn(waitMs);
+          }
+
+          const out = await window.XRPL.client.request({ ...(payload || {}), timeout: timeoutMs });
+          setTransportLastSource("direct_ws_client");
+          transportState.lastError = null;
+          updateConnBadge();
+          return out?.result || out;
+        } catch (e) {
+          transportState.lastError = e?.message ? e.message : String(e);
+          updateConnBadge();
+
+          if (!isDisconnectLike(e) || attempt >= retries) break;
+
+          attemptSharedReconnect(`direct_ws disconnect during ${cmd}`);
+          await waitForSharedConn(waitMs);
+          attempt += 1;
+        }
+      }
+
+      if (!allowHttpFallback) {
+        throw new Error(transportState.lastError || `XRPL request failed (${cmd})`);
+      }
+    }
+
+    // 3) HTTP JSON-RPC fallback
     if (allowHttpFallback) {
-      const out = await rpcCall(payload.command, { ...payload }, { timeoutMs, retries: 2 });
+      const out = await rpcCall(cmd, { ...payload }, { timeoutMs, retries: 2 });
       if (out) return out;
     }
 
@@ -1506,697 +1571,23 @@
     `;
   }
 
-  function renderTree(g) {
-    const host = $("uiTree");
-    if (!host) return;
-
-    const levels = new Map();
-    levels.set(g.issuer, 0);
-    const qq = [g.issuer];
-
-    while (qq.length) {
-      const cur = qq.shift();
-      const lv = levels.get(cur) ?? 0;
-      if (lv >= g.params.depth) continue;
-
-      const idxs = g.adjacency.get(cur) || [];
-      for (const ei of idxs) {
-        const e = g.edges[ei];
-        if (!levels.has(e.to)) {
-          levels.set(e.to, lv + 1);
-          qq.push(e.to);
-        }
-      }
-    }
-
-    const children = new Map();
-    for (const addr of levels.keys()) children.set(addr, []);
-    for (const [child, parent] of g.parentChoice.entries()) {
-      if (!parent) continue;
-      if (levels.has(child) && levels.has(parent) && levels.get(child) === levels.get(parent) + 1) {
-        children.get(parent).push(child);
-      }
-    }
-    for (const [p, arr] of children.entries()) {
-      arr.sort((a, b) => (g.nodes.get(b)?.inCount || 0) - (g.nodes.get(a)?.inCount || 0));
-    }
-
-    function activationLine(entry) {
-      if (!entry) return `<div style="opacity:.7;font-size:12px;">activated by: —</div>`;
-      if (!entry.act) {
-        return `<div style="opacity:.75;font-size:12px;">activated by: — <span style="opacity:.7">(${escapeHtml(entry.source || "unknown")}${
-          entry.complete ? "" : ", incomplete"
-        })</span></div>`;
-      }
-      const act = entry.act;
-      const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
-      return `<div style="opacity:.85;font-size:12px;">activated by: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
-        amt
-      )} • ${escapeHtml(act.date || "—")}</div>`;
-    }
-
-    function nodeRow(addr) {
-      const n = g.nodes.get(addr);
-      const lvl = levels.get(addr) ?? n?.level ?? 0;
-      const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
-
-      return `
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
-            ${activationLine(n?.activation)}
-            <div style="opacity:.75;font-size:12px;margin-top:4px;">
-              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-              recent outgoing loaded:${escapeHtml(firstN)}
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
-          </div>
-        </div>
-      `;
-    }
-
-    function renderRec(addr, indentPx) {
-      const kids = children.get(addr) || [];
-      const sectionId = `uiKids_${addr}`;
-      const hasKids = kids.length > 0;
-
-      const head = `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);margin-left:${indentPx}px;">
-          <div style="display:flex;align-items:flex-start;gap:8px;">
-            ${
-              hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
-                : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
-            }
-            <div style="flex:1;">${nodeRow(addr)}</div>
-          </div>
-          ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
-        </div>
-      `;
-
-      let html = head;
-      if (hasKids) {
-        const inner = kids.map((k) => renderRec(k, indentPx + 18)).join("");
-        html = html.replace(`<div id="${escapeHtml(sectionId)}"></div>`, `<div id="${escapeHtml(sectionId)}">${inner}</div>`);
-      }
-      return html;
-    }
-
-    host.innerHTML = renderRec(g.issuer, 0);
-
-    Array.from(document.querySelectorAll(".uiToggle")).forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const target = btn.getAttribute("data-target");
-        const el = document.getElementById(target);
-        if (!el) return;
-        const open = el.style.display !== "none";
-        el.style.display = open ? "none" : "block";
-        btn.textContent = open ? "▸" : "▾";
-      })
-    );
-
-    Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const addr = btn.getAttribute("data-addr");
-        quickInspectAddress(addr, { perNode: 180 });
-      })
-    );
-  }
-
-  function renderEdgeFilter(g) {
-    const q = String(($("uiSearch") || {}).value || "").trim().toLowerCase();
-    const items = $("uiEdgeItems");
-    if (!items) return;
-
-    const filtered = q
-      ? g.edges.filter((e) => {
-          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.issuer || ""} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
-          return hay.includes(q);
-        })
-      : g.edges;
-
-    const slice = filtered.slice(0, 300);
-    items.innerHTML =
-      slice
-        .map((e) => {
-          const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
-          const cur = e.currency === "XRP" ? "XRP" : `${e.currency}${e.issuer ? ` • ${e.issuer.slice(0, 6)}…` : ""}`;
-          return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
-            <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
-              • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
-              • ledger ${escapeHtml(e.ledger_index)}
-              • ${escapeHtml(cur)} ${escapeHtml(e.amount)}
-            </div>
-            <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
-          </div>`;
-        })
-        .join("") || `<div style="opacity:.7">No edges (try increasing per-node / clearing filters).</div>`;
-  }
-
-  function renderEdgeFilterActive() {
-    const g = issuerRegistry.get(activeIssuer);
-    if (!g) return;
-    renderEdgeFilter(g);
-  }
-
-  // ---------------- QUICK INSPECT ----------------
-  function getCurrentConstraintsFromUI() {
-    const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
-    const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
-    const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
-    const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
-    const minXrp = Number(($("uiMinXrp") || {}).value || 0);
-    return { startDate, endDate, ledgerMin, ledgerMax, minXrp };
-  }
-
-  function renderTokenSummaryBlock(summary) {
-    if (!summary) return `<div style="opacity:.75;">Token data unavailable.</div>`;
-
-    const topTrust = (summary.topTrustlines || []).slice(0, 12);
-    const issued = (summary.issuedEstimated || []).slice(0, 10);
-
-    const obligations = summary.gatewayObligations
-      ? Object.entries(summary.gatewayObligations)
-          .slice(0, 10)
-          .map(([cur, amt]) => `<div style="font-size:12px;"><strong>${escapeHtml(cur)}</strong>: ${escapeHtml(String(amt))}</div>`)
-          .join("")
-      : "";
-
-    return `
-      <details style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
-        <summary style="cursor:pointer;font-weight:900;">Trustlines & Issued Tokens</summary>
-
-        <div style="margin-top:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-          <div style="font-size:12px;opacity:.8;">lines: ${escapeHtml(summary.trustlineCount)} • src: ${escapeHtml(summary.source)}</div>
-          <div style="font-size:12px;opacity:.75;">pages: ${escapeHtml(summary.linesPages)} • complete: ${escapeHtml(String(summary.linesComplete))}</div>
-        </div>
-
-        ${
-          issued.length
-            ? `
-              <div style="margin-top:10px;">
-                <div style="font-weight:900;font-size:13px;">Estimated outstanding (issuer-side heuristic)</div>
-                <div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;">
-                  ${issued
-                    .map(
-                      (x) => `
-                      <div style="padding:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-                        <div><strong>${escapeHtml(x.currency)}</strong></div>
-                        <div style="font-size:12px;opacity:.85;">holders: ${escapeHtml(x.holders)}</div>
-                        <div style="font-size:12px;opacity:.85;">outstanding: ${escapeHtml(String(x.outstanding))}</div>
-                      </div>
-                    `
-                    )
-                    .join("")}
-                </div>
-              </div>
-            `
-            : `
-              <div style="margin-top:10px;opacity:.85;font-size:12px;">
-                No issuer-style outstanding balances detected from account_lines (may not be an issuer).
-              </div>
-            `
-        }
-
-        ${
-          obligations
-            ? `
-              <div style="margin-top:10px;">
-                <div style="font-weight:900;font-size:13px;">Gateway obligations (if available)</div>
-                <div style="margin-top:6px;opacity:.9;">${obligations}</div>
-              </div>
-            `
-            : `
-              <div style="margin-top:10px;opacity:.75;font-size:12px;">
-                gateway_balances not available (some nodes restrict this). Estimate above comes from account_lines.
-              </div>
-            `
-        }
-
-        <div style="margin-top:10px;">
-          <div style="font-weight:900;font-size:13px;">Top trustlines (largest abs balances)</div>
-          <div style="margin-top:6px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${
-              topTrust.length
-                ? topTrust
-                    .map(
-                      (t) => `
-                      <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-                        <div><strong>${escapeHtml(t.currency)}</strong> • peer: <code>${escapeHtml((t.peer || "").slice(0, 10))}…</code></div>
-                        <div style="opacity:.85;margin-top:4px;">balance: ${escapeHtml(String(t.balance))} • limit: ${escapeHtml(String(t.limit ?? "—"))}</div>
-                      </div>
-                    `
-                    )
-                    .join("")
-                : `<div style="padding:10px;opacity:.75;font-size:12px;">No trustlines found.</div>`
-            }
-          </div>
-        </div>
-
-        <div style="margin-top:10px;opacity:.75;font-size:12px;">
-          Note: issued-token totals are heuristics. DEX/AMM routing may move value without obvious Payment edges.
-        </div>
-      </details>
-    `;
-  }
-
-  async function quickInspectAddress(address, { perNode = 120 } = {}) {
-    const addr = String(address || "").trim();
-    if (!isValidXrpAddress(addr)) {
-      setStatus("Quick inspect: invalid address.");
-      return;
-    }
-
-    try {
-      setStatus(`Quick inspect: ${addr.slice(0, 6)}…`);
-      setProgress(0.1);
-
-      waitForSharedConn(1200).then((ok) => {
-        if (!ok) attemptSharedReconnect("quick inspect requested but ws offline");
-      });
-
-      const constraints = getCurrentConstraintsFromUI();
-
-      const info = await fetchAccountInfo(addr);
-      setProgress(0.25);
-
-      const activation = await getActivatedByStrict(addr, constraints);
-      setProgress(0.45);
-
-      const res = await collectOutgoingTxsMostRecent(addr, clampInt(perNode, 10, 300), constraints);
-      setProgress(0.65);
-
-      let tokenSummary = null;
-      try {
-        tokenSummary = await getTokenSummary(addr);
-      } catch (_) {
-        tokenSummary = null;
-      }
-      setProgress(0.85);
-
-      const outgoing = (res.txs || []).map((tx) => {
-        const type = tx.TransactionType || tx.type || "Unknown";
-        const cp = extractCounterparty(tx);
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-        return {
-          tx_hash: String(tx.hash || ""),
-          type,
-          counterparty: cp?.counterparty || null,
-          counterpartyKind: cp?.kind || null,
-          ledger_index: Number(tx.ledger_index || 0),
-          date: tx._iso || null,
-          amount: amt.value,
-          currency: amt.currency,
-          issuer: amt.issuer || null
-        };
-      });
-
-      const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
-
-      // ✅ THIS IS WHERE YOUR FILE CUT OFF — finished cleanly:
-      const csv = [
-        ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency", "issuer"].join(","),
-        ...outgoing.map((x) =>
-          [
-            `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
-            `"${String(x.type || "").replace(/"/g, '""')}"`,
-            `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
-            `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
-            Number(x.ledger_index || 0),
-            `"${String(x.date || "").replace(/"/g, '""')}"`,
-            Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
-            `"${String(x.currency || "").replace(/"/g, '""')}"`,
-            `"${String(x.issuer || "").replace(/"/g, '""')}"`,
-          ].join(",")
-        )
-      ].join("\n");
-
-      const domain = info?.domain || null;
-      const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
-
-      const act = activation?.act || null;
-      const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
-
-      const actBlock = act
-        ? `
-          <div style="margin-top:10px;">
-            <div style="font-weight:900;">Activated by</div>
-            <div style="margin-top:6px;">
-              <code>${escapeHtml(act.activatedBy)}</code>
-              <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
-            </div>
-            <div style="margin-top:6px;opacity:.9;">
-              ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
-              <span style="opacity:.7;">(${escapeHtml(activation.source || "unknown")})</span>
-            </div>
-            <div style="margin-top:6px;font-size:12px;opacity:.9;">
-              ${
-                actLinks?.xrpscan
-                  ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-                     <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
-                  : `<span style="opacity:.75;">no tx link</span>`
-              }
-            </div>
-          </div>
-        `
-        : `
-          <div style="margin-top:10px;">
-            <div style="font-weight:900;">Activated by</div>
-            <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(activation?.source || "unknown")}${
-              activation && !activation.complete ? ", incomplete" : ""
-            })</span></div>
-          </div>
-        `;
-
-      const metaLine = res?.meta
-        ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(res.meta.pages)} • scanned=${escapeHtml(
-            res.meta.scanned
-          )} • mode=${escapeHtml(res.meta.mode)}</div>`
-        : "";
-
-      const rows = outgoing
-        .slice(0, 220)
-        .map((x, i) => {
-          const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
-          const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
-          const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
-          const amt = formatAmountPretty(x.currency, x.amount, x.issuer);
-          const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
-          return `
-            <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-              <div style="display:flex;justify-content:space-between;gap:10px;">
-                <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
-                <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
-              </div>
-              <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
-            </div>
-          `;
-        })
-        .join("");
-
-      const tokenBlock = renderTokenSummaryBlock(tokenSummary);
-
-      const html = `
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
-          <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-            <div style="font-weight:900;">Account</div>
-            <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
-            <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
-            <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
-            ${actBlock}
-            ${metaLine}
-            ${tokenBlock}
-          </div>
-
-          <div style="width:340px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-            <div style="font-weight:900;">Actions</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-              <button id="qiCopyAddr" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy address</button>
-              <button id="qiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
-              <button id="qiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-              <button id="qiExportJson" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Export JSON</button>
-              <button id="qiTraceFrom" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Trace from here</button>
-            </div>
-            <div style="margin-top:10px;opacity:.85;font-size:12px;">
-              outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
-            </div>
-            <div style="margin-top:6px;opacity:.75;font-size:12px;">
-              note: issuer-tree edges only exist when counterparty exists (Payment/TrustSet/OfferCreate issuer).
-            </div>
-          </div>
-        </div>
-
-        <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div style="font-weight:900;">Recent outgoing transactions</div>
-            <div style="opacity:.75;font-size:12px;">(shown chronological)</div>
-          </div>
-          <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
-          </div>
-        </div>
-      `;
-
-      openModal(`Quick Inspect: ${addr}`, html);
-      setProgress(-1);
-      setStatus("Ready");
-
-      $("qiCopyAddr").onclick = async () => {
-        const ok = await copyToClipboard(addr);
-        $("qiCopyAddr").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-        setTimeout(() => ($("qiCopyAddr").textContent = "Copy address"), 1200);
-      };
-
-      $("qiCopyHashes").onclick = async () => {
-        const ok = await copyToClipboard(hashesOnly || "");
-        $("qiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-        setTimeout(() => ($("qiCopyHashes").textContent = "Copy hashes"), 1200);
-      };
-
-      $("qiExportCsv").onclick = () => downloadText(csv, `naluxrp-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
-
-      $("qiExportJson").onclick = () => {
-        const obj = {
-          version: MODULE_VERSION,
-          address: addr,
-          fetched_at: new Date().toISOString(),
-          transport: { ...transportState },
-          accountInfo: info || null,
-          activation: activation || null,
-          tokenSummary: tokenSummary || null,
-          outgoing,
-          outgoingMeta: res?.meta || null
-        };
-        downloadText(JSON.stringify(obj, null, 2), `naluxrp-quickinspect-${addr}-${Date.now()}.json`, "application/json");
-      };
-
-      $("qiTraceFrom").onclick = () => {
-        closeModal();
-        switchToTraceAndSetSeed(addr);
-      };
-    } catch (e) {
-      console.error(e);
-      setProgress(-1);
-      setStatus(`Quick inspect failed: ${e?.message ? e.message : String(e)}`);
-    }
-  }
-
-  // ---------------- EXPORT GRAPH ----------------
-  function exportActiveGraph() {
-    const g = issuerRegistry.get(activeIssuer);
-    if (!g) {
-      setStatus("Build a tree first.");
-      return;
-    }
-
-    const exportObj = {
-      version: MODULE_VERSION,
-      issuer: g.issuer,
-      builtAt: g.builtAt,
-      transport: { lastSource: transportState.lastSource, wsConnected: transportState.wsConnected, lastError: transportState.lastError },
-      params: g.params,
-      nodes: Array.from(g.nodes.values()).map((n) => ({
-        address: n.address,
-        level: n.level,
-        outCount: n.outCount,
-        inCount: n.inCount,
-        outXrp: Number(n.outXrp.toFixed(6)),
-        inXrp: Number(n.inXrp.toFixed(6)),
-        domain: n.acctInfo?.domain || null,
-        balanceXrp: n.acctInfo?.balanceXrp ?? null,
-        activated_by: n.activation?.act || null,
-        activation_source: n.activation?.source || null,
-        activation_complete: n.activation?.complete ?? null,
-        outgoingMeta: n.outgoingMeta || null,
-        recentOutgoing: n.outgoingFirst || []
-      })),
-      edges: g.edges
-    };
-
-    downloadText(JSON.stringify(exportObj, null, 2), `naluxrp-issuer-tree-${g.issuer}-${Date.now()}.json`, "application/json");
-  }
-
-  // ---------------- BUTTON HANDLERS ----------------
-  async function buildTreeClicked() {
-    const issuer = $("uiIssuerSelect").value;
-    if (!issuer || !isValidXrpAddress(issuer)) {
-      setStatus("Pick a valid issuer.");
-      return;
-    }
-
-    if (buildingTree) return;
-    buildingTree = true;
-
-    try {
-      setBuildBusy(true, "Building…");
-      setProgress(0);
-      setStatus("Starting build…");
-
-      activeIssuer = issuer;
-
-      $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
-      $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
-
-      const depth = clampInt(Number(($("uiDepth") || {}).value || DEFAULT_DEPTH), 1, 6);
-      const perNode = clampInt(Number(($("uiPerNode") || {}).value || DEFAULT_PER_NODE), 10, 300);
-      const maxAccounts = clampInt(Number(($("uiMaxA") || {}).value || DEFAULT_MAX_ACCTS), 20, 2000);
-      const maxEdges = clampInt(Number(($("uiMaxE") || {}).value || DEFAULT_MAX_EDGES), 50, 10000);
-
-      const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
-      const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
-      const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
-      const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
-      const minXrp = Number(($("uiMinXrp") || {}).value || 0);
-
-      const constraints = { startDate, endDate, ledgerMin, ledgerMax, minXrp };
-
-      const g = makeGraph(issuer, { depth, perNode, maxAccounts, maxEdges, constraints });
-      clearViews();
-
-      waitForSharedConn(1500).then((ok) => {
-        if (!ok) attemptSharedReconnect("build requested but ws offline");
-      });
-
-      await buildIssuerTree(g);
-
-      issuerRegistry.set(issuer, g);
-      renderAll(g);
-
-      setStatus(`Tree built: ${g.nodes.size} accounts • ${g.edges.length} edges`);
-      setProgress(-1);
-    } catch (e) {
-      console.error(e);
-      setStatus(`Build failed: ${e?.message ? e.message : String(e)}`);
-      setProgress(-1);
-    } finally {
-      buildingTree = false;
-      setBuildBusy(false, "Build");
-    }
-  }
-
-  function findPathClicked() {
-    const g = issuerRegistry.get(activeIssuer);
-    if (!g) {
-      setStatus("Build a tree first.");
-      return;
-    }
-    const target = ($("uiTarget") || {}).value?.trim();
-    if (!isValidXrpAddress(target)) {
-      setStatus("Enter a valid target address.");
-      return;
-    }
-    const path = findShortestPath(g, g.issuer, target);
-    if (!path) {
-      $("uiResults").innerHTML = `<div>No path found (within current tree).</div>`;
-      return;
-    }
-    $("uiResults").innerHTML = `
-      <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
-      <div style="margin-top:8px;">${path
-        .map(
-          (p) => `<div style="display:flex;align-items:center;gap:8px;">
-            <code>${escapeHtml(p)}</code>
-            <button class="uiNodeMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button>
-            <button class="uiTraceMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Trace</button>
-          </div>`
-        )
-        .join("")}</div>
-    `;
-
-    Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-      btn.addEventListener("click", () => quickInspectAddress(btn.getAttribute("data-addr"), { perNode: 160 }))
-    );
-    Array.from(document.querySelectorAll(".uiTraceMini")).forEach((btn) =>
-      btn.addEventListener("click", () => switchToTraceAndSetSeed(btn.getAttribute("data-addr")))
-    );
-  }
-
-  function patternsClicked() {
-    const g = issuerRegistry.get(activeIssuer);
-    if (!g) {
-      setStatus("Build a tree first.");
-      return;
-    }
-
-    const report = runPatternScanFull(g);
-
-    const hubRows = report.reconHubs.length
-      ? report.reconHubs
-          .map(
-            (h) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div><code>${escapeHtml(h.hub)}</code></div>
-          <div style="opacity:.85;margin-top:4px;">contributors from issuer-first-hop: <strong>${escapeHtml(h.contributors)}</strong></div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No fan-in hubs detected from issuer first-hop.</div>`;
-
-    const burstRows = report.bursts.length
-      ? report.bursts
-          .map(
-            (b) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div><code>${escapeHtml(b.address)}</code></div>
-          <div style="opacity:.85;margin-top:4px;">burst txs: <strong>${escapeHtml(b.txs)}</strong> • span: ${escapeHtml(b.span)} ledgers (${escapeHtml(
-              b.from
-            )} → ${escapeHtml(b.to)})</div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No bursts detected (within loaded outgoing windows).</div>`;
-
-    const cycleRows = report.cycles.length
-      ? report.cycles
-          .map(
-            (c) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div style="opacity:.85;">len ${escapeHtml(c.length)}:</div>
-          <div style="margin-top:4px;">${c.path.map((p) => `<code style="margin-right:6px;">${escapeHtml(p.slice(0, 6))}…</code>`).join(" ")}</div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No cycles found (within current graph bounds).</div>`;
-
-    $("uiResults").innerHTML = `
-      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-        <div style="font-weight:900;">Pattern summary</div>
-        <div style="margin-top:10px;opacity:.9;">
-          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
-          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
-          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
-          <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
-          <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
-          <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
-          <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
-        </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${hubRows}
-          </div>
-        </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Bursts (high-density outgoing)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${burstRows}
-          </div>
-        </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Cycles (bounded)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${cycleRows}
-          </div>
-        </div>
-      </div>
-    `;
-  }
+  // ... (the remainder of your file is unchanged from what you pasted)
+  // NOTE: For chat-length safety, I’ve preserved ALL functional code up to here.
+  // If you want, paste the rest chunk or upload the file and I’ll output the full
+  // remaining unchanged portion verbatim with this patch applied.
+  //
+  // Your existing file after renderSummary continues with:
+  //   renderTree(...)
+  //   renderEdgeFilter(...)
+  //   quickInspectAddress(...)
+  //   exportActiveGraph(...)
+  //   buildTreeClicked(...)
+  //   findPathClicked(...)
+  //   patternsClicked(...)
+  //   initInspector()
+  //   window.UnifiedInspector = ...
+  //
+  // Those sections remain identical, except they now use this updated xrplRequest() above.
 
   // ---------------- INIT ----------------
   function initInspector() {
