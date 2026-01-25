@@ -1,26 +1,12 @@
 /* =========================================================
    FILE: js/account-inspector.js
-   NaluXrp — Unified Inspector (Tabs + Tree + Quick Inspect + Token/IOU Support)
-
-   WHAT'S NEW (v3):
-   ✅ Tabs added: "Issuer Tree" + "Trace"
-   ✅ Trace mount point added (inspector-trace-tab.js renders inside it)
-   ✅ Quick Inspect modal (works for ANY address, no tree needed)
-   ✅ Issued Tokens / Trustlines support:
-      - account_lines aggregation
-      - issuer-side "outstanding issued" estimation (negative balances)
-      - optional gateway_balances attempt (best effort)
-   ✅ Public API expanded:
-      window.UnifiedInspector.quickInspect(address)
-      window.UnifiedInspector.request(payload, opts)
-      window.UnifiedInspector.getTokenSummary(address)
-      window.UnifiedInspector.getTransportState()
-      window.UnifiedInspector.switchToTrace(address)
-
-   NOTES:
-   - No secrets are stored here.
-   - All analysis is client-side, using public XRPL RPC/WS via your connection module.
-
+   NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
+   - Issuer list mode (dropdown, cached graphs)
+   - Ledger-first defaults: MOST RECENT N outgoing txs from issuer (ALL types)
+   - Tree edges derived from txs with counterparties (Payment / TrustSet / OfferCreate issuers)
+   - Node inspector: activated_by + acct info + outgoing list (UI-first)
+   - Transport: shared WS preferred (window.requestXrpl), HTTP JSON-RPC fallback (proxy or public)
+   - Patterns: burst + cycles + reconsolidation hubs
    ========================================================= */
 
 (function () {
@@ -39,7 +25,7 @@
   // paging / caps
   const PAGE_LIMIT = 200;
 
-  // Tree scan caps (keep sane)
+  // Tree scan caps (keep sane; tree scan uses RECENT pages so should finish quickly)
   const MAX_PAGES_TREE_SCAN = 200;
   const MAX_TX_SCAN_PER_NODE = 50_000;
 
@@ -48,14 +34,10 @@
   const DEFAULT_MAX_ACCTS = 250;
   const DEFAULT_MAX_EDGES = 1600;
 
-  // activation lookup caps (earliest-forward scan)
+  // activation lookup caps (needs earliest-forward, so can be bigger)
   const ACTIVATION_PAGE_LIMIT = 200;
   const ACTIVATION_MAX_PAGES = 2000;
   const ACTIVATION_MAX_TX_SCAN = 350_000;
-
-  // account_lines caps
-  const LINES_PAGE_LIMIT = 400;
-  const LINES_MAX_PAGES = 50;
 
   // localStorage keys
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
@@ -64,7 +46,7 @@
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@3.0.0-tabs-trace-quickinspect-tokens";
+  const MODULE_VERSION = "unified-inspector@2.1.1-ledger-first-fixed";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -73,7 +55,6 @@
   const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
-  const tokenSummaryCache = new Map(); // addr -> token summary
 
   const transportState = {
     wsConnected: false,
@@ -234,7 +215,7 @@
       const v = Number(amount.value);
       return {
         value: Number.isFinite(v) ? v : 0,
-        currency: amount.currency || "???",
+        currency: amount.currency || "XRP",
         issuer: amount.issuer || null,
         raw: amount
       };
@@ -243,16 +224,11 @@
     return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
-  function formatAmountPretty(cur, val, issuer) {
-    const n = Number(val);
-    const vv = Number.isFinite(n) ? n : 0;
-    if (cur === "XRP") return `${vv.toFixed(6)} XRP`;
-    return `${vv} ${cur}${issuer ? ` • ${String(issuer).slice(0, 6)}…` : ""}`;
-  }
-
   // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
   function computeWsConnected() {
+    // Prefer your connection module's health check (best)
     if (typeof window.isXRPLConnected === "function") return !!window.isXRPLConnected();
+    // Fallbacks
     if (window.XRPL?.connected) return true;
     if (window.XRPL?.client && typeof window.XRPL.client.isConnected === "function") return !!window.XRPL.client.isConnected();
     return false;
@@ -316,12 +292,18 @@
     transportState.lastSharedReconnectAttemptAt = now;
 
     try {
-      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
-      else if (typeof window.connectXRPL === "function") window.connectXRPL();
+      // Your connection module exports these:
+      if (typeof window.reconnectXRPL === "function") {
+        window.reconnectXRPL();
+      } else if (typeof window.connectXRPL === "function") {
+        window.connectXRPL();
+      }
+
       transportState.lastError = reason || "reconnect requested";
     } catch (e) {
       transportState.lastError = e?.message ? e.message : String(e);
     }
+
     updateConnBadge();
   }
 
@@ -354,6 +336,10 @@
   }
 
   function unwrapRpcResult(json) {
+    // Handles shapes:
+    // 1) { result: { ... } }
+    // 2) { result: { result: { ... }, status:"success" } }
+    // 3) { status:"success", result:{...} }
     const r = json?.result;
     if (!r) return null;
     if (r.error) return null;
@@ -390,98 +376,36 @@
     return null;
   }
 
-  // ---------------- SAFE SHARED WS/HTTP TRANSPORT (UPDATED) ----------------
-  function isDisconnectLike(err) {
-    const msg = err?.message ? String(err.message) : String(err || "");
-    return /DisconnectedError|websocket was closed|WebSocket is closed|not connected|closed/i.test(msg);
-  }
-
-  async function xrplRequest(
-    payload,
-    {
-      timeoutMs = 20000,
-      allowHttpFallback = true,
-      retries = 1,          // retry WS once on disconnect-like errors
-      waitMs = SHARED_WAIT_MS
-    } = {}
-  ) {
-    const cmd = payload?.command || "unknown";
-
-    // If WS is clearly offline and HTTP fallback is allowed, go straight to HTTP
-    // (avoids noisy direct ws client errors).
-    if (!computeWsConnected() && allowHttpFallback) {
-      const out0 = await rpcCall(cmd, { ...payload }, { timeoutMs, retries: 2 });
-      if (out0) {
-        setTransportLastSource("http_rpc");
+  // Prefer shared WS request wrapper (it already has HTTP fallback in your hardened xrpl-connection.js)
+  async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
+    // 1) shared WS wrapper (best)
+    if (typeof window.requestXrpl === "function") {
+      try {
+        const r = await window.requestXrpl(payload, { timeoutMs });
+        const out = r?.result || r;
+        setTransportLastSource(computeWsConnected() ? "shared_ws" : "shared_wrapper_http_fallback");
         transportState.lastError = null;
         updateConnBadge();
-        return out0;
+        return out;
+      } catch (e) {
+        transportState.lastError = e?.message ? e.message : String(e);
+        updateConnBadge();
+        if (!allowHttpFallback) throw e;
       }
     }
 
-    // 1) BEST PATH: shared wrapper
-    if (typeof window.requestXrpl === "function") {
-      let attempt = 0;
-      while (attempt <= retries) {
-        try {
-          const r = await window.requestXrpl(payload, { timeoutMs });
-          const out = r?.result || r;
-          setTransportLastSource("shared_ws");
-          transportState.lastError = null;
-          updateConnBadge();
-          return out;
-        } catch (e) {
-          transportState.lastError = e?.message ? e.message : String(e);
-          updateConnBadge();
-
-          if (!isDisconnectLike(e) || attempt >= retries) break;
-
-          attemptSharedReconnect(`shared_ws disconnect during ${cmd}`);
-          await waitForSharedConn(waitMs);
-          attempt += 1;
-        }
-      }
-
-      if (!allowHttpFallback) {
-        throw new Error(transportState.lastError || `XRPL request failed (${cmd})`);
-      }
-    }
-
-    // 2) OK PATH: direct ws client (guarded)
+    // 2) raw ws client (if present)
     if (window.XRPL?.client?.request) {
-      let attempt = 0;
-      while (attempt <= retries) {
-        try {
-          if (!computeWsConnected()) {
-            attemptSharedReconnect(`direct_ws offline before ${cmd}`);
-            await waitForSharedConn(waitMs);
-          }
-
-          const out = await window.XRPL.client.request({ ...(payload || {}), timeout: timeoutMs });
-          setTransportLastSource("direct_ws_client");
-          transportState.lastError = null;
-          updateConnBadge();
-          return out?.result || out;
-        } catch (e) {
-          transportState.lastError = e?.message ? e.message : String(e);
-          updateConnBadge();
-
-          if (!isDisconnectLike(e) || attempt >= retries) break;
-
-          attemptSharedReconnect(`direct_ws disconnect during ${cmd}`);
-          await waitForSharedConn(waitMs);
-          attempt += 1;
-        }
-      }
-
-      if (!allowHttpFallback) {
-        throw new Error(transportState.lastError || `XRPL request failed (${cmd})`);
-      }
+      const out = await window.XRPL.client.request(payload);
+      setTransportLastSource("direct_ws_client");
+      transportState.lastError = null;
+      updateConnBadge();
+      return out?.result || out;
     }
 
-    // 3) HTTP JSON-RPC fallback
+    // 3) http json-rpc fallback (proxy/public)
     if (allowHttpFallback) {
-      const out = await rpcCall(cmd, { ...payload }, { timeoutMs, retries: 2 });
+      const out = await rpcCall(payload.command, { ...payload }, { timeoutMs, retries: 2 });
       if (out) return out;
     }
 
@@ -542,6 +466,7 @@
     };
     if (marker) payload.marker = marker;
 
+    // Try shared wrapper first (ledger data directly)
     const rr = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
 
     const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
@@ -598,119 +523,6 @@
     return normalized;
   }
 
-  // ---------------- ACCOUNT LINES + ISSUED TOKENS ----------------
-  async function fetchAccountLinesAll(address) {
-    if (!isValidXrpAddress(address)) return { lines: [], pages: 0, complete: true, source: "invalid" };
-
-    let marker = null;
-    let pages = 0;
-    const lines = [];
-
-    while (pages < LINES_MAX_PAGES) {
-      pages += 1;
-
-      const payload = {
-        command: "account_lines",
-        account: address,
-        ledger_index: "validated",
-        limit: LINES_PAGE_LIMIT
-      };
-      if (marker) payload.marker = marker;
-
-      const out = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
-      const got = Array.isArray(out?.lines) ? out.lines : [];
-      got.forEach((x) => lines.push(x));
-
-      marker = out?.marker || null;
-      if (!marker) break;
-    }
-
-    return {
-      lines,
-      pages,
-      complete: !marker,
-      source: transportState.lastSource || "unknown"
-    };
-  }
-
-  async function fetchGatewayBalances(address) {
-    try {
-      const out = await xrplRequest(
-        {
-          command: "gateway_balances",
-          account: address,
-          ledger_index: "validated"
-        },
-        { timeoutMs: 20000, allowHttpFallback: true }
-      );
-      return out || null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function buildTokenSummaryFromLines(address, linesResp, gatewayResp) {
-    const lines = linesResp?.lines || [];
-    const trustlines = lines.map((l) => {
-      const bal = Number(l.balance);
-      return {
-        peer: l.account || null,
-        currency: l.currency || "???",
-        balance: Number.isFinite(bal) ? bal : 0,
-        limit: l.limit != null ? Number(l.limit) : null,
-        limit_peer: l.limit_peer != null ? Number(l.limit_peer) : null,
-        quality_in: l.quality_in ?? null,
-        quality_out: l.quality_out ?? null
-      };
-    });
-
-    // issuer-side estimate (negative balances on issuer line = others holding positive)
-    const issuedMap = new Map(); // currency -> { holders, outstanding }
-    for (const t of trustlines) {
-      if (!t.currency) continue;
-      if (t.balance < 0) {
-        const cur = t.currency;
-        if (!issuedMap.has(cur)) issuedMap.set(cur, { currency: cur, holders: 0, outstanding: 0 });
-        const row = issuedMap.get(cur);
-        row.holders += 1;
-        row.outstanding += Math.abs(t.balance);
-      }
-    }
-
-    const issuedEstimated = Array.from(issuedMap.values()).sort((a, b) => b.outstanding - a.outstanding);
-
-    const obligations = gatewayResp?.obligations ? gatewayResp.obligations : null;
-
-    const topTrust = trustlines
-      .slice()
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
-      .slice(0, 18);
-
-    return {
-      address,
-      source: linesResp?.source || "unknown",
-      linesPages: linesResp?.pages ?? 0,
-      linesComplete: linesResp?.complete ?? true,
-      trustlineCount: trustlines.length,
-      topTrustlines: topTrust,
-      issuedEstimated,
-      gatewayObligations: obligations
-    };
-  }
-
-  async function getTokenSummary(address) {
-    const addr = String(address || "").trim();
-    if (!isValidXrpAddress(addr)) return null;
-    if (tokenSummaryCache.has(addr)) return tokenSummaryCache.get(addr);
-
-    const lines = await fetchAccountLinesAll(addr);
-    const gateway = await fetchGatewayBalances(addr);
-
-    const summary = buildTokenSummaryFromLines(addr, lines, gateway);
-    tokenSummaryCache.set(addr, summary);
-    return summary;
-  }
-
   // ---------------- ACTIVATION (activated_by) ----------------
   async function getActivatedByStrict(address, constraints) {
     if (!isValidXrpAddress(address)) return { act: null, complete: true, scanned: 0, pages: 0, source: "invalid" };
@@ -725,6 +537,7 @@
     let source = "unknown";
     let complete = true;
 
+    // Activation must scan earliest->latest (forward:true)
     while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
       pages += 1;
 
@@ -787,12 +600,14 @@
   function extractCounterparty(tx) {
     const type = tx.TransactionType || tx.type || "Unknown";
 
+    // Payment => Destination
     if (type === "Payment") {
       const to = tx.Destination || tx.destination || null;
       if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
       return null;
     }
 
+    // TrustSet => LimitAmount.issuer
     if (type === "TrustSet") {
       const lim = tx.LimitAmount || tx.limit_amount || null;
       const issuer = lim && typeof lim === "object" ? lim.issuer : null;
@@ -800,6 +615,7 @@
       return null;
     }
 
+    // OfferCreate => if either side is issued currency, use issuer (maps issuer relationships)
     if (type === "OfferCreate") {
       const a = tx.TakerGets || tx.taker_gets || null;
       const b = tx.TakerPays || tx.taker_pays || null;
@@ -825,6 +641,7 @@
     const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
     const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
+    // forward:false gives newest->older (most recent first)
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
 
@@ -859,6 +676,7 @@
       if (pages % 10 === 0) setStatus(`Scanning recent outgoing ${address.slice(0, 6)}… pages:${pages} found:${collected.length}`);
     }
 
+    // collected is newest->older subset; sort ascending for display
     const picked = normalizeAndSortTxsAsc(collected.slice(0, needCount));
 
     return {
@@ -867,16 +685,16 @@
     };
   }
 
-  // ---------------- GRAPH (ISSUER TREE) ----------------
+  // ---------------- GRAPH ----------------
   function makeGraph(issuer, params) {
     return {
       issuer,
       builtAt: null,
       params,
-      nodes: new Map(),
-      edges: [],
-      adjacency: new Map(),
-      parentChoice: new Map()
+      nodes: new Map(), // addr -> node
+      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash,type,kind }
+      adjacency: new Map(), // from -> [edgeIdx]
+      parentChoice: new Map() // child -> parent (tree)
     };
   }
 
@@ -891,7 +709,7 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: [],
+        outgoingFirst: [], // last N outgoing (shown chronologically)
         outgoingMeta: null
       });
     } else {
@@ -926,6 +744,7 @@
 
     ensureNode(g, g.issuer, 0);
 
+    // Seed issuer data
     g.nodes.get(g.issuer).acctInfo = await fetchAccountInfo(g.issuer);
     g.nodes.get(g.issuer).activation = await getActivatedByStrict(g.issuer, constraints);
 
@@ -964,11 +783,11 @@
           ledger_index: Number(tx.ledger_index || 0),
           date: tx._iso || null,
           amount: amt.value,
-          currency: amt.currency,
-          issuer: amt.issuer || null
+          currency: amt.currency
         };
       });
 
+      // add edges only when counterparty exists
       for (const tx of txs) {
         if (g.edges.length >= maxEdges) break;
 
@@ -991,7 +810,6 @@
           date: tx._iso || null,
           amount: amt.value,
           currency: amt.currency,
-          issuer: amt.issuer || null,
           tx_hash: String(tx.hash || ""),
           type,
           kind
@@ -1001,6 +819,7 @@
           seen.add(to);
           ensureNode(g, to, level + 1);
 
+          // fetch info/activation (these are the expensive parts; still worth it for data completeness)
           g.nodes.get(to).acctInfo = await fetchAccountInfo(to);
           g.nodes.get(to).activation = await getActivatedByStrict(to, constraints);
 
@@ -1044,7 +863,7 @@
     return null;
   }
 
-  // ---------------- PATTERNS ----------------
+  // ---------------- PATTERNS (burst + cycles + reconsolidation) ----------------
   function runPatternScanFull(g) {
     const outBy = new Map();
     const inBy = new Map();
@@ -1055,13 +874,15 @@
       inBy.get(e.to).push(e);
     }
 
+    // ---- issuer first-hop dominance ----
     const issuerOut = outBy.get(g.issuer) || [];
     const firstHopCounts = new Map();
     for (const e of issuerOut) firstHopCounts.set(e.to, (firstHopCounts.get(e.to) || 0) + 1);
     const top = Array.from(firstHopCounts.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
     const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
 
-    const hubCounts = new Map();
+    // ---- reconsolidation: issuer -> many -> hub (fan-in) ----
+    const hubCounts = new Map(); // hub -> set(of firsthop contributors)
     const firstHop = new Set(issuerOut.map((e) => e.to));
 
     for (const leaf of firstHop) {
@@ -1079,6 +900,8 @@
       .sort((a, b) => b.contributors - a.contributors)
       .slice(0, 120);
 
+    // ---- burst detection (based on outgoingFirst txs per node) ----
+    // Burst = many outgoing txs clustered in a small ledger window (approx)
     const bursts = [];
     const BURST_LEDGER_WINDOW = 200;
     const BURST_MIN_TX = 12;
@@ -1090,6 +913,7 @@
       const ledgers = txs.map((t) => Number(t.ledger_index || 0)).filter((x) => x > 0).sort((a, b) => a - b);
       if (ledgers.length < BURST_MIN_TX) continue;
 
+      // sliding window
       let best = 0;
       let bestSpan = null;
 
@@ -1110,6 +934,8 @@
 
     bursts.sort((a, b) => b.txs - a.txs);
 
+    // ---- cycle detection (bounded DFS) ----
+    // Find cycles up to length 6, prioritizing those that include issuer.
     const cycles = [];
     const seenCycle = new Set();
 
@@ -1117,7 +943,8 @@
     const nodeList = Array.from(g.nodes.keys()).slice(0, nodesLimit);
 
     function canonicalizeCycle(path) {
-      const strs = path.slice(0, -1);
+      // rotate so smallest string is first (simple canonical)
+      const strs = path.slice(0, -1); // last repeats start
       if (!strs.length) return "";
       let best = strs;
       for (let i = 1; i < strs.length; i++) {
@@ -1134,6 +961,7 @@
       for (const ei of idxs) {
         const nxt = g.edges[ei].to;
 
+        // close cycle
         if (nxt === start && stack.length >= 2) {
           const cyc = stack.concat([start]);
           const key = canonicalizeCycle(cyc);
@@ -1155,6 +983,7 @@
       }
     }
 
+    // Prefer starting at issuer, then a few high-activity nodes
     const startNodes = [g.issuer]
       .concat(
         nodeList
@@ -1172,6 +1001,8 @@
 
     cycles.sort((a, b) => a.length - b.length);
 
+    // ---- reconsolidation hubs (classic) ----
+    // many parents -> hub -> few children
     const classicHubs = [];
     for (const addr of g.nodes.keys()) {
       const ins = inBy.get(addr) || [];
@@ -1276,46 +1107,19 @@
     clearViews();
     setStatus("Ready");
 
-    if (autoBuildIfMissing) buildTreeClicked().catch(() => {});
-  }
-
-  // ---------------- TABS ----------------
-  function bindInspectorTabs() {
-    const tabs = document.querySelectorAll(".inspector-tab-btn[data-tab]");
-    const panels = document.querySelectorAll(".inspector-tab-panel[data-panel]");
-    if (!tabs.length || !panels.length) return;
-
-    function activate(name) {
-      tabs.forEach((t) => {
-        const on = t.getAttribute("data-tab") === name;
-        t.classList.toggle("is-active", on);
-        t.setAttribute("aria-selected", on ? "true" : "false");
-      });
-      panels.forEach((p) => {
-        const on = p.getAttribute("data-panel") === name;
-        p.style.display = on ? "block" : "none";
-      });
-
-      if (name === "trace" && typeof window.initInspectorTraceTab === "function") {
-        window.initInspectorTraceTab({ mountId: "inspectorTraceMount" });
-      }
+    if (autoBuildIfMissing) {
+      // Defer to avoid TDZ issues in some bundlers / load orders
+      setTimeout(() => {
+        try {
+          if (typeof buildTreeClicked === "function") {
+            buildTreeClicked().catch(() => {});
+          } else if (window.UnifiedInspector && typeof window.UnifiedInspector.buildActive === "function") {
+            window.UnifiedInspector.buildActive();
+          }
+        } catch (_) {}
+      }, 0);
     }
-
-    tabs.forEach((t) => t.addEventListener("click", () => activate(t.getAttribute("data-tab"))));
-    activate("tree");
-  }
-
-  function switchToTraceTab() {
-    const btn = document.querySelector('.inspector-tab-btn[data-tab="trace"]');
-    if (btn) btn.click();
-  }
-
-  function switchToTraceAndSetSeed(addr) {
-    switchToTraceTab();
-    if (window.InspectorTraceTab && typeof window.InspectorTraceTab.setSeedAddress === "function") {
-      window.InspectorTraceTab.setSeedAddress(addr);
-    }
-  }
+}
 
   // ---------------- RENDER ----------------
   function ensurePage() {
@@ -1332,12 +1136,11 @@
 
   function renderPage() {
     const page = ensurePage();
-
     page.innerHTML = `
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">tree • trace • token-aware • investigation-first</div>
+          <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-first)</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
           <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
@@ -1347,118 +1150,91 @@
           </div>
         </div>
 
-        <!-- Tabs -->
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
-          <button class="nav-btn inspector-tab-btn is-active" data-tab="tree" aria-selected="true" type="button"
-            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
-            🌳 Issuer Tree
-          </button>
-          <button class="nav-btn inspector-tab-btn" data-tab="trace" aria-selected="false" type="button"
-            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
-            🧭 Trace
-          </button>
+        <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;align-items:start;">
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <div style="font-weight:900;">Issuers</div>
+                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
+                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
+              </div>
 
-          <div style="margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;">
-            <input id="uiQuickAddr" placeholder="Quick inspect address (paste r...)" style="min-width:280px;padding:10px;border-radius:12px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
-            <button id="uiQuickInspectBtn" class="nav-btn" type="button"
-              style="padding:10px 14px;border-radius:12px;border:none;background:#50fa7b;color:#000;font-weight:900;">
-              Quick Inspect
-            </button>
-          </div>
-        </div>
-
-        <!-- Panels -->
-        <div class="inspector-tab-panel" data-panel="tree" style="display:block;margin-top:12px;">
-          <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:start;">
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                  <div style="font-weight:900;">Issuers</div>
-                  <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
-                  <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
-                </div>
-
-                <details style="margin-top:10px;">
-                  <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
-                  <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                    <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
-                    <div style="display:flex;flex-direction:column;gap:8px;">
-                      <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
-                      <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
-                    </div>
+              <details style="margin-top:10px;">
+                <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
+                <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
+                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
+                  <div style="display:flex;flex-direction:column;gap:8px;">
+                    <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
+                    <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
                   </div>
-                </details>
-
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                  <label style="font-size:13px;">Depth</label>
-                  <input id="uiDepth" type="number" min="1" max="6" value="${DEFAULT_DEPTH}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Per-node</label>
-                  <input id="uiPerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Max accts</label>
-                  <input id="uiMaxA" type="number" min="20" max="2000" value="${DEFAULT_MAX_ACCTS}" style="width:100px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Max edges</label>
-                  <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
                 </div>
+              </details>
 
-                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                  <label style="font-size:13px;">Date</label>
-                  <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;margin-left:8px;">Ledger</label>
-                  <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                </div>
-
-                <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
-                  <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
-                </div>
-
-                <div id="uiStatus" style="margin-top:8px;color:var(--text-secondary)">Ready</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                <label style="font-size:13px;">Depth</label>
+                <input id="uiDepth" type="number" min="1" max="6" value="${DEFAULT_DEPTH}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <label style="font-size:13px;">Per-node</label>
+                <input id="uiPerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <label style="font-size:13px;">Max accts</label>
+                <input id="uiMaxA" type="number" min="20" max="2000" value="${DEFAULT_MAX_ACCTS}" style="width:100px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <label style="font-size:13px;">Max edges</label>
+                <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
               </div>
 
-              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <div style="font-weight:900;">Issuer Tree</div>
-                  <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
-                </div>
-
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                  <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
-                  <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
-                  <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
-                </div>
-
-                <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                <label style="font-size:13px;">Date</label>
+                <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <label style="font-size:13px;margin-left:8px;">Ledger</label>
+                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
               </div>
+
+              <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
+                <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
+              </div>
+
+              <div id="uiStatus" style="margin-top:8px;color:var(--text-secondary)">Ready</div>
             </div>
 
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
-                <div style="opacity:.8">Tree summary appears here.</div>
+            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <div style="font-weight:900;">Issuer Tree</div>
+                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
               </div>
 
-              <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
-                <div style="opacity:.8">Path + patterns appear here.</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
+                <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
               </div>
 
-              <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                  <strong>Edges (counterparty-derived)</strong>
-                  <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
-                </div>
-                <div id="uiEdgeItems" style="margin-top:10px;"></div>
-              </div>
+              <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
             </div>
           </div>
-        </div>
 
-        <div class="inspector-tab-panel" data-panel="trace" style="display:none;margin-top:12px;">
-          <div id="inspectorTraceMount"></div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
+              <div style="opacity:.8">Tree summary appears here.</div>
+            </div>
+
+            <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
+              <div style="opacity:.8">Path + patterns appear here.</div>
+            </div>
+
+            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <strong>Edges (counterparty-derived)</strong>
+                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
+              </div>
+              <div id="uiEdgeItems" style="margin-top:10px;"></div>
+            </div>
+          </div>
         </div>
 
         <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
-          <div style="width:min(980px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
+          <div style="width:min(940px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
               <strong id="uiModalTitle">Details</strong>
               <button id="uiModalClose">✕</button>
@@ -1474,11 +1250,6 @@
     $("uiRetryWs").addEventListener("click", () => {
       attemptSharedReconnect("manual retry");
       setStatus("Retry requested.");
-    });
-
-    $("uiQuickInspectBtn").addEventListener("click", () => {
-      const addr = ($("uiQuickAddr")?.value || "").trim();
-      quickInspectAddress(addr, { perNode: 160 });
     });
 
     updateConnBadge();
@@ -1500,7 +1271,6 @@
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
-      tokenSummaryCache.clear();
       clearViews();
       setStatus("Cache cleared");
     });
@@ -1510,15 +1280,13 @@
     $("uiFindPath").addEventListener("click", findPathClicked);
     $("uiPatterns").addEventListener("click", patternsClicked);
     $("uiExportGraph").addEventListener("click", exportActiveGraph);
-
-    bindInspectorTabs();
   }
 
   function clearViews() {
-    if ($("uiTree")) $("uiTree").innerHTML = "";
-    if ($("uiSummary")) $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
-    if ($("uiResults")) $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
-    if ($("uiEdgeItems")) $("uiEdgeItems").innerHTML = "";
+    $("uiTree").innerHTML = "";
+    $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
+    $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
+    $("uiEdgeItems").innerHTML = "";
   }
 
   function renderAll(g) {
@@ -1565,29 +1333,511 @@
       ${actHtml}
       <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
       <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
-      <div style="margin-top:10px;padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);font-size:12px;opacity:.85;">
-        Tip: For drain-style tracking, use the <strong>Trace</strong> tab (hop-by-hop graph).
-      </div>
     `;
   }
 
-  // ... (the remainder of your file is unchanged from what you pasted)
-  // NOTE: For chat-length safety, I’ve preserved ALL functional code up to here.
-  // If you want, paste the rest chunk or upload the file and I’ll output the full
-  // remaining unchanged portion verbatim with this patch applied.
-  //
-  // Your existing file after renderSummary continues with:
-  //   renderTree(...)
-  //   renderEdgeFilter(...)
-  //   quickInspectAddress(...)
-  //   exportActiveGraph(...)
-  //   buildTreeClicked(...)
-  //   findPathClicked(...)
-  //   patternsClicked(...)
-  //   initInspector()
-  //   window.UnifiedInspector = ...
-  //
-  // Those sections remain identical, except they now use this updated xrplRequest() above.
+  function renderTree(g) {
+    const host = $("uiTree");
+    if (!host) return;
+
+    const levels = new Map();
+    levels.set(g.issuer, 0);
+    const qq = [g.issuer];
+
+    while (qq.length) {
+      const cur = qq.shift();
+      const lv = levels.get(cur) ?? 0;
+      if (lv >= g.params.depth) continue;
+
+      const idxs = g.adjacency.get(cur) || [];
+      for (const ei of idxs) {
+        const e = g.edges[ei];
+        if (!levels.has(e.to)) {
+          levels.set(e.to, lv + 1);
+          qq.push(e.to);
+        }
+      }
+    }
+
+    const children = new Map();
+    for (const addr of levels.keys()) children.set(addr, []);
+    for (const [child, parent] of g.parentChoice.entries()) {
+      if (!parent) continue;
+      if (levels.has(child) && levels.has(parent) && levels.get(child) === levels.get(parent) + 1) {
+        children.get(parent).push(child);
+      }
+    }
+    for (const [p, arr] of children.entries()) {
+      arr.sort((a, b) => (g.nodes.get(b)?.inCount || 0) - (g.nodes.get(a)?.inCount || 0));
+    }
+
+    function activationLine(entry) {
+      if (!entry) return `<div style="opacity:.7;font-size:12px;">activated by: —</div>`;
+      if (!entry.act) {
+        return `<div style="opacity:.75;font-size:12px;">activated by: — <span style="opacity:.7">(${escapeHtml(entry.source || "unknown")}${
+          entry.complete ? "" : ", incomplete"
+        })</span></div>`;
+      }
+      const act = entry.act;
+      const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
+      return `<div style="opacity:.85;font-size:12px;">activated by: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
+        amt
+      )} • ${escapeHtml(act.date || "—")}</div>`;
+    }
+
+    function nodeRow(addr) {
+      const n = g.nodes.get(addr);
+      const lvl = levels.get(addr) ?? n?.level ?? 0;
+      const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
+
+      return `
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <div>
+            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
+            ${activationLine(n?.activation)}
+            <div style="opacity:.75;font-size:12px;margin-top:4px;">
+              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
+              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
+              recent outgoing loaded:${escapeHtml(firstN)}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRec(addr, indentPx) {
+      const kids = children.get(addr) || [];
+      const sectionId = `uiKids_${addr}`;
+      const hasKids = kids.length > 0;
+
+      const head = `
+        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);margin-left:${indentPx}px;">
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            ${
+              hasKids
+                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
+                : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
+            }
+            <div style="flex:1;">${nodeRow(addr)}</div>
+          </div>
+          ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
+        </div>
+      `;
+
+      let html = head;
+      if (hasKids) {
+        const inner = kids.map((k) => renderRec(k, indentPx + 18)).join("");
+        html = html.replace(`<div id="${escapeHtml(sectionId)}"></div>`, `<div id="${escapeHtml(sectionId)}">${inner}</div>`);
+      }
+      return html;
+    }
+
+    host.innerHTML = renderRec(g.issuer, 0);
+
+    Array.from(document.querySelectorAll(".uiToggle")).forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const target = btn.getAttribute("data-target");
+        const el = document.getElementById(target);
+        if (!el) return;
+        const open = el.style.display !== "none";
+        el.style.display = open ? "none" : "block";
+        btn.textContent = open ? "▸" : "▾";
+      })
+    );
+
+    Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
+      btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
+    );
+  }
+
+  function renderEdgeFilter(g) {
+    const q = String(($("uiSearch") || {}).value || "").trim().toLowerCase();
+    const items = $("uiEdgeItems");
+    if (!items) return;
+
+    const filtered = q
+      ? g.edges.filter((e) => {
+          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : g.edges;
+
+    const slice = filtered.slice(0, 300);
+    items.innerHTML =
+      slice
+        .map((e) => {
+          const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
+          return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
+            <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
+              • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
+              • ledger ${escapeHtml(e.ledger_index)}
+              • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
+            </div>
+            <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
+          </div>`;
+        })
+        .join("") || `<div style="opacity:.7">No edges (try increasing per-node / clearing filters).</div>`;
+  }
+
+  function renderEdgeFilterActive() {
+    const g = issuerRegistry.get(activeIssuer);
+    if (!g) return;
+    renderEdgeFilter(g);
+  }
+
+  function showNodeModal(g, addr) {
+    if (!addr) return;
+    const n = g.nodes.get(addr);
+    if (!n) return;
+
+    const actEntry = n.activation;
+    const act = actEntry?.act || null;
+
+    const info = n.acctInfo;
+    const domain = info?.domain || null;
+    const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
+
+    const outgoing = Array.isArray(n.outgoingFirst) ? n.outgoingFirst : [];
+
+    const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
+    const csv = [
+      ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency"].join(","),
+      ...outgoing.map((x) =>
+        [
+          `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
+          `"${String(x.type || "").replace(/"/g, '""')}"`,
+          `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
+          `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
+          Number(x.ledger_index || 0),
+          `"${String(x.date || "").replace(/"/g, '""')}"`,
+          Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
+          `"${String(x.currency || "").replace(/"/g, '""')}"`
+        ].join(",")
+      )
+    ].join("\n");
+
+    const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
+
+    const actBlock = act
+      ? `
+        <div style="margin-top:10px;">
+          <div style="font-weight:900;">Activated by</div>
+          <div style="margin-top:6px;">
+            <code>${escapeHtml(act.activatedBy)}</code>
+            <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
+          </div>
+          <div style="margin-top:6px;opacity:.9;">
+            ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
+            <span style="opacity:.7;">(${escapeHtml(actEntry.source || "unknown")})</span>
+          </div>
+          <div style="margin-top:6px;font-size:12px;opacity:.9;">
+            ${
+              actLinks?.xrpscan
+                ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
+                   <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
+                : `<span style="opacity:.75;">no tx link</span>`
+            }
+          </div>
+        </div>
+      `
+      : `
+        <div style="margin-top:10px;">
+          <div style="font-weight:900;">Activated by</div>
+          <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(actEntry?.source || "unknown")}${
+            actEntry && !actEntry.complete ? ", incomplete" : ""
+          })</span></div>
+        </div>
+      `;
+
+    const metaLine = n.outgoingMeta
+      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.mode)}</div>`
+      : "";
+
+    const rows = outgoing
+      .slice(0, 200)
+      .map((x, i) => {
+        const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
+        const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
+        const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
+        const amt = `${escapeHtml(x.currency)} ${Number.isFinite(Number(x.amount)) ? escapeHtml(Number(x.amount).toFixed(6)) : "—"}`;
+        const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
+        return `
+          <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+            <div style="display:flex;justify-content:space-between;gap:10px;">
+              <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
+              <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
+            </div>
+            <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const html = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+          <div style="font-weight:900;">Account</div>
+          <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
+          <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
+          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+          ${actBlock}
+          ${metaLine}
+        </div>
+
+        <div style="width:320px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+          <div style="font-weight:900;">Actions</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+            <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
+            <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
+            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
+            <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
+          </div>
+          <div style="margin-top:10px;opacity:.85;font-size:12px;">
+            outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
+          </div>
+          <div style="margin-top:6px;opacity:.75;font-size:12px;">
+            note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="font-weight:900;">Recent outgoing transactions</div>
+          <div style="opacity:.75;font-size:12px;">(shown chronological)</div>
+        </div>
+        <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+          ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
+        </div>
+      </div>
+    `;
+
+    openModal(`Node: ${addr}`, html);
+
+    $("uiCopyHashes").onclick = async () => {
+      const ok = await copyToClipboard(hashesOnly || "");
+      $("uiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
+      setTimeout(() => ($("uiCopyHashes").textContent = "Copy hashes"), 1200);
+    };
+    $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
+    $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
+    $("uiShowRaw").onclick = () => {
+      const rawObj = { address: addr, node: n };
+      openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
+    };
+  }
+
+  // ---------------- EXPORT GRAPH ----------------
+  function exportActiveGraph() {
+    const g = issuerRegistry.get(activeIssuer);
+    if (!g) {
+      setStatus("Build a tree first.");
+      return;
+    }
+
+    const exportObj = {
+      version: MODULE_VERSION,
+      issuer: g.issuer,
+      builtAt: g.builtAt,
+      transport: { lastSource: transportState.lastSource, wsConnected: transportState.wsConnected, lastError: transportState.lastError },
+      params: g.params,
+      nodes: Array.from(g.nodes.values()).map((n) => ({
+        address: n.address,
+        level: n.level,
+        outCount: n.outCount,
+        inCount: n.inCount,
+        outXrp: Number(n.outXrp.toFixed(6)),
+        inXrp: Number(n.inXrp.toFixed(6)),
+        domain: n.acctInfo?.domain || null,
+        balanceXrp: n.acctInfo?.balanceXrp ?? null,
+        activated_by: n.activation?.act || null,
+        activation_source: n.activation?.source || null,
+        activation_complete: n.activation?.complete ?? null,
+        outgoingMeta: n.outgoingMeta || null,
+        recentOutgoing: n.outgoingFirst || []
+      })),
+      edges: g.edges
+    };
+
+    downloadText(JSON.stringify(exportObj, null, 2), `naluxrp-issuer-tree-${g.issuer}-${Date.now()}.json`, "application/json");
+  }
+
+  // ---------------- BUTTON HANDLERS ----------------
+  async function buildTreeClicked() {
+    const issuer = $("uiIssuerSelect").value;
+    if (!issuer || !isValidXrpAddress(issuer)) {
+      setStatus("Pick a valid issuer.");
+      return;
+    }
+
+    if (buildingTree) return;
+    buildingTree = true;
+
+    try {
+      setBuildBusy(true, "Building…");
+      setProgress(0);
+      setStatus("Starting build…");
+
+      activeIssuer = issuer;
+
+      // show something immediately in the tree container
+      $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
+      $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
+
+      const depth = clampInt(Number(($("uiDepth") || {}).value || DEFAULT_DEPTH), 1, 6);
+      const perNode = clampInt(Number(($("uiPerNode") || {}).value || DEFAULT_PER_NODE), 10, 300);
+      const maxAccounts = clampInt(Number(($("uiMaxA") || {}).value || DEFAULT_MAX_ACCTS), 20, 2000);
+      const maxEdges = clampInt(Number(($("uiMaxE") || {}).value || DEFAULT_MAX_EDGES), 50, 10000);
+
+      const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
+      const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
+      const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
+      const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
+      const minXrp = Number(($("uiMinXrp") || {}).value || 0);
+
+      const constraints = { startDate, endDate, ledgerMin, ledgerMax, minXrp };
+
+      const g = makeGraph(issuer, { depth, perNode, maxAccounts, maxEdges, constraints });
+      clearViews();
+
+      // ensure ws attempt exists (non-blocking)
+      waitForSharedConn(1500).then((ok) => {
+        if (!ok) attemptSharedReconnect("build requested but ws offline");
+      });
+
+      await buildIssuerTree(g);
+
+      issuerRegistry.set(issuer, g);
+      renderAll(g);
+
+      setStatus(`Tree built: ${g.nodes.size} accounts • ${g.edges.length} edges`);
+      setProgress(-1);
+    } catch (e) {
+      console.error(e);
+      setStatus(`Build failed: ${e?.message ? e.message : String(e)}`);
+      setProgress(-1);
+    } finally {
+      buildingTree = false;
+      setBuildBusy(false, "Build");
+    }
+  }
+
+  function findPathClicked() {
+    const g = issuerRegistry.get(activeIssuer);
+    if (!g) {
+      setStatus("Build a tree first.");
+      return;
+    }
+    const target = ($("uiTarget") || {}).value?.trim();
+    if (!isValidXrpAddress(target)) {
+      setStatus("Enter a valid target address.");
+      return;
+    }
+    const path = findShortestPath(g, g.issuer, target);
+    if (!path) {
+      $("uiResults").innerHTML = `<div>No path found (within current tree).</div>`;
+      return;
+    }
+    $("uiResults").innerHTML = `
+      <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
+      <div style="margin-top:8px;">${path
+        .map((p) => `<div style="display:flex;align-items:center;gap:8px;"><code>${escapeHtml(p)}</code><button class="uiNodeMini" data-addr="${escapeHtml(
+          p
+        )}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button></div>`)
+        .join("")}</div>
+    `;
+
+    Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
+      btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
+    );
+  }
+
+  function patternsClicked() {
+    const g = issuerRegistry.get(activeIssuer);
+    if (!g) {
+      setStatus("Build a tree first.");
+      return;
+    }
+
+    const report = runPatternScanFull(g);
+
+    const hubRows = report.reconHubs.length
+      ? report.reconHubs
+          .map(
+            (h) => `
+        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+          <div><code>${escapeHtml(h.hub)}</code></div>
+          <div style="opacity:.85;margin-top:4px;">contributors from issuer-first-hop: <strong>${escapeHtml(h.contributors)}</strong></div>
+        </div>`
+          )
+          .join("")
+      : `<div style="padding:12px;opacity:.75;">No fan-in hubs detected from issuer first-hop.</div>`;
+
+    const burstRows = report.bursts.length
+      ? report.bursts
+          .map(
+            (b) => `
+        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+          <div><code>${escapeHtml(b.address)}</code></div>
+          <div style="opacity:.85;margin-top:4px;">burst txs: <strong>${escapeHtml(b.txs)}</strong> • span: ${escapeHtml(b.span)} ledgers (${escapeHtml(
+              b.from
+            )} → ${escapeHtml(b.to)})</div>
+        </div>`
+          )
+          .join("")
+      : `<div style="padding:12px;opacity:.75;">No bursts detected (within loaded outgoing windows).</div>`;
+
+    const cycleRows = report.cycles.length
+      ? report.cycles
+          .map(
+            (c) => `
+        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+          <div style="opacity:.85;">len ${escapeHtml(c.length)}:</div>
+          <div style="margin-top:4px;">${c.path.map((p) => `<code style="margin-right:6px;">${escapeHtml(p.slice(0, 6))}…</code>`).join(" ")}</div>
+        </div>`
+          )
+          .join("")
+      : `<div style="padding:12px;opacity:.75;">No cycles found (within current graph bounds).</div>`;
+
+    $("uiResults").innerHTML = `
+      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+        <div style="font-weight:900;">Pattern summary</div>
+        <div style="margin-top:10px;opacity:.9;">
+          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
+          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
+          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
+          <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
+          <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
+          <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
+          <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${hubRows}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Bursts (high-density outgoing)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${burstRows}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Cycles (bounded)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${cycleRows}
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   // ---------------- INIT ----------------
   function initInspector() {
@@ -1596,19 +1846,12 @@
   }
 
   window.initInspector = initInspector;
-
-  // ✅ Public API for Trace Tab + others
   window.UnifiedInspector = {
     version: MODULE_VERSION,
-    request: (payload, opts) => xrplRequest(payload, opts || {}),
-    quickInspect: (addr) => quickInspectAddress(addr, { perNode: 160 }),
-    getTokenSummary: (addr) => getTokenSummary(addr),
-    getTransportState: () => ({ ...transportState }),
-    attemptSharedReconnect,
-    exportActiveGraph,
     buildActive: () => buildTreeClicked(),
     getGraph: () => issuerRegistry.get(activeIssuer) || null,
-    switchToTrace: (addr) => switchToTraceAndSetSeed(addr)
+    exportActiveGraph,
+    attemptSharedReconnect
   };
 
   console.log(`✅ Unified Inspector loaded (${MODULE_VERSION})`);
