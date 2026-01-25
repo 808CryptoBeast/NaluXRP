@@ -1130,6 +1130,67 @@ function isXRPLConnected() {
   );
 }
 
+/* ---------- SHARED REQUEST WRAPPER (NEW) ---------- */
+/*
+  window.requestXrpl(payload, { timeoutMs })
+  - Used by Unified Inspector + other modules.
+  - Uses shared WS client when connected; attempts reconnect if needed.
+  - Adds a timeout guard so callers don't hang forever.
+*/
+function waitForXRPLConnection(timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    try {
+      if (window.XRPL.connected) return resolve(true);
+
+      const onConn = (ev) => {
+        const d = ev && ev.detail;
+        if (d && d.connected) {
+          window.removeEventListener("xrpl-connection", onConn);
+          clearTimeout(t);
+          resolve(true);
+        }
+      };
+
+      window.addEventListener("xrpl-connection", onConn);
+
+      const t = setTimeout(() => {
+        window.removeEventListener("xrpl-connection", onConn);
+        resolve(false);
+      }, timeoutMs);
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+
+window.requestXrpl = async function requestXrpl(payload, opts) {
+  const options = opts || {};
+  const timeoutMs = Number(options.timeoutMs || 20000);
+
+  // ensure connection if possible
+  if (!window.XRPL.client || !window.XRPL.connected) {
+    try {
+      connectXRPL();
+      await waitForXRPLConnection(Math.min(15000, timeoutMs));
+    } catch (_) {}
+  }
+
+  if (!window.XRPL.client) {
+    throw new Error("XRPL client unavailable");
+  }
+
+  // Guard request with timeout
+  const req = window.XRPL.client.request(payload);
+  const timed = Promise.race([
+    req,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), timeoutMs)
+    )
+  ]);
+
+  return timed;
+};
+
 /* ---------- INITIALIZATION ---------- */
 
 document.addEventListener("DOMContentLoaded", function () {
