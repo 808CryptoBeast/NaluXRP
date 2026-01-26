@@ -1,12 +1,10 @@
 /* =========================================================
    FILE: js/account-inspector.js
    NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
-   - Issuer list mode (dropdown, cached graphs)
-   - Ledger-first defaults: MOST RECENT N outgoing txs from issuer (ALL types)
-   - Tree edges derived from txs with counterparties (Payment / TrustSet / OfferCreate issuers)
-   - Node inspector: activated_by + acct info + outgoing list (UI-first)
-   - Transport: shared WS preferred (window.requestXrpl), HTTP JSON-RPC fallback (proxy or public)
-   - Patterns: burst + cycles + reconsolidation hubs
+   v2.3.0 (Cytoscape interactive graphs + configurable explorer)
+   - Replaced lightweight SVG flows with Cytoscape interactive graphs
+   - Explorer host configurable in UI (preset + custom)
+   - Cytoscape loaded on-demand from CDN
    ========================================================= */
 
 (function () {
@@ -42,11 +40,12 @@
   // localStorage keys
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
+  const LOCAL_KEY_EXPLORER = "naluxrp_explorer";
 
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.1.1-ledger-first-fixed";
+  const MODULE_VERSION = "unified-inspector@2.3.0-cyto";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -55,6 +54,7 @@
   const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
+  const sessionCache = { account_tx: new Map() }; // simple session-only cache
 
   const transportState = {
     wsConnected: false,
@@ -62,6 +62,9 @@
     lastError: null,
     lastSharedReconnectAttemptAt: 0
   };
+
+  // Cytoscape instances store
+  window._naluCyInstances = window._naluCyInstances || {};
 
   // ---------------- DOM ----------------
   const $ = (id) => document.getElementById(id);
@@ -91,7 +94,7 @@
 
   function setStatus(s) {
     const el = $("uiStatus");
-    if (el) el.textContent = s;
+    if (el) el.innerHTML = s;
   }
 
   function setProgress(p) {
@@ -123,6 +126,8 @@
     $("uiModalTitle").textContent = title || "Details";
     $("uiModalBody").innerHTML = html || "";
     $("uiModalOverlay").style.display = "flex";
+    // allow scrolling to top
+    $("uiModalBody").scrollTop = 0;
   }
 
   function closeModal() {
@@ -163,12 +168,63 @@
     URL.revokeObjectURL(url);
   }
 
-  function explorerLinks(txHash) {
-    if (!txHash) return { xrpscan: null, bithomp: null };
-    return {
-      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
-      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
-    };
+  // ---------------- EXPLORER CONFIG ----------------
+  const EXPLORER_PRESETS = {
+    xrpscan: {
+      id: "xrpscan",
+      label: "XRPScan",
+      acct: "https://xrpscan.com/account/{acct}",
+      tx: "https://xrpscan.com/tx/{tx}"
+    },
+    bithomp: {
+      id: "bithomp",
+      label: "Bithomp",
+      acct: "https://bithomp.com/explorer/{acct}",
+      tx: "https://bithomp.com/explorer/{tx}"
+    },
+    custom: {
+      id: "custom",
+      label: "Custom"
+    }
+  };
+
+  function loadExplorerSettings() {
+    try {
+      const raw = safeGetStorage(LOCAL_KEY_EXPLORER);
+      if (!raw) return { selected: "xrpscan", customAcct: "", customTx: "" };
+      const p = JSON.parse(raw);
+      return { selected: p.selected || "xrpscan", customAcct: p.customAcct || "", customTx: p.customTx || "" };
+    } catch (_) {
+      return { selected: "xrpscan", customAcct: "", customTx: "" };
+    }
+  }
+
+  function saveExplorerSettings(settings) {
+    try {
+      safeSetStorage(LOCAL_KEY_EXPLORER, JSON.stringify(settings || {}));
+    } catch (_) {}
+  }
+
+  function getExplorerUrlForAccount(acct) {
+    const s = loadExplorerSettings();
+    if (s.selected && s.selected !== "custom") {
+      const preset = EXPLORER_PRESETS[s.selected];
+      if (preset && preset.acct) return preset.acct.replace("{acct}", encodeURIComponent(acct));
+    }
+    if (s.customAcct) return s.customAcct.replace("{acct}", encodeURIComponent(acct));
+    // fallback
+    return `https://xrpscan.com/account/${encodeURIComponent(acct)}`;
+  }
+
+  function getExplorerUrlForTx(tx) {
+    const s = loadExplorerSettings();
+    if (s.selected && s.selected !== "custom") {
+      const preset = EXPLORER_PRESETS[s.selected];
+      if (preset && preset.tx) return preset.tx.replace("{tx}", encodeURIComponent(tx));
+    }
+    if (s.customTx) return s.customTx.replace("{tx}", encodeURIComponent(tx));
+    // fallback
+    return `https://xrpscan.com/tx/${encodeURIComponent(tx)}`;
   }
 
   // ---------------- TIME / INPUT HELPERS ----------------
@@ -512,15 +568,21 @@
     };
   }
 
-  async function fetchAccountInfo(address) {
+  async function fetchAccountInfo(address, { force = false } = {}) {
     if (!isValidXrpAddress(address)) return null;
-    if (accountInfoCache.has(address)) return accountInfoCache.get(address);
+    if (!force && accountInfoCache.has(address)) return accountInfoCache.get(address);
 
-    const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
-    const data = out?.account_data || out?.result?.account_data || null;
-    const normalized = normalizeAccountInfo(data);
-    accountInfoCache.set(address, normalized);
-    return normalized;
+    try {
+      const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
+      const data = out?.account_data || out?.result?.account_data || null;
+      const normalized = normalizeAccountInfo(data);
+      accountInfoCache.set(address, normalized);
+      return normalized;
+    } catch (e) {
+      // leave null but cache negative result to avoid repeated failures
+      accountInfoCache.set(address, null);
+      return null;
+    }
   }
 
   // ---------------- ACTIVATION (activated_by) ----------------
@@ -645,6 +707,24 @@
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
 
+      const cacheKey = `${address}_${marker || "nomarker"}_${pages}_${ledgerMin}_${ledgerMax}`;
+      // session cache for account_tx pages to avoid repeated fetches inside same run
+      if (sessionCache.account_tx.has(cacheKey)) {
+        const cached = sessionCache.account_tx.get(cacheKey);
+        scanned += cached.length;
+        for (const entry of cached) {
+          const tx = normalizeTxEntry(entry);
+          if (!tx) continue;
+          if (!withinConstraints(tx, constraints)) continue;
+          const from = tx.Account || tx.account;
+          if (from !== address) continue;
+          collected.push(tx);
+          if (collected.length >= needCount) break;
+        }
+        if (collected.length >= needCount) break;
+        // can't get next marker from cached unless we store it; fallthrough to fetch if necessary
+      }
+
       const resp = await fetchAccountTxPaged(address, {
         marker,
         limit: PAGE_LIMIT,
@@ -655,6 +735,9 @@
 
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
+
+      // cache raw page for session
+      sessionCache.account_tx.set(cacheKey, resp.txs);
 
       for (const entry of resp.txs) {
         const tx = normalizeTxEntry(entry);
@@ -1107,21 +1190,111 @@
     clearViews();
     setStatus("Ready");
 
-    if (autoBuildIfMissing) {
-      // Defer to avoid TDZ issues in some bundlers / load orders
-      setTimeout(() => {
-        try {
-          if (typeof buildTreeClicked === "function") {
-            buildTreeClicked().catch(() => {});
-          } else if (window.UnifiedInspector && typeof window.UnifiedInspector.buildActive === "function") {
-            window.UnifiedInspector.buildActive();
-          }
-        } catch (_) {}
-      }, 0);
-    }
-}
+    if (autoBuildIfMissing) buildTreeClicked().catch(() => {});
+  }
 
-  // ---------------- RENDER ----------------
+  // ---------------- CYTOSCAPE LOADER + HELPERS ----------------
+  function ensureCytoscapeLoaded() {
+    return new Promise((resolve, reject) => {
+      if (window.cytoscape) return resolve(window.cytoscape);
+      // load script
+      const existing = document.querySelector('script[data-nalu-cyto]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(window.cytoscape));
+        existing.addEventListener("error", (e) => reject(e));
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = "https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js";
+      s.async = true;
+      s.setAttribute("data-nalu-cyto", "1");
+      s.onload = () => {
+        if (window.cytoscape) resolve(window.cytoscape);
+        else reject(new Error("cytoscape failed to initialize"));
+      };
+      s.onerror = (e) => reject(e);
+      document.head.appendChild(s);
+    });
+  }
+
+  function destroyCyInstance(containerId) {
+    try {
+      const key = `cy__${containerId}`;
+      const prev = window._naluCyInstances[key];
+      if (prev && prev.destroy) {
+        prev.destroy();
+      }
+      delete window._naluCyInstances[key];
+    } catch (_) {}
+  }
+
+  // create or update a cytoscape instance for given container and elements
+  async function renderCytoscape(container, elements, opts = {}) {
+    if (!container) return null;
+    await ensureCytoscapeLoaded();
+    const key = `cy__${container.id || String(Math.random()).slice(2)}`;
+
+    destroyCyInstance(container.id);
+
+    const cy = window.cytoscape({
+      container,
+      elements,
+      style: [
+        {
+          selector: "node",
+          style: {
+            label: "data(label)",
+            "text-wrap": "wrap",
+            "text-max-width": 120,
+            "background-color": "data(color)",
+            width: "data(size)",
+            height: "data(size)",
+            "font-size": 11,
+            color: "#fff",
+            "text-valign": "center",
+            "text-halign": "center",
+            "overlay-padding": "6px"
+          }
+        },
+        {
+          selector: "edge",
+          style: {
+            width: "data(width)",
+            "line-color": "data(color)",
+            "curve-style": "bezier",
+            "target-arrow-shape": "triangle",
+            "target-arrow-color": "data(color)",
+            opacity: 0.9
+          }
+        },
+        {
+          selector: ".highlight",
+          style: {
+            "background-color": "#ffd54f",
+            "line-color": "#ffd54f",
+            "target-arrow-color": "#ffd54f"
+          }
+        }
+      ],
+      layout: { name: opts.layout || "cose", animate: true, fit: true }
+    });
+
+    // basic interaction: click node -> callback if provided
+    if (typeof opts.onNodeClick === "function") {
+      cy.on("tap", "node", (evt) => {
+        const node = evt.target;
+        opts.onNodeClick(node.data());
+      });
+    }
+
+    // zoom/fit controls if requested
+    if (opts.fitAfter !== false) cy.fit();
+
+    window._naluCyInstances[key] = cy;
+    return cy;
+  }
+
+  // ---------------- RESULTS / RENDER ----------------
   function ensurePage() {
     let page = document.getElementById("inspector");
     if (!page) {
@@ -1136,6 +1309,8 @@
 
   function renderPage() {
     const page = ensurePage();
+    const explorerSettings = loadExplorerSettings();
+
     page.innerHTML = `
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -1143,10 +1318,10 @@
           <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-first)</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
-          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
+          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,[...]
             <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
             <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
-            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
+            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</bu[...]
           </div>
         </div>
 
@@ -1155,14 +1330,14 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuers</div>
-                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
-                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
+                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)[...]
+                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build[...]
               </div>
 
               <details style="margin-top:10px;">
                 <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
                 <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
+                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var[...]
                   <div style="display:flex;flex-direction:column;gap:8px;">
                     <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
                     <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
@@ -1183,12 +1358,24 @@
 
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
                 <label style="font-size:13px;">Date</label>
-                <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiStart" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiEnd" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
                 <label style="font-size:13px;margin-left:8px;">Ledger</label>
-                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
+              </div>
+
+              <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+                <label style="font-size:13px;font-weight:700;">Explorer</label>
+                <select id="uiExplorerSelect" style="padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);">
+                  <option value="xrpscan">XRPScan</option>
+                  <option value="bithomp">Bithomp</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);backgro[...]
+                <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:trans[...]
+                <button id="uiExplorerSave" class="nav-btn" style="padding:6px 10px;border-radius:8px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
               </div>
 
               <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
@@ -1201,11 +1388,11 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuer Tree</div>
-                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);backgrou[...]
               </div>
 
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background[...]
                 <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
                 <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
               </div>
@@ -1215,18 +1402,19 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:10px;">
-            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
+            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
               <div style="opacity:.8">Tree summary appears here.</div>
+              <div id="uiFlowMini" style="margin-top:10px;"></div>
             </div>
 
             <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
               <div style="opacity:.8">Path + patterns appear here.</div>
             </div>
 
-            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
+            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);[...]
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                 <strong>Edges (counterparty-derived)</strong>
-                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
+                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">[...]
               </div>
               <div id="uiEdgeItems" style="margin-top:10px;"></div>
             </div>
@@ -1245,11 +1433,24 @@
       </div>
     `;
 
+    // hydrate explorer UI defaults
+    $("uiExplorerSelect").value = explorerSettings.selected || "xrpscan";
+    $("uiExplorerAcct").value = explorerSettings.customAcct || "";
+    $("uiExplorerTx").value = explorerSettings.customTx || "";
+
     $("uiModalClose").addEventListener("click", closeModal);
 
     $("uiRetryWs").addEventListener("click", () => {
       attemptSharedReconnect("manual retry");
       setStatus("Retry requested.");
+    });
+
+    $("uiExplorerSave").addEventListener("click", () => {
+      const sel = $("uiExplorerSelect").value;
+      const acct = $("uiExplorerAcct").value.trim();
+      const tx = $("uiExplorerTx").value.trim();
+      saveExplorerSettings({ selected: sel, customAcct: acct, customTx: tx });
+      setStatus("Explorer saved.");
     });
 
     updateConnBadge();
@@ -1267,12 +1468,24 @@
       hydrateIssuerSelect();
       setStatus(`Saved issuer list (${arr.length})`);
     });
+
+    // Clear cache with undo
     $("uiClearCache").addEventListener("click", () => {
+      const prevIssuerRegistry = new Map(issuerRegistry);
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
       clearViews();
-      setStatus("Cache cleared");
+      setStatus("Cache cleared. <button id='uiUndoClear' class='nav-btn'>Undo</button>");
+      const undoBtn = $("uiUndoClear");
+      if (undoBtn) {
+        undoBtn.addEventListener("click", () => {
+          // restore previous registry (shallow)
+          for (const [k, v] of prevIssuerRegistry.entries()) issuerRegistry.set(k, v);
+          setStatus("Cache restored (undo).");
+          renderAll(issuerRegistry.get(activeIssuer) || {});
+        });
+      }
     });
 
     $("uiBuild").addEventListener("click", () => buildTreeClicked().catch(() => {}));
@@ -1287,6 +1500,8 @@
     $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
     $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
     $("uiEdgeItems").innerHTML = "";
+    const mini = $("uiFlowMini");
+    if (mini) mini.innerHTML = "";
   }
 
   function renderAll(g) {
@@ -1296,6 +1511,10 @@
   }
 
   function renderSummary(g) {
+    if (!g) {
+      $("uiSummary").innerHTML = `<div style="opacity:.8">No graph</div>`;
+      return;
+    }
     const issuer = g.issuer;
     const edges = g.edges.length;
     const accounts = g.nodes.size;
@@ -1310,7 +1529,7 @@
 
     const actHtml = act
       ? (() => {
-          const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
+          const links = act.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
           const txLinks = links
             ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
                <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
@@ -1334,6 +1553,17 @@
       <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
       <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
     `;
+
+    // Render mini flow for issuer: top incoming/outgoing using Cytoscape
+    const mini = $("uiFlowMini");
+    if (mini) {
+      mini.innerHTML = `<div id="cyMini" style="width:100%;height:84px;border-radius:8px;background:rgba(0,0,0,0.02);padding:6px;"></div>`;
+      renderMiniFlow(g, g.issuer, "cyMini").catch((e) => {
+        // fallback: simple text
+        mini.innerHTML = `<div style="opacity:.8">Flow preview unavailable</div>`;
+        console.warn("cy mini failed", e);
+      });
+    }
   }
 
   function renderTree(g) {
@@ -1391,18 +1621,13 @@
       const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
 
       return `
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
-            ${activationLine(n?.activation)}
-            <div style="opacity:.75;font-size:12px;margin-top:4px;">
-              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-              recent outgoing loaded:${escapeHtml(firstN)}
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+        <div>
+          <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
+          ${activationLine(n?.activation)}
+          <div style="opacity:.75;font-size:12px;margin-top:4px;">
+            edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
+            edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
+            recent outgoing loaded:${escapeHtml(firstN)}
           </div>
         </div>
       `;
@@ -1418,10 +1643,14 @@
           <div style="display:flex;align-items:flex-start;gap:8px;">
             ${
               hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
+                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent[...]
                 : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
             }
             <div style="flex:1;">${nodeRow(addr)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+              <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect[...]
+              <button class="uiMiniFlow" data-addr="${escapeHtml(addr)}" title="Flow" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;co[...]
+            </div>
           </div>
           ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
         </div>
@@ -1451,6 +1680,13 @@
     Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
       btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
     );
+
+    Array.from(document.querySelectorAll(".uiMiniFlow")).forEach((btn) =>
+      btn.addEventListener("click", () => {
+        // open small modal with a mini cytoscape flow
+        renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }).catch(() => {});
+      })
+    );
   }
 
   function renderEdgeFilter(g) {
@@ -1470,11 +1706,13 @@
       slice
         .map((e) => {
           const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
+          const txLink = e.tx_hash ? getExplorerUrlForTx(e.tx_hash) : "#";
           return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
             <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
               • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
               • ledger ${escapeHtml(e.ledger_index)}
               • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
+              <span style="margin-left:8px;"><a href="${escapeHtml(txLink)}" target="_blank" rel="noopener noreferrer">tx</a></span>
             </div>
             <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
           </div>`;
@@ -1488,6 +1726,7 @@
     renderEdgeFilter(g);
   }
 
+  // ---------------- NODE MODAL + CYTOSCAPE FLOW ----------------
   function showNodeModal(g, addr) {
     if (!addr) return;
     const n = g.nodes.get(addr);
@@ -1519,7 +1758,7 @@
       )
     ].join("\n");
 
-    const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
+    const actLinks = act?.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
 
     const actBlock = act
       ? `
@@ -1553,13 +1792,13 @@
       `;
 
     const metaLine = n.outgoingMeta
-      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.mode)}</div>`
+      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoin[...]
       : "";
 
     const rows = outgoing
       .slice(0, 200)
       .map((x, i) => {
-        const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
+        const links = x.tx_hash ? { xrpscan: getExplorerUrlForTx(x.tx_hash) } : null;
         const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
         const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
         const amt = `${escapeHtml(x.currency)} ${Number.isFinite(Number(x.amount)) ? escapeHtml(Number(x.amount).toFixed(6)) : "—"}`;
@@ -1582,24 +1821,32 @@
           <div style="font-weight:900;">Account</div>
           <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
           <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
-          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: [...]
           ${actBlock}
           ${metaLine}
         </div>
 
-        <div style="width:320px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+        <div style="width:360px;min-width:300px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
           <div style="font-weight:900;">Actions</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
             <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
             <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
+            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download[...]
             <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
+            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(getExplorerU[...]
           </div>
           <div style="margin-top:10px;opacity:.85;font-size:12px;">
             outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
           </div>
           <div style="margin-top:6px;opacity:.75;font-size:12px;">
             note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
+          </div>
+        </div>
+
+        <div style="width:100%;margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:8px;">Flow: where value came from → ${escapeHtml(addr)} → where it went (top counterparties)</div>
+          <div id="uiFlowDiagram" style="width:100%;height:360px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.04);padding:6px;">
+            <div id="cyFlowContainer" style="width:100%;height:100%;"></div>
           </div>
         </div>
       </div>
@@ -1628,6 +1875,175 @@
       const rawObj = { address: addr, node: n };
       openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
     };
+
+    // render flow diagram for this node using Cytoscape
+    renderFlowDiagramForNode(g, addr, "cyFlowContainer").catch((e) => {
+      console.warn("Flow cytoscape error", e);
+      const c = $("cyFlowContainer");
+      if (c) c.innerHTML = `<div style="padding:12px;color:var(--text-secondary)">Flow preview unavailable</div>`;
+    });
+  }
+
+  // Render a mini flow (small cytoscape) and optionally open a modal when openPanel true
+  async function renderMiniFlow(g, account, containerId, opts = {}) {
+    const maxNodes = 6;
+    const container = (typeof containerId === "string" ? $(containerId) : containerId) || null;
+    const openPanel = opts.openPanel;
+    // compute top inbound and outbound by sum(amount) (XRP only) — take top 3 each side
+    const inbound = {};
+    const outbound = {};
+
+    for (const e of g.edges) {
+      if (e.to === account && e.currency === "XRP") {
+        inbound[e.from] = (inbound[e.from] || 0) + Number(e.amount || 0);
+      }
+      if (e.from === account && e.currency === "XRP") {
+        outbound[e.to] = (outbound[e.to] || 0) + Number(e.amount || 0);
+      }
+    }
+
+    const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 3);
+    const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 3);
+
+    if (openPanel && !container) {
+      // open a modal that hosts a larger cy
+      openModal(`Flow: ${account}`, `<div style="width:100%;height:480px;"><div id="cyMiniModal" style="width:100%;height:100%;"></div></div>`);
+      await renderMiniFlowCytoscape(g, account, "cyMiniModal", inList, outList);
+      return;
+    }
+
+    if (!container) return;
+
+    // build cytoscape elements
+    const elements = [];
+    const nodesMap = new Map();
+    const centerId = `n_${account}`;
+
+    nodesMap.set(centerId, { data: { id: centerId, label: shortAddr(account), color: "#06b6d4", size: 36 } });
+    elements.push(nodesMap.get(centerId));
+
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      elements.push({ data: { id, label: shortAddr(it.a), color: "#3b82f6", size: 28 } });
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 8)), color: "rgba(59,130,246,0.6)" } });
+    });
+
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      elements.push({ data: { id, label: shortAddr(it.a), color: "#f97316", size: 28 } });
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 8)), color: "rgba(249,115,22,0.6)" } });
+    });
+
+    // render
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        // open modal for clicked address (resolve original id)
+        const label = data.id || "";
+        if (label.startsWith("n_")) {
+          const acct = label.slice(2);
+          showNodeModal(g, acct);
+        } else {
+          // decode from id pattern
+          const parts = (data.id || "").split("_");
+          const possible = parts.slice(2).join("_");
+          if (isValidXrpAddress(possible)) showNodeModal(g, possible);
+        }
+      }
+    });
+  }
+
+  // helper used by renderMiniFlow to render larger modal flow
+  async function renderMiniFlowCytoscape(g, account, containerId, inList, outList) {
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = "";
+
+    const elements = [];
+    const centerId = `n_${account}`;
+    elements.push({ data: { id: centerId, label: account, color: "#06b6d4", size: 48 } });
+
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      elements.push({ data: { id, label: it.a, color: "#3b82f6", size: 36 } });
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 12)), color: "rgba(59,130,246,0.6)" } });
+    });
+
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      elements.push({ data: { id, label: it.a, color: "#f97316", size: 36 } });
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 12)), color: "rgba(249,115,22,0.6)" } });
+    });
+
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        const id = data.id || "";
+        if (id.startsWith("n_")) {
+          showNodeModal(g, id.slice(2));
+        } else {
+          // possible encoded
+          const parts = id.split("_");
+          const acct = parts.slice(2).join("_");
+          if (isValidXrpAddress(acct)) showNodeModal(g, acct);
+        }
+      },
+      fitAfter: true
+    });
+  }
+
+  // Render flow diagram for an account in the node modal using Cytoscape
+  async function renderFlowDiagramForNode(g, account, containerId) {
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = "";
+
+    // compute top inbound and outbound by sum(amount) (XRP only) — take top 6 each side
+    const inbound = {};
+    const outbound = {};
+
+    for (const e of g.edges) {
+      if (e.to === account && e.currency === "XRP") {
+        inbound[e.from] = (inbound[e.from] || 0) + Number(e.amount || 0);
+      }
+      if (e.from === account && e.currency === "XRP") {
+        outbound[e.to] = (outbound[e.to] || 0) + Number(e.amount || 0);
+      }
+    }
+
+    const inList = Object.entries(inbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
+    const outList = Object.entries(outbound).map(([a, v]) => ({ a, v })).sort((a, b) => b.v - a.v).slice(0, 6);
+
+    // build elements
+    const elements = [];
+    const addNode = (id, label, color, size = 36) => elements.push({ data: { id, label, color, size } });
+
+    const centerId = `n_${account}`;
+    addNode(centerId, shortAddr(account), "#06b6d4", 52);
+
+    inList.forEach((it, i) => {
+      const id = `in_${i}_${it.a}`;
+      addNode(id, shortAddr(it.a), "#3b82f6", 40);
+      elements.push({ data: { id: `e_${id}_${centerId}`, source: id, target: centerId, width: Math.max(2, Math.round((it.v / Math.max(1, inList[0]?.v || 1)) * 12)), color: "rgba(59,130,246,0.6)" } });
+    });
+
+    outList.forEach((it, i) => {
+      const id = `out_${i}_${it.a}`;
+      addNode(id, shortAddr(it.a), "#f97316", 40);
+      elements.push({ data: { id: `e_${centerId}_${id}`, source: centerId, target: id, width: Math.max(2, Math.round((it.v / Math.max(1, outList[0]?.v || 1)) * 12)), color: "rgba(249,115,22,0.6)" } });
+    });
+
+    await renderCytoscape(container, elements, {
+      layout: "cose",
+      onNodeClick: (data) => {
+        const id = data.id || "";
+        if (id === centerId) return;
+        // extract account from id
+        const parts = id.split("_");
+        const acct = parts.slice(2).join("_");
+        if (isValidXrpAddress(acct)) showNodeModal(g, acct);
+      }
+    });
   }
 
   // ---------------- EXPORT GRAPH ----------------
@@ -1708,6 +2124,9 @@
         if (!ok) attemptSharedReconnect("build requested but ws offline");
       });
 
+      // Clear session caches for this build
+      sessionCache.account_tx.clear();
+
       await buildIssuerTree(g);
 
       issuerRegistry.set(issuer, g);
@@ -1751,7 +2170,7 @@
     `;
 
     Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-      btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
+      btn.addEventListener("click", () => showNodeModal(issuerRegistry.get(activeIssuer), btn.getAttribute("data-addr")))
     );
   }
 
@@ -1842,7 +2261,7 @@
   // ---------------- INIT ----------------
   function initInspector() {
     renderPage();
-    setStatus("Ready");
+    setStatus("Ready — Tip: paste issuers, set window/ledger and press Build.");
   }
 
   window.initInspector = initInspector;
