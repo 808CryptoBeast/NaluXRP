@@ -1,11 +1,15 @@
 /* =========================================
    js/xrpl-connection.js
-   NaluXrp 🌊 – XRPL Connection Module (Unified)
-   - Combines resilient connection, consumer registry, ledger stream fixes
-   - Emits lightweight ledgerClosed immediately; performs full ledger fetch when consumers present
-   - Exposes window.requestXrpl with HTTP fallback
-   - Auto-registers common UI consumers (dashboard, inspector) when detected
-   - Emits events: xrpl-connection, xrpl-ledger-closed, xrpl-tx-batch, xrpl-ledger
+   NaluXrp 🌊 – XRPL Connection Module (Stability Patch)
+   - Adds request serialization (single concurrent ledger fetch) to avoid
+     request storms that cause WS disconnects (1006) and NotConnectedErrors.
+   - Adds global reconnect request rate-limiter to prevent reconnect thrash
+     when many callers call client.request while the client is reconnecting.
+   - Hardened requestXrpl and client.request wrapper: avoid triggering
+     repeated connect attempts; use a single reconnect signal and wait.
+   - Keeps consumer registry and ledger-closed fast event behavior.
+   - Purpose: make Dashboard ledger stream + Account Inspector coexist without
+     causing repeated NotConnectedError loops.
    ========================================= */
 
 (function () {
@@ -49,13 +53,17 @@
     processingPaused: false,
     processingPauseReason: null,
     _consumers: new Set(),
-    _overloadedUntil: 0
+    _overloadedUntil: 0,
+    // new helpers
+    _lastReconnectRequestAt: 0,
+    _reconnectCooldownMs: 2000 // don't trigger reconnect more than once per 2s
   };
 
   // ---------- CONFIG ----------
   const RAW_TX_WINDOW_SIZE = 800;
   const MAX_LEDGER_HISTORY = 60;
   const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
+  const DEFAULT_RPC_TIMEOUT_MS = 15000;
 
   const XRPL_SERVER_PROFILES = {
     "xrpl-mainnet": [
@@ -72,6 +80,8 @@
   };
 
   // ---------- UTILITIES ----------
+  function nowMs() { return Date.now(); }
+
   function getCurrentServerList() {
     const list = XRPL_SERVER_PROFILES[window.XRPL.network];
     return Array.isArray(list) && list.length ? list : XRPL_SERVER_PROFILES["xrpl-mainnet"];
@@ -116,7 +126,7 @@
   }
 
   // ---------- HTTP JSON-RPC fallback ----------
-  async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}) {
+  async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = DEFAULT_RPC_TIMEOUT_MS, headers = {} } = {}) {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -147,7 +157,7 @@
     return r;
   }
 
-  async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 1 } = {}) {
+  async function rpcCall(method, paramsObj, { timeoutMs = DEFAULT_RPC_TIMEOUT_MS, retries = 1 } = {}) {
     const endpoints = [];
     if (window.NALU_RPC_HTTP && typeof window.NALU_RPC_HTTP === "string") endpoints.push(window.NALU_RPC_HTTP);
     endpoints.push(...RPC_HTTP_ENDPOINTS);
@@ -162,13 +172,13 @@
         const out = unwrapRpcResult(j);
         if (out) return out;
         attempt++;
-        if (attempt <= retries) await new Promise(r => setTimeout(r, 200 * attempt));
+        if (attempt <= retries) await new Promise((r) => setTimeout(r, 200 * attempt));
       }
     }
     return null;
   }
 
-  // ---------- CONSUMER REGISTRY (pages/modules opt-in) ----------
+  // ---------- CONSUMER REGISTRY ----------
   window.registerXRPLConsumer = function (name) {
     try {
       if (!name) return;
@@ -192,6 +202,108 @@
     return window.XRPL._consumers ? window.XRPL._consumers.size : 0;
   };
 
+  // ---------- RECONNECT RATE LIMIT ----------
+  function attemptSharedReconnect(reason) {
+    try {
+      const now = nowMs();
+      const last = window.XRPL._lastReconnectRequestAt || 0;
+      if (now - last < (window.XRPL._reconnectCooldownMs || 2000)) {
+        // rate-limited: ignore
+        return;
+      }
+      window.XRPL._lastReconnectRequestAt = now;
+
+      console.log("🔁 attemptSharedReconnect:", reason);
+      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
+      else if (typeof window.connectXRPL === "function") window.connectXRPL();
+    } catch (e) {
+      console.warn("attemptSharedReconnect failed:", e && e.message ? e.message : e);
+    }
+  }
+
+  // ---------- REQUEST GUARD / QUEUE ----------
+  // Serialize heavy ledger-related requests to avoid request storms that can
+  // drop the WS connection. We allow small/fast concurrent requests in future,
+  // but ledger fetches (fetchAndProcessLedger, account_tx heavy scans) must be
+  // limited (1 concurrent).
+  const requestLock = {
+    ledgerFetchInProgress: false,
+    ledgerFetchQueue: []
+  };
+
+  async function withLedgerFetchLock(fn) {
+    // If no current fetch, run immediately
+    if (!requestLock.ledgerFetchInProgress) {
+      requestLock.ledgerFetchInProgress = true;
+      try {
+        const r = await fn();
+        return r;
+      } finally {
+        requestLock.ledgerFetchInProgress = false;
+        // dequeue next
+        const next = requestLock.ledgerFetchQueue.shift();
+        if (next) {
+          // run next but don't await here
+          withLedgerFetchLock(next).catch(() => {});
+        }
+      }
+    } else {
+      // queue and return a promise that resolves when run
+      return new Promise((resolve, reject) => {
+        requestLock.ledgerFetchQueue.push(async () => {
+          try {
+            const v = await fn();
+            resolve(v);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    }
+  }
+
+  // ---------- Defensive monkey-patch for direct client.request ----------
+  function installClientRequestMonkeyPatch() {
+    try {
+      if (typeof xrpl === "undefined" || !xrpl.Client || xrpl.Client.prototype.__nalu_monkeypatched) return;
+      const orig = xrpl.Client.prototype.request;
+      xrpl.Client.prototype.__nalu_monkeypatched = true;
+      xrpl.Client.prototype.request = async function (payload) {
+        try {
+          return await orig.call(this, payload);
+        } catch (err) {
+          const msg = String(err && (err.message || err)).toLowerCase();
+          const isNotConnected = msg.includes("notconnected") || msg.includes("not connected") || msg.includes("websocket was closed") || msg.includes("socket hang up");
+          if (!isNotConnected) throw err;
+
+          // If client is reconnecting or we recently requested reconnect, wait a short time
+          console.warn("xrpl.Client.request: NotConnected -> waiting for shared reconnect (non-aggressive)");
+          attemptSharedReconnect("client.request NotConnectedError (monkeypatch)");
+          // Wait for a short period for connect to happen; if not connected fallback to error
+          const ok = await waitForXRPLConnection(3000);
+          if (ok) {
+            try {
+              return await orig.call(this, payload);
+            } catch (err2) {
+              throw err2;
+            }
+          }
+          // last-resort: rethrow original error so caller can fallback to requestXrpl
+          throw err;
+        }
+      };
+      console.log("xrpl.Client.prototype.request monkey-patch installed (defensive)");
+    } catch (e) {
+      console.warn("installClientRequestMonkeyPatch failed", e && e.message ? e.message : e);
+    }
+  }
+
+  try { installClientRequestMonkeyPatch(); } catch (_) {}
+  if (typeof xrpl === "undefined") {
+    document.addEventListener("DOMContentLoaded", installClientRequestMonkeyPatch, { once: true });
+    window.addEventListener("load", installClientRequestMonkeyPatch, { once: true });
+  }
+
   // ---------- resilient client.request wrapper ----------
   function wrapClientRequest(client) {
     if (!client || typeof client.request !== "function") return;
@@ -200,45 +312,48 @@
     const original = client.request.bind(client);
 
     client.request = async function resilientRequest(payload) {
-      const MAX_ATTEMPTS = 4;
-      let lastErr = null;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        try {
-          if (typeof client.isConnected === "function" && !client.isConnected()) {
-            console.warn("client.request: client not connected, attempting reconnect");
-            attemptSharedReconnect("wrapClientRequest: not connected");
-            await new Promise(r => setTimeout(r, 400 + attempt * 300));
-          }
-          const res = await original(payload);
-          return res;
-        } catch (err) {
-          lastErr = err;
-          const msg = String(err && (err.message || err)).toLowerCase();
-          const isNotConnected = msg.includes("notconnected") || msg.includes("not connected") || msg.includes("websocket was closed") || msg.includes("socket hang up");
-          if (isNotConnected) {
-            attemptSharedReconnect("client.request NotConnectedError");
-            await new Promise(r => setTimeout(r, 500 + attempt * 400));
-            continue;
-          }
-          if (msg.includes("timeout") && attempt < MAX_ATTEMPTS - 1) {
-            await new Promise(r => setTimeout(r, 300 + attempt * 200));
-            continue;
-          }
-          throw err;
-        }
-      }
-      throw lastErr || new Error("client.request failed");
-    };
-  }
+      // For heavy ledger fetches (command === 'ledger'), we serialize via lock
+      const cmd = (payload && (payload.command || payload.method || "")).toString().toLowerCase();
+      const isLedgerFetch = cmd === "ledger" || (cmd === "ledger_data");
 
-  function attemptSharedReconnect(reason) {
-    try {
-      console.log("🔁 attemptSharedReconnect:", reason);
-      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
-      else if (typeof window.connectXRPL === "function") window.connectXRPL();
-    } catch (e) {
-      console.warn("attemptSharedReconnect failed:", e && e.message ? e.message : e);
-    }
+      const runner = async () => {
+        const MAX_ATTEMPTS = 3;
+        let lastErr = null;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          try {
+            if (typeof client.isConnected === "function" && !client.isConnected()) {
+              // only request reconnect once (rate-limited)
+              attemptSharedReconnect("wrapClientRequest: client not connected");
+              // wait for connection to appear briefly
+              await new Promise((r) => setTimeout(r, 500 + attempt * 300));
+            }
+            const res = await original(payload);
+            return res;
+          } catch (err) {
+            lastErr = err;
+            const msg = String(err && (err.message || err)).toLowerCase();
+            const isNotConnected = msg.includes("notconnected") || msg.includes("not connected") || msg.includes("websocket was closed") || msg.includes("socket hang up");
+            if (isNotConnected) {
+              // If not connected, give other parts of system time to reconnect, but don't aggressively loop
+              await new Promise((r) => setTimeout(r, 400 + attempt * 300));
+              continue;
+            }
+            if (msg.includes("timeout") && attempt < MAX_ATTEMPTS - 1) {
+              await new Promise((r) => setTimeout(r, 300 + attempt * 200));
+              continue;
+            }
+            throw err;
+          }
+        }
+        throw lastErr || new Error("client.request failed");
+      };
+
+      if (isLedgerFetch) {
+        return withLedgerFetchLock(runner);
+      } else {
+        return runner();
+      }
+    };
   }
 
   // ---------- CORE: connect/reconnect/verify ----------
@@ -284,7 +399,6 @@
       updateInitialState(info);
       updateConnectionStatus(true, server.name);
 
-      // start polling only if consumers exist; many UIs register consumers on load
       if (getXRPLConsumerCount() > 0) startActivePolling();
 
       setMode("live", "Connected");
@@ -417,17 +531,17 @@
         window.XRPL.lastLedgerTime = Date.now();
       }
     } catch (error) {
-      console.warn("Check ledger error:", error && error.message ? error.message : error);
+      console.warn("Check ledger error:", error && (error.message ? error.message : error));
       const m = String(error && (error.message || "")).toLowerCase();
       if (m.includes("timeout") || m.includes("closed") || m.includes("notconnected") || m.includes("websocket was closed")) handleDisconnection();
     }
   }
 
-  // ---------- FETCH & PROCESS LEDGER (patched) ----------
+  // ---------- FETCH & PROCESS LEDGER ----------
   async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
     if (!window.XRPL.client) return;
 
-    // Always update minimal state and emit lightweight ledger-closed so UIs show current ledger
+    // Quick minimal update and lightweight event to keep UI responsive
     if (ledgerIndex > window.XRPL.lastLedgerIndex) {
       window.XRPL.lastLedgerIndex = ledgerIndex;
       window.XRPL.lastLedgerTime = Date.now();
@@ -437,76 +551,75 @@
       window.XRPL.lastLedgerTime = Date.now();
     }
 
-    // If processing is paused or no consumers, skip heavy fetch
+    // Skip heavy fetch if paused or no consumers
     if (window.XRPL.processingPaused || getXRPLConsumerCount() === 0) {
       console.log("fetchAndProcessLedger: processing paused or no consumers — skipping heavy fetch for", ledgerIndex);
       return;
     }
 
-    try {
-      console.log("🔍 Fetching ledger #", ledgerIndex, "with transactions...");
-      const ledgerResp = await window.XRPL.client.request({ command: "ledger", ledger_index: ledgerIndex, transactions: true, expand: true, binary: false });
-      const ledgerData = ledgerResp.result.ledger;
-      if (!ledgerData) { console.warn("⚠️ No ledger data in response"); return; }
+    // serialize ledger fetches using lock to avoid client.request storms
+    return withLedgerFetchLock(async () => {
+      try {
+        console.log("🔍 Fetching ledger #", ledgerIndex, "with transactions...");
+        const ledgerResp = await window.XRPL.client.request({ command: "ledger", ledger_index: ledgerIndex, transactions: true, expand: true, binary: false });
+        const ledgerData = ledgerResp.result.ledger;
+        if (!ledgerData) { console.warn("⚠️ No ledger data in response"); return; }
 
-      const closeDate = ledgerData.close_time ? rippleTimeToDate(ledgerData.close_time) : new Date();
-      const closeTimeSec = Math.floor(closeDate.getTime() / 1000);
-      let durationSec = 4.0;
-      if (window.XRPL.lastCloseTimeSec != null) durationSec = Math.max(1, closeTimeSec - window.XRPL.lastCloseTimeSec);
-      window.XRPL.lastCloseTimeSec = closeTimeSec;
+        const closeDate = ledgerData.close_time ? rippleTimeToDate(ledgerData.close_time) : new Date();
+        const closeTimeSec = Math.floor(closeDate.getTime() / 1000);
+        let durationSec = 4.0;
+        if (window.XRPL.lastCloseTimeSec != null) durationSec = Math.max(1, closeTimeSec - window.XRPL.lastCloseTimeSec);
+        window.XRPL.lastCloseTimeSec = closeTimeSec;
 
-      const txMetrics = analyzeLedgerTransactions(ledgerData);
-      const totalTx = txMetrics.totalTx;
-      const tps = totalTx > 0 ? totalTx / durationSec : 0;
+        const txMetrics = analyzeLedgerTransactions(ledgerData);
+        const totalTx = txMetrics.totalTx;
+        const tps = totalTx > 0 ? totalTx / durationSec : 0;
 
-      const s = window.XRPL.state;
-      s.ledgerIndex = Number(ledgerData.ledger_index || ledgerIndex);
-      s.ledgerTime = closeDate;
-      s.txPerLedger = totalTx;
-      s.txnPerSec = tps;
-      s.transactionTypes = { ...txMetrics.aggregatedTypes };
-      if (txMetrics.avgFeeXRP > 0) s.feeAvg = txMetrics.avgFeeXRP;
+        const s = window.XRPL.state;
+        s.ledgerIndex = Number(ledgerData.ledger_index || ledgerIndex);
+        s.ledgerTime = closeDate;
+        s.txPerLedger = totalTx;
+        s.txnPerSec = tps;
+        s.transactionTypes = { ...txMetrics.aggregatedTypes };
+        if (txMetrics.avgFeeXRP > 0) s.feeAvg = txMetrics.avgFeeXRP;
 
-      updateHistory("tpsHistory", tps);
-      updateHistory("feeHistory", s.feeAvg);
-      updateHistory("ledgerHistory", s.ledgerIndex);
-      updateHistory("txCountHistory", totalTx);
+        updateHistory("tpsHistory", tps);
+        updateHistory("feeHistory", s.feeAvg);
+        updateHistory("ledgerHistory", s.ledgerIndex);
+        updateHistory("txCountHistory", totalTx);
 
-      if (!Array.isArray(s.closeTimes)) s.closeTimes = [];
-      s.closeTimes.push({ label: "#" + s.ledgerIndex, value: durationSec });
-      if (s.closeTimes.length > 25) s.closeTimes.shift();
+        if (!Array.isArray(s.closeTimes)) s.closeTimes = [];
+        s.closeTimes.push({ label: "#" + s.ledgerIndex, value: durationSec });
+        if (s.closeTimes.length > 25) s.closeTimes.shift();
 
-      if (!Array.isArray(s.recentLedgers)) s.recentLedgers = [];
-      s.recentLedgers.push({ ledgerIndex: s.ledgerIndex, closeTime: closeDate.toISOString(), totalTx, tps, avgFeeXRP: txMetrics.avgFeeXRP, successRate: txMetrics.successRate });
-      if (s.recentLedgers.length > MAX_LEDGER_HISTORY) s.recentLedgers.splice(0, s.recentLedgers.length - MAX_LEDGER_HISTORY);
+        if (!Array.isArray(s.recentLedgers)) s.recentLedgers = [];
+        s.recentLedgers.push({ ledgerIndex: s.ledgerIndex, closeTime: closeDate.toISOString(), totalTx, tps, avgFeeXRP: txMetrics.avgFeeXRP, successRate: txMetrics.successRate });
+        if (s.recentLedgers.length > MAX_LEDGER_HISTORY) s.recentLedgers.splice(0, s.recentLedgers.length - MAX_LEDGER_HISTORY);
 
-      const normalizedBatch = txMetrics.normalized || [];
-      if (!Array.isArray(s.recentTransactions)) s.recentTransactions = [];
-      if (normalizedBatch.length) {
-        Array.prototype.push.apply(s.recentTransactions, normalizedBatch);
-        if (s.recentTransactions.length > RAW_TX_WINDOW_SIZE) s.recentTransactions.splice(0, s.recentTransactions.length - RAW_TX_WINDOW_SIZE);
+        const normalizedBatch = txMetrics.normalized || [];
+        if (!Array.isArray(s.recentTransactions)) s.recentTransactions = [];
+        if (normalizedBatch.length) {
+          Array.prototype.push.apply(s.recentTransactions, normalizedBatch);
+          if (s.recentTransactions.length > RAW_TX_WINDOW_SIZE) s.recentTransactions.splice(0, s.recentTransactions.length - RAW_TX_WINDOW_SIZE);
+        }
+
+        window.XRPL.lastLedgerIndex = s.ledgerIndex;
+        window.XRPL.lastLedgerTime = Date.now();
+
+        let info = serverInfoHint || null;
+        if (!info) {
+          try { const resp = await window.XRPL.client.request({ command: "server_info", timeout: 8000 }); info = resp.result.info; } catch (e) { info = null; }
+        }
+        if (info) { s.feeAvg = (info.validated_ledger && info.validated_ledger.base_fee_xrp) || s.feeAvg; s.loadFee = (info.load_factor || 1000000) / 1000000; s.validators = info.peers || s.validators; }
+
+        window.dispatchEvent(new CustomEvent("xrpl-tx-batch", { detail: { ledgerIndex: s.ledgerIndex, closeTime: closeDate, transactions: normalizedBatch } }));
+        sendStateToDashboard();
+      } catch (error) {
+        console.warn("Fetch ledger error:", error && (error.message ? error.message : error));
+        const m = String(error && (error.message || "")).toLowerCase();
+        if (m.includes("websocket was closed") || m.includes("notconnected") || m.includes("closed")) handleDisconnection();
       }
-
-      window.XRPL.lastLedgerIndex = s.ledgerIndex;
-      window.XRPL.lastLedgerTime = Date.now();
-
-      // optionally refresh server_info
-      let info = serverInfoHint || null;
-      if (!info) {
-        try { const resp = await window.XRPL.client.request({ command: "server_info", timeout: 8000 }); info = resp.result.info; } catch (e) { info = null; }
-      }
-      if (info) { s.feeAvg = (info.validated_ledger && info.validated_ledger.base_fee_xrp) || s.feeAvg; s.loadFee = (info.load_factor || 1000000) / 1000000; s.validators = info.peers || s.validators; }
-
-      // emit normalized tx batch
-      window.dispatchEvent(new CustomEvent("xrpl-tx-batch", { detail: { ledgerIndex: s.ledgerIndex, closeTime: closeDate, transactions: normalizedBatch } }));
-
-      // push state to dashboard & other consumers
-      sendStateToDashboard();
-    } catch (error) {
-      console.warn("Fetch ledger error:", error && error.message ? error.message : error);
-      const m = String(error && (error.message || "")).toLowerCase();
-      if (m.includes("websocket was closed") || m.includes("notconnected") || m.includes("closed")) handleDisconnection();
-    }
+    });
   }
 
   // ---------- TX ANALYSIS ----------
@@ -581,7 +694,7 @@
     window.dispatchEvent(new CustomEvent("xrpl-ledger", { detail: { ...window.XRPL.state, txTypes, latestLedger: dashboardState.latestLedger } }));
   }
 
-  // ---------- CONNECTION LISTENERS (patched) ----------
+  // ---------- CONNECTION LISTENERS ----------
   function setupConnectionListeners() {
     const client = window.XRPL.client;
     if (!client) return;
@@ -592,7 +705,7 @@
         const idx = Number(ledger.ledger_index);
         if (!idx) return;
 
-        // Always update minimal state/event so UIs show progress
+        // Always emit lightweight closed event immediately
         if (idx > window.XRPL.lastLedgerIndex) {
           window.XRPL.lastLedgerIndex = idx;
           window.XRPL.lastLedgerTime = Date.now();
@@ -603,13 +716,12 @@
           return;
         }
 
-        // If paused or no consumers, skip heavy ledger fetch
         if (window.XRPL.processingPaused || getXRPLConsumerCount() === 0) {
           console.log("ledgerClosed: processing paused or no consumers, skipping heavy fetch:", idx);
           return;
         }
 
-        // Otherwise fetch & process
+        // fetch & process ledger (serialized by withLedgerFetchLock)
         fetchAndProcessLedger(idx, null).catch(e => console.warn("ledgerClosed fetch failed", e && e.message ? e.message : e));
       } catch (e) {
         console.warn("Ledger closed handler error:", e && e.message ? e.message : e);
@@ -699,12 +811,16 @@
 
   // ---------- SHARED REQUEST WRAPPER (requestXrpl) ----------
   function waitForXRPLConnection(timeoutMs = 12000) {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       try {
         if (window.XRPL.connected) return resolve(true);
         const onConn = (ev) => {
           const d = ev && ev.detail;
-          if (d && d.connected) { window.removeEventListener("xrpl-connection", onConn); clearTimeout(t); resolve(true); }
+          if (d && d.connected) {
+            window.removeEventListener("xrpl-connection", onConn);
+            clearTimeout(t);
+            resolve(true);
+          }
         };
         window.addEventListener("xrpl-connection", onConn);
         const t = setTimeout(() => { window.removeEventListener("xrpl-connection", onConn); resolve(false); }, timeoutMs);
@@ -716,40 +832,59 @@
     window.__nalu_external_requestXrpl = window.requestXrpl;
   }
 
+  // requestXrpl will:
+  // - prefer shared WS client when connected
+  // - if NotConnectedError occurs it will request a reconnect (rate-limited) and wait briefly
+  // - fall back to HTTP RPC if allowed
   window.requestXrpl = async function requestXrpl(payload, opts) {
     const options = opts || {};
     const timeoutMs = Number(options.timeoutMs || 20000);
     const allowHttpFallback = options.allowHttpFallback !== false;
 
-    if (!window.XRPL.client || !window.XRPL.connected) {
-      try { connectXRPL(); await waitForXRPLConnection(Math.min(15000, timeoutMs)); } catch (_) {}
-    }
-
+    // If there's an external implementation keep compatibility
     if (window.__nalu_external_requestXrpl && typeof window.__nalu_external_requestXrpl === "function") {
       try { const r = await window.__nalu_external_requestXrpl(payload, options); return r?.result || r; } catch (e) { /* fall through */ }
     }
 
+    // Try WS client first with guarded behavior
     let lastErr = null;
+
     if (window.XRPL.client && typeof window.XRPL.client.request === "function") {
-      const MAX_ATTEMPTS = 3;
+      const MAX_ATTEMPTS = 2;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
-          if (!window.XRPL.connected) await waitForXRPLConnection(Math.min(5000, timeoutMs));
-          const reqPromise = window.XRPL.client.request(payload);
-          const timed = Promise.race([reqPromise, new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout")), timeoutMs))]);
-          const res = await timed;
-          return res?.result || res;
+          if (!window.XRPL.connected) {
+            // Ask shared manager to reconnect (rate-limited) then wait a bit
+            attemptSharedReconnect("requestXrpl pre-check");
+            await waitForXRPLConnection(Math.min(5000, timeoutMs));
+          }
+          // Special-case ledger requests: serialize heavy calls to avoid storming
+          const cmd = (payload && (payload.command || payload.method || "")).toString().toLowerCase();
+          if (cmd === "ledger" || cmd === "ledger_data") {
+            return await withLedgerFetchLock(async () => {
+              const reqPromise = window.XRPL.client.request(payload);
+              const timed = Promise.race([reqPromise, new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout")), timeoutMs))]);
+              const res = await timed;
+              return res?.result || res;
+            });
+          } else {
+            const reqPromise = window.XRPL.client.request(payload);
+            const timed = Promise.race([reqPromise, new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout")), timeoutMs))]);
+            const res = await timed;
+            return res?.result || res;
+          }
         } catch (err) {
           lastErr = err;
           const m = String(err && (err.message || "")).toLowerCase();
           const isNotConnected = m.includes("notconnected") || m.includes("not connected") || m.includes("websocket was closed") || m.includes("socket hang up");
           if (isNotConnected) {
             attemptSharedReconnect("requestXrpl NotConnectedError");
-            await new Promise(r => setTimeout(r, 400 + attempt * 300));
+            // wait a moment for reconnect then retry once
+            await new Promise((r) => setTimeout(r, 500 + attempt * 300));
             continue;
           }
-          if (m.includes("timeout")) {
-            await new Promise(r => setTimeout(r, 300 + attempt * 200));
+          if (m.includes("timeout") && attempt < MAX_ATTEMPTS - 1) {
+            await new Promise((r) => setTimeout(r, 300 + attempt * 200));
             continue;
           }
           break;
@@ -757,6 +892,7 @@
       }
     }
 
+    // If WS failed or not present, attempt HTTP RPC fallback
     if (allowHttpFallback) {
       try {
         const method = payload.command || payload.method || "rpc";
@@ -799,27 +935,15 @@
     return { hash: hash||undefined, ledgerIndex: Number(ledgerIndex)||null, closeTime: closeTime instanceof Date?closeTime:null, type, account, destination, amount: delivered, amountXRP, feeDrops, feeXRP, success, result: meta && typeof meta.TransactionResult === "string" ? meta.TransactionResult : null, sequence: tx.Sequence != null ? tx.Sequence : null, sourceTag: sourceTag != null ? sourceTag : null, destinationTag: destinationTag != null ? destinationTag : null, flags: tx.Flags != null ? tx.Flags : null };
   }
 
-  // ---------- INIT / AUTO-REGISTER commons ----------
-  // Try to auto-register common UI consumers (dashboard, inspector) if present so both subsystems receive full processing
+  // ---------- AUTO-REGISTER COMMON CONSUMERS ----------
   function autoRegisterCommonConsumers() {
     try {
-      // If NaluDashboard present, register dashboard consumer
-      if (window.NaluDashboard && typeof window.registerXRPLConsumer === "function") {
-        window.registerXRPLConsumer("dashboard");
-      }
-      // If Account Inspector global exists, register inspector consumer
-      if ((window.UnifiedInspector || window.initInspector || document.getElementById("inspector")) && typeof window.registerXRPLConsumer === "function") {
-        window.registerXRPLConsumer("account-inspector");
-      }
+      if (window.NaluDashboard && typeof window.registerXRPLConsumer === "function") window.registerXRPLConsumer("dashboard");
+      if ((window.UnifiedInspector || window.initInspector || document.getElementById("inspector")) && typeof window.registerXRPLConsumer === "function") window.registerXRPLConsumer("account-inspector");
     } catch (e) { console.warn("autoRegisterCommonConsumers failed", e && e.message ? e.message : e); }
   }
-
-  // run auto-register on DOMContentLoaded (may run earlier or later depending)
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => setTimeout(autoRegisterCommonConsumers, 300));
-  } else {
-    setTimeout(autoRegisterCommonConsumers, 300);
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(autoRegisterCommonConsumers, 300));
+  else setTimeout(autoRegisterCommonConsumers, 300);
 
   // ---------- INIT ----------
   document.addEventListener("DOMContentLoaded", function () {
@@ -832,8 +956,8 @@
     setTimeout(() => connectXRPL(), 500);
   });
 
-  // keep alive
-  setInterval(() => {
+  // ---------- KEEP ALIVE ----------
+  setInterval(function () {
     if (!window.XRPL.connected && !window.XRPL.connecting) {
       console.log("💓 Keep-alive: Reconnecting...");
       connectXRPL();
@@ -854,5 +978,5 @@
     cleanupConnection().then(() => connectXRPL());
   };
 
-  console.log("🌊 XRPL Connection module loaded (unified)");
+  console.log("🌊 XRPL Connection module loaded (stability patch)");
 })();
