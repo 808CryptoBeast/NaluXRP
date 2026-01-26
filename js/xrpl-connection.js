@@ -1,12 +1,11 @@
 /* =========================================
    js/xrpl-connection.js
-   NaluXrp 🌊 – XRPL Connection Module (Complete)
-   - Single-file hardened connection manager for xrpl.js
+   NaluXrp 🌊 – XRPL Connection Module (Complete, patched)
+   - Resilient connection manager for xrpl.js
    - Auto-reconnect with backoff + jitter
-   - Monkey-patches xrpl.Client.request to retry on NotConnected
-   - Exposes window.requestXrpl (resilient wrapper with optional HTTP fallback)
    - Consumer registry (register/unregister) to only poll when pages are active
-   - Safe defensive coding and logging
+   - Ledger stream fix: ledgerClosed now updates minimal state even when processing is paused
+   - Exposes window.requestXrpl (resilient wrapper with optional HTTP fallback)
    ========================================= */
 
 (function () {
@@ -57,28 +56,23 @@
   const RAW_TX_WINDOW_SIZE = 800;
   const MAX_LEDGER_HISTORY = 60;
 
-  // HTTP fallback endpoints (used only as last resort)
   const RPC_HTTP_ENDPOINTS = [
     "https://xrplcluster.com/",
     "https://xrpl.ws/"
-    // Add your own proxy endpoints via window.NALU_RPC_HTTP if needed
   ];
 
-  // Consumer registry (modules call registerXRPLConsumer/unregisterXRPLConsumer)
+  // Consumer registry
   window.XRPL._activeConsumers = window.XRPL._activeConsumers || new Set();
   window.registerXRPLConsumer = function (name) {
     try {
       if (!name) return;
       window.XRPL._activeConsumers.add(String(name));
       console.log("XRPL consumer registered:", name, "count:", window.XRPL._activeConsumers.size);
-      // If we were paused because no consumers, resume
       if (window.XRPL._activeConsumers.size > 0 && window.XRPL.processingPaused) {
         window.resumeXRPLProcessing("__no_consumers__");
       }
       if (window.XRPL.connected && !window.XRPL.processingPaused) startActivePolling();
-    } catch (e) {
-      console.warn("registerXRPLConsumer error", e);
-    }
+    } catch (e) { console.warn("registerXRPLConsumer error", e); }
   };
   window.unregisterXRPLConsumer = function (name) {
     try {
@@ -88,9 +82,7 @@
       if (window.XRPL._activeConsumers.size === 0) {
         window.pauseXRPLProcessing("__no_consumers__");
       }
-    } catch (e) {
-      console.warn("unregisterXRPLConsumer error", e);
-    }
+    } catch (e) { console.warn("unregisterXRPLConsumer error", e); }
   };
   window.getXRPLConsumerCount = function () {
     return window.XRPL._activeConsumers ? window.XRPL._activeConsumers.size : 0;
@@ -179,7 +171,6 @@
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       return await resp.json();
     } catch (err) {
-      // don't throw; caller will fallback
       console.warn("tryFetchJson failed", err && err.message ? err.message : err);
       return null;
     }
@@ -195,7 +186,6 @@
 
   async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 1 } = {}) {
     const endpoints = [];
-    // allow override via global (optional)
     if (window.NALU_RPC_HTTP && typeof window.NALU_RPC_HTTP === "string") endpoints.push(window.NALU_RPC_HTTP);
     endpoints.push(...RPC_HTTP_ENDPOINTS);
 
@@ -241,7 +231,6 @@
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
-          // If client indicates disconnection, ask for reconnect and wait a bit
           if (typeof client.isConnected === "function" && !client.isConnected()) {
             console.warn("client.request: client not connected, requesting reconnect");
             attemptSharedReconnect("wrapClientRequest: client not connected");
@@ -330,7 +319,6 @@
 
       updateInitialState(info);
       updateConnectionStatus(true, server.name);
-      // Only start polling if at least one consumer is active
       if (getXRPLConsumerCount() > 0) startActivePolling();
 
       setMode("live", "Connected");
@@ -450,7 +438,6 @@
   function startActivePolling() {
     if (window.XRPL.ledgerPollInterval) clearInterval(window.XRPL.ledgerPollInterval);
 
-    // If no active consumers, do not poll
     if (getXRPLConsumerCount() === 0) {
       console.log("No active consumers — skipping active polling");
       return;
@@ -648,22 +635,77 @@
     window.dispatchEvent(new CustomEvent("xrpl-ledger", { detail: { ...window.XRPL.state, txTypes, latestLedger: dashboardState.latestLedger } }));
   }
 
-  /* ---------- CONNECTION LISTENERS ---------- */
+  /* ---------- CONNECTION LISTENERS (patched ledgerClosed) ---------- */
 
   function setupConnectionListeners() {
     const client = window.XRPL.client;
     if (!client) return;
     try { client.removeAllListeners(); } catch (_) {}
-    client.on("ledgerClosed", (ledger) => {
+
+    // ledgerClosed handler updated:
+    // - Always updates lastLedgerIndex/time and minimal XRPL.state snapshot so dashboard gets current ledger progress,
+    //   even when processing is paused or no consumers registered.
+    // - If processing is active, we fetch & process the full ledger (transactions).
+    client.on("ledgerClosed", function (ledger) {
       try {
         const idx = Number(ledger.ledger_index);
-        if (!idx || idx <= window.XRPL.lastLedgerIndex) return;
-        if (window.XRPL.processingPaused) { console.log("ledgerClosed skipped, processing paused"); return; }
-        fetchAndProcessLedger(idx, null);
-      } catch (e) { console.warn("ledgerClosed handler error", e); }
+        if (!idx) return;
+
+        // If ledger index is not newer, ignore
+        if (idx <= window.XRPL.lastLedgerIndex) {
+          // still update lastLedgerTime to show liveliness
+          window.XRPL.lastLedgerTime = Date.now();
+          return;
+        }
+
+        console.log("📨 ledgerClosed event:", idx);
+
+        // Always update minimal state so dashboard sees newest ledger number/time immediately
+        window.XRPL.lastLedgerIndex = idx;
+        window.XRPL.lastLedgerTime = Date.now();
+        // Update XRPL.state ledgerIndex/ledgerTime minimally (no tx analysis unless active)
+        try {
+          window.XRPL.state.ledgerIndex = idx;
+          window.XRPL.state.ledgerTime = new Date();
+          updateHistory("ledgerHistory", idx);
+        } catch (_) {}
+
+        // Emit a lightweight event so Dashboard can react immediately
+        window.dispatchEvent(
+          new CustomEvent("xrpl-ledger-closed", {
+            detail: {
+              ledgerIndex: idx,
+              timestamp: window.XRPL.lastLedgerTime,
+              server: window.XRPL.server?.name || null,
+              network: window.XRPL.network
+            }
+          })
+        );
+
+        // If processing is paused, do NOT fetch the full ledger (avoid heavy work)
+        if (window.XRPL.processingPaused) {
+          console.log("ledgerClosed: processing paused, skipping ledger fetch:", idx);
+          return;
+        }
+
+        // Otherwise fetch and process ledger transactions (this may be asynchronous)
+        fetchAndProcessLedger(idx, null).catch((e) => {
+          console.warn("ledgerClosed fetchAndProcessLedger failed:", e && e.message ? e.message : e);
+        });
+      } catch (e) {
+        console.warn("Ledger closed handler error:", e && e.message ? e.message : e);
+      }
     });
-    client.on("error", (err) => console.warn("WebSocket error:", err && err.message ? err.message : err));
-    client.on("disconnected", (code) => { console.warn("Disconnected (code " + code + ")"); handleDisconnection(); });
+
+    client.on("error", function (error) {
+      console.warn("🔌 WebSocket error:", error && error.message ? error.message : error);
+    });
+
+    client.on("disconnected", function (code) {
+      console.warn("🔌 Disconnected (code " + code + ")");
+      handleDisconnection();
+    });
+
     if (client.on) client.on("close", (hadError) => { console.warn("WS close event", hadError); handleDisconnection(); });
   }
 
@@ -750,7 +792,6 @@
 
   /* ---------- SHARED REQUEST WRAPPER (HARDENED) ---------- */
 
-  // Preserve any pre-existing external wrapper
   if (typeof window.requestXrpl === "function" && !window.__nalu_external_requestXrpl) {
     window.__nalu_external_requestXrpl = window.requestXrpl;
   }
@@ -760,19 +801,16 @@
     const timeoutMs = Number(options.timeoutMs || 20000);
     const allowHttpFallback = options.allowHttpFallback !== false;
 
-    // Ensure a connection attempt is in progress
     if (!window.XRPL.client || !window.XRPL.connected) {
       try { connectXRPL(); await waitForXRPLConnection(Math.min(15000, timeoutMs)); } catch (_) {}
     }
 
-    // If an external wrapper existed, try it first
     if (window.__nalu_external_requestXrpl && typeof window.__nalu_external_requestXrpl === "function") {
       try { const r = await window.__nalu_external_requestXrpl(payload, options); return r?.result || r; } catch (e) { /* fall through */ }
     }
 
     let lastErr = null;
 
-    // Primary: use wrapped client.request
     if (window.XRPL.client && typeof window.XRPL.client.request === "function") {
       const MAX_ATTEMPTS = 3;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -801,7 +839,6 @@
       }
     }
 
-    // Fallback: HTTP RPC for certain commands if allowed (account_tx etc.)
     if (allowHttpFallback) {
       try {
         const method = payload.command || payload.method || "rpc";
@@ -931,5 +968,5 @@
     cleanupConnection().then(() => connectXRPL());
   };
 
-  console.log("🌊 XRPL Connection module loaded (resilient + consumer-aware)");
+  console.log("🌊 XRPL Connection module loaded (resilient + consumer-aware, ledger stream patched)");
 })();
