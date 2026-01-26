@@ -1,7 +1,6 @@
 /* =========================================
    NaluXrp 🌊 – XRPL Connection Module (Deep)
    Always Connected + Raw Transaction Streaming
-   (patched — consumer-aware + ledgerClosed fixes)
    ========================================= */
 
 window.XRPL = {
@@ -44,18 +43,7 @@ window.XRPL = {
   },
   mode: "connecting",
   modeReason: "Initializing",
-  network: "xrpl-mainnet",
-
-  // Pause control: set of reasons that requested pause
-  _pauseReasons: new Set(),
-  processingPaused: false,
-  processingPauseReason: null,
-
-  // Consumer registry (pages/modules that want full processing)
-  _consumers: new Set(),
-
-  // Global overload marker
-  _overloadedUntil: 0
+  network: "xrpl-mainnet"
 };
 
 /* ---------- CONSTANTS ---------- */
@@ -147,42 +135,6 @@ function parseXrpAmount(amount) {
   }
   return 0;
 }
-
-/* ---------- CONSUMER API (pages/modules register to receive full processing) ---------- */
-
-window.registerXRPLConsumer = function (name) {
-  try {
-    if (!name) return;
-    window.XRPL._consumers.add(String(name));
-    console.log("XRPL consumer registered:", name, "count:", window.XRPL._consumers.size);
-    // resume processing when consumers exist
-    if (window.XRPL._consumers.size > 0) {
-      window.resumeXRPLProcessing("__no_consumers__");
-      // ensure polling is running
-      if (window.XRPL.connected) startActivePolling();
-    }
-  } catch (e) {
-    console.warn("registerXRPLConsumer error", e);
-  }
-};
-
-window.unregisterXRPLConsumer = function (name) {
-  try {
-    if (!name) return;
-    window.XRPL._consumers.delete(String(name));
-    console.log("XRPL consumer unregistered:", name, "count:", window.XRPL._consumers.size);
-    if (window.XRPL._consumers.size === 0) {
-      // pause heavy processing to save resources (but still emit lightweight ledgerClosed)
-      window.pauseXRPLProcessing("__no_consumers__");
-    }
-  } catch (e) {
-    console.warn("unregisterXRPLConsumer error", e);
-  }
-};
-
-window.getXRPLConsumerCount = function () {
-  return window.XRPL._consumers ? window.XRPL._consumers.size : 0;
-};
 
 /* ---------- TX EXTRACTION / NORMALIZATION ---------- */
 
@@ -349,7 +301,6 @@ async function attemptConnection(server) {
       connectionTimeout: 15000
     });
 
-    // wrap listeners and resume if necessary
     setupConnectionListeners();
 
     await Promise.race([
@@ -370,9 +321,7 @@ async function attemptConnection(server) {
 
     updateInitialState(info);
     updateConnectionStatus(true, server.name);
-
-    // only start active polling if consumers exist
-    if (getXRPLConsumerCount() > 0) startActivePolling();
+    startActivePolling();
 
     setMode("live", "Connected");
     safeNotify("✅ Connected to " + server.name, "success");
@@ -381,7 +330,7 @@ async function attemptConnection(server) {
     console.log("✅ Connected to", server.name);
     return true;
   } catch (err) {
-    console.warn("❌", server.name, "failed:", err && err.message ? err.message : err);
+    console.warn("❌", server.name, "failed:", err.message);
     await cleanupConnection();
     return false;
   }
@@ -409,7 +358,7 @@ async function verifyConnectionAndSubscribe() {
     });
     console.log("✅ Subscribed to ledger stream");
   } catch (e) {
-    console.warn("⚠️ Subscription failed, using polling:", e && e.message ? e.message : e);
+    console.warn("⚠️ Subscription failed, using polling:", e.message);
   }
 
   return response.result.info;
@@ -444,85 +393,6 @@ function updateInitialState(info) {
   sendStateToDashboard();
 }
 
-/* ---------- PAUSE / RESUME PROCESSING API ---------- */
-/*
-  Multiple callers can request pause with distinct reasons; processing resumes when all reasons removed.
-  Pausing stops polling and processing of incoming ledger events (without closing WS).
-*/
-(function () {
-  function updateProcessingPausedState() {
-    const paused = window.XRPL._pauseReasons && window.XRPL._pauseReasons.size > 0;
-    window.XRPL.processingPaused = !!paused;
-    window.XRPL.processingPauseReason = paused ? Array.from(window.XRPL._pauseReasons).join(",") : null;
-
-    if (window.XRPL.processingPaused) {
-      // stop polling loop if running
-      if (window.XRPL.ledgerPollInterval) {
-        clearInterval(window.XRPL.ledgerPollInterval);
-        window.XRPL.ledgerPollInterval = null;
-      }
-      setMode("paused", `processing paused (${window.XRPL.processingPauseReason})`);
-      dispatchConnectionEvent();
-      console.log("⏸️ XRPL processing paused:", window.XRPL.processingPauseReason);
-    } else {
-      // resume polling only if consumers exist
-      if (getXRPLConsumerCount() > 0) startActivePolling();
-      setMode("live", "processing active");
-      dispatchConnectionEvent();
-      console.log("▶️ XRPL processing resumed");
-      // Try a quick ledger check to catch up
-      try { checkForNewLedger(); } catch (_) {}
-    }
-  }
-
-  window.pauseXRPLProcessing = function (reason) {
-    try {
-      if (!reason) reason = "manual";
-      if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
-      window.XRPL._pauseReasons.add(String(reason));
-      updateProcessingPausedState();
-    } catch (e) {
-      console.warn("pauseXRPLProcessing error", e);
-    }
-  };
-
-  window.resumeXRPLProcessing = function (reason) {
-    try {
-      if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
-      if (reason == null) {
-        // clear all
-        window.XRPL._pauseReasons.clear();
-      } else {
-        window.XRPL._pauseReasons.delete(String(reason));
-      }
-      updateProcessingPausedState();
-    } catch (e) {
-      console.warn("resumeXRPLProcessing error", e);
-    }
-  };
-
-  window.isXRPLProcessingPaused = function () {
-    return !!(window.XRPL && window.XRPL.processingPaused);
-  };
-
-  // Auto-pause on visibility hidden, resume on visible (add visibility reason)
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", function () {
-      try {
-        if (document.hidden) {
-          if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
-          window.XRPL._pauseReasons.add("__visibility__");
-          updateProcessingPausedState();
-        } else {
-          if (!window.XRPL._pauseReasons) window.XRPL._pauseReasons = new Set();
-          window.XRPL._pauseReasons.delete("__visibility__");
-          updateProcessingPausedState();
-        }
-      } catch (_) {}
-    });
-  }
-})();
-
 /* ---------- ACTIVE POLLING ---------- */
 
 function startActivePolling() {
@@ -530,19 +400,12 @@ function startActivePolling() {
     clearInterval(window.XRPL.ledgerPollInterval);
   }
 
-  // don't poll if paused or no consumers
-  if (window.XRPL.processingPaused || getXRPLConsumerCount() === 0) {
-    if (getXRPLConsumerCount() === 0) console.log("No consumers registered — skipping ledger polling");
-    return;
-  }
-
   window.XRPL.ledgerPollInterval = setInterval(async function () {
     if (!window.XRPL.connected || !window.XRPL.client) return;
-    if (window.XRPL.processingPaused) return; // respect explicit pause
     try {
       await checkForNewLedger();
     } catch (e) {
-      console.warn("Polling error:", e && e.message ? e.message : e);
+      console.warn("Polling error:", e.message);
     }
   }, 4000);
 
@@ -555,7 +418,6 @@ function startActivePolling() {
 
 async function checkForNewLedger() {
   if (!window.XRPL.connected || !window.XRPL.client) return;
-  if (window.XRPL.processingPaused) return; // respect explicit pause
 
   try {
     const resp = await window.XRPL.client.request({
@@ -575,10 +437,10 @@ async function checkForNewLedger() {
       window.XRPL.lastLedgerTime = Date.now();
     }
   } catch (error) {
-    console.warn("Check ledger error:", error && error.message ? error.message : error);
+    console.warn("Check ledger error:", error.message);
     if (
-      String(error && (error.message || "")).toLowerCase().includes("timeout") ||
-      String(error && (error.message || "")).toLowerCase().includes("closed")
+      error.message.includes("timeout") ||
+      error.message.includes("closed")
     ) {
       handleDisconnection();
     }
@@ -589,19 +451,6 @@ async function checkForNewLedger() {
 
 async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
   if (!window.XRPL.client) return;
-  if (window.XRPL.processingPaused) {
-    console.log("Skipping fetchAndProcessLedger because processing is paused:", ledgerIndex);
-    // still update lastLedgerTime/Index minimally so dashboard can show progress
-    if (ledgerIndex > window.XRPL.lastLedgerIndex) {
-      window.XRPL.lastLedgerIndex = ledgerIndex;
-      window.XRPL.lastLedgerTime = Date.now();
-      window.XRPL.state.ledgerIndex = ledgerIndex;
-      window.XRPL.state.ledgerTime = new Date();
-      // emit light event
-      window.dispatchEvent(new CustomEvent("xrpl-ledger-closed", { detail: { ledgerIndex, timestamp: window.XRPL.lastLedgerTime } }));
-    }
-    return;
-  }
 
   try {
     console.log(
@@ -771,7 +620,7 @@ async function fetchAndProcessLedger(ledgerIndex, serverInfoHint) {
     // ---- Push updated state to dashboard + analytics ----
     sendStateToDashboard();
   } catch (error) {
-    console.warn("Fetch ledger error:", error && error.message ? error.message : error);
+    console.warn("Fetch ledger error:", error.message);
   }
 }
 
@@ -1001,69 +850,33 @@ function sendStateToDashboard() {
   );
 }
 
-/* ---------- CONNECTION LISTENERS (ledgerClosed updated) ---------- */
+/* ---------- CONNECTION LISTENERS ---------- */
 
 function setupConnectionListeners() {
   const client = window.XRPL.client;
   if (!client) return;
 
-  try {
-    if (typeof client.removeAllListeners === "function") client.removeAllListeners();
-  } catch (_) {}
+  client.removeAllListeners();
 
   client.on("ledgerClosed", function (ledger) {
     try {
       const idx = Number(ledger.ledger_index);
-      if (!idx) return;
-
-      // Always update lastLedgerIndex/time minimally so dashboard UI can show progress.
-      if (idx > window.XRPL.lastLedgerIndex) {
-        window.XRPL.lastLedgerIndex = idx;
-        window.XRPL.lastLedgerTime = Date.now();
-        // minimal state update
-        window.XRPL.state.ledgerIndex = idx;
-        window.XRPL.state.ledgerTime = new Date();
-        updateHistory("ledgerHistory", idx);
-
-        // Emit a lightweight event for immediate UI updates
-        window.dispatchEvent(new CustomEvent("xrpl-ledger-closed", {
-          detail: {
-            ledgerIndex: idx,
-            timestamp: window.XRPL.lastLedgerTime,
-            server: window.XRPL.server?.name || null,
-            network: window.XRPL.network
-          }
-        }));
-      }
-
-      // If processing paused or no consumers, skip heavy fetch (but still emitted lightweight event above)
-      if (window.XRPL.processingPaused || getXRPLConsumerCount() === 0) {
-        console.log("Skipping heavy ledger processing (paused or no consumers):", idx);
-        return;
-      }
-
-      // Only fetch/process if it's newer than what we have
-      if (idx <= window.XRPL.state.ledgerIndex) return;
-
-      console.log("📨 ledgerClosed event (processing):", idx);
+      if (!idx || idx <= window.XRPL.lastLedgerIndex) return;
+      console.log("📨 ledgerClosed event:", idx);
       fetchAndProcessLedger(idx, null);
     } catch (e) {
-      console.warn("Ledger closed handler error:", e && e.message ? e.message : e);
+      console.warn("Ledger closed handler error:", e.message);
     }
   });
 
   client.on("error", function (error) {
-    console.warn("🔌 WebSocket error:", error && error.message ? error.message : error);
+    console.warn("🔌 WebSocket error:", error.message);
   });
 
   client.on("disconnected", function (code) {
     console.warn("🔌 Disconnected (code " + code + ")");
     handleDisconnection();
   });
-
-  if (typeof client.on === "function") {
-    client.on("close", (hadError) => { console.warn("WS close event", hadError); handleDisconnection(); });
-  }
 }
 
 /* ---------- DISCONNECTION HANDLING ---------- */
@@ -1148,7 +961,7 @@ async function cleanupConnection() {
 
   if (window.XRPL.client) {
     try {
-      if (typeof window.XRPL.client.removeAllListeners === "function") window.XRPL.client.removeAllListeners();
+      window.XRPL.client.removeAllListeners();
       await window.XRPL.client.disconnect();
     } catch (e) {
       /* ignore */
@@ -1213,66 +1026,6 @@ function isXRPLConnected() {
     Date.now() - window.XRPL.lastLedgerTime < 60000
   );
 }
-
-/* ---------- SHARED REQUEST WRAPPER (NEW) ---------- */
-/*
-  window.requestXrpl(payload, { timeoutMs })
-  - Uses shared WS client when connected; attempts reconnect if needed.
-  - Adds a timeout guard so callers don't hang forever.
-*/
-function waitForXRPLConnection(timeoutMs = 12000) {
-  return new Promise((resolve) => {
-    try {
-      if (window.XRPL.connected) return resolve(true);
-
-      const onConn = (ev) => {
-        const d = ev && ev.detail;
-        if (d && d.connected) {
-          window.removeEventListener("xrpl-connection", onConn);
-          clearTimeout(t);
-          resolve(true);
-        }
-      };
-
-      window.addEventListener("xrpl-connection", onConn);
-
-      const t = setTimeout(() => {
-        window.removeEventListener("xrpl-connection", onConn);
-        resolve(false);
-      }, timeoutMs);
-    } catch (_) {
-      resolve(false);
-    }
-  });
-}
-
-window.requestXrpl = async function requestXrpl(payload, opts) {
-  const options = opts || {};
-  const timeoutMs = Number(options.timeoutMs || 20000);
-
-  // ensure connection if possible
-  if (!window.XRPL.client || !window.XRPL.connected) {
-    try {
-      connectXRPL();
-      await waitForXRPLConnection(Math.min(15000, timeoutMs));
-    } catch (_) {}
-  }
-
-  if (!window.XRPL.client) {
-    throw new Error("XRPL client unavailable");
-  }
-
-  // Guard request with timeout
-  const req = window.XRPL.client.request(payload);
-  const timed = Promise.race([
-    req,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), timeoutMs)
-    )
-  ]);
-
-  return timed;
-};
 
 /* ---------- INITIALIZATION ---------- */
 
