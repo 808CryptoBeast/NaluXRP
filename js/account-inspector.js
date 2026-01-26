@@ -123,15 +123,20 @@
   }
 
   function openModal(title, html) {
-    $("uiModalTitle").textContent = title || "Details";
-    $("uiModalBody").innerHTML = html || "";
-    $("uiModalOverlay").style.display = "flex";
+    const overlay = $("uiModalOverlay");
+    const titleEl = $("uiModalTitle");
+    const body = $("uiModalBody");
+    if (!overlay || !titleEl || !body) return;
+    titleEl.textContent = title || "Details";
+    body.innerHTML = html || "";
+    overlay.style.display = "flex";
     // allow scrolling to top
-    $("uiModalBody").scrollTop = 0;
+    body.scrollTop = 0;
   }
 
   function closeModal() {
-    $("uiModalOverlay").style.display = "none";
+    const overlay = $("uiModalOverlay");
+    if (overlay) overlay.style.display = "none";
   }
 
   async function copyToClipboard(text) {
@@ -1152,6 +1157,7 @@
   function hydrateIssuerSelect() {
     const list = getIssuerList();
     const sel = $("uiIssuerSelect");
+    if (!sel) return;
     sel.innerHTML = "";
 
     if (!list.length) {
@@ -1318,10 +1324,10 @@
           <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-first)</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
-          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,[...]
+          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
             <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
             <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
-            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</bu[...]
+            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
           </div>
         </div>
 
@@ -1330,14 +1336,14 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuers</div>
-                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)[...]
-                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build[...]
+                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
+                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
               </div>
 
               <details style="margin-top:10px;">
                 <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
                 <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var[...]
+                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></textarea>
                   <div style="display:flex;flex-direction:column;gap:8px;">
                     <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
                     <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
@@ -1373,8 +1379,8 @@
                   <option value="bithomp">Bithomp</option>
                   <option value="custom">Custom...</option>
                 </select>
-                <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);backgro[...]
-                <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:trans[...]
+                <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
+                <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
                 <button id="uiExplorerSave" class="nav-btn" style="padding:6px 10px;border-radius:8px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
               </div>
 
@@ -1388,11 +1394,11 @@
             <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <div style="font-weight:900;">Issuer Tree</div>
-                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);backgrou[...]
+                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
               </div>
 
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background[...]
+                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
                 <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
                 <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
               </div>
@@ -1411,10 +1417,10 @@
               <div style="opacity:.8">Path + patterns appear here.</div>
             </div>
 
-            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);[...]
+            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                 <strong>Edges (counterparty-derived)</strong>
-                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">[...]
+                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
               </div>
               <div id="uiEdgeItems" style="margin-top:10px;"></div>
             </div>
@@ -1496,12 +1502,11 @@
   }
 
   function clearViews() {
-    $("uiTree").innerHTML = "";
-    $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
-    $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
-    $("uiEdgeItems").innerHTML = "";
-    const mini = $("uiFlowMini");
-    if (mini) mini.innerHTML = "";
+    const tree = $("uiTree"); if (tree) tree.innerHTML = "";
+    const summary = $("uiSummary"); if (summary) summary.innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
+    const results = $("uiResults"); if (results) results.innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
+    const edges = $("uiEdgeItems"); if (edges) edges.innerHTML = "";
+    const mini = $("uiFlowMini"); if (mini) mini.innerHTML = "";
   }
 
   function renderAll(g) {
@@ -1512,8 +1517,7 @@
 
   function renderSummary(g) {
     if (!g) {
-      $("uiSummary").innerHTML = `<div style="opacity:.8">No graph</div>`;
-      return;
+      const s = $("uiSummary"); if (s) s.innerHTML = `<div style="opacity:.8">No graph</div>`; return;
     }
     const issuer = g.issuer;
     const edges = g.edges.length;
@@ -1545,14 +1549,17 @@
           actEntry?.source || "unknown"
         )}${actEntry && !actEntry.complete ? ", incomplete" : ""})</span></div>`;
 
-    $("uiSummary").innerHTML = `
-      <div><strong>Issuer</strong>: <code>${escapeHtml(issuer)}</code></div>
-      <div style="margin-top:8px;"><strong>Domain</strong>: ${domain}</div>
-      <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
-      ${actHtml}
-      <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
-      <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
-    `;
+    const summaryEl = $("uiSummary");
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div><strong>Issuer</strong>: <code>${escapeHtml(issuer)}</code></div>
+        <div style="margin-top:8px;"><strong>Domain</strong>: ${domain}</div>
+        <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+        ${actHtml}
+        <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
+        <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
+      `;
+    }
 
     // Render mini flow for issuer: top incoming/outgoing using Cytoscape
     const mini = $("uiFlowMini");
@@ -1643,13 +1650,13 @@
           <div style="display:flex;align-items:flex-start;gap:8px;">
             ${
               hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent[...]
+                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent">▸</button>`
                 : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
             }
             <div style="flex:1;">${nodeRow(addr)}</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-              <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect[...]
-              <button class="uiMiniFlow" data-addr="${escapeHtml(addr)}" title="Flow" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;co[...]
+              <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+              <button class="uiMiniFlow" data-addr="${escapeHtml(addr)}" title="Flow" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;cursor:pointer;">Flow</button>
             </div>
           </div>
           ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
@@ -1792,7 +1799,7 @@
       `;
 
     const metaLine = n.outgoingMeta
-      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoin[...]
+      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.mode)}</div>`
       : "";
 
     const rows = outgoing
@@ -1821,7 +1828,7 @@
           <div style="font-weight:900;">Account</div>
           <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
           <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
-          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: [...]
+          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
           ${actBlock}
           ${metaLine}
         </div>
@@ -1831,9 +1838,9 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
             <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
             <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download[...]
+            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashes</button>
             <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
-            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(getExplorerU[...]
+            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(getExplorerUrlForAccount(addr) || "#")}">Explorer</a>
           </div>
           <div style="margin-top:10px;opacity:.85;font-size:12px;">
             outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
@@ -1864,14 +1871,18 @@
 
     openModal(`Node: ${addr}`, html);
 
-    $("uiCopyHashes").onclick = async () => {
+    const copyBtn = $("uiCopyHashes");
+    if (copyBtn) copyBtn.onclick = async () => {
       const ok = await copyToClipboard(hashesOnly || "");
-      $("uiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-      setTimeout(() => ($("uiCopyHashes").textContent = "Copy hashes"), 1200);
+      copyBtn.textContent = ok ? "Copied ✅" : "Copy failed ❌";
+      setTimeout(() => { if (copyBtn) copyBtn.textContent = "Copy hashes"; }, 1200);
     };
-    $("uiExportCsv").onclick = () => downloadText(csv, `naluxrp-node-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
-    $("uiExportTxt").onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
-    $("uiShowRaw").onclick = () => {
+    const csvBtn = $("uiExportCsv");
+    if (csvBtn) csvBtn.onclick = () => downloadText(csv, `naluxrp-node-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
+    const txtBtn = $("uiExportTxt");
+    if (txtBtn) txtBtn.onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
+    const rawBtn = $("uiShowRaw");
+    if (rawBtn) rawBtn.onclick = () => {
       const rawObj = { address: addr, node: n };
       openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
     };
@@ -1886,7 +1897,6 @@
 
   // Render a mini flow (small cytoscape) and optionally open a modal when openPanel true
   async function renderMiniFlow(g, account, containerId, opts = {}) {
-    const maxNodes = 6;
     const container = (typeof containerId === "string" ? $(containerId) : containerId) || null;
     const openPanel = opts.openPanel;
     // compute top inbound and outbound by sum(amount) (XRP only) — take top 3 each side
@@ -1916,11 +1926,9 @@
 
     // build cytoscape elements
     const elements = [];
-    const nodesMap = new Map();
     const centerId = `n_${account}`;
 
-    nodesMap.set(centerId, { data: { id: centerId, label: shortAddr(account), color: "#06b6d4", size: 36 } });
-    elements.push(nodesMap.get(centerId));
+    elements.push({ data: { id: centerId, label: shortAddr(account), color: "#06b6d4", size: 36 } });
 
     inList.forEach((it, i) => {
       const id = `in_${i}_${it.a}`;
@@ -2100,8 +2108,8 @@
       activeIssuer = issuer;
 
       // show something immediately in the tree container
-      $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
-      $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
+      const t = $("uiTree"); if (t) t.innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
+      const ei = $("uiEdgeItems"); if (ei) ei.innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
 
       const depth = clampInt(Number(($("uiDepth") || {}).value || DEFAULT_DEPTH), 1, 6);
       const perNode = clampInt(Number(($("uiPerNode") || {}).value || DEFAULT_PER_NODE), 10, 300);
@@ -2157,21 +2165,22 @@
     }
     const path = findShortestPath(g, g.issuer, target);
     if (!path) {
-      $("uiResults").innerHTML = `<div>No path found (within current tree).</div>`;
-      return;
+      const r = $("uiResults"); if (r) r.innerHTML = `<div>No path found (within current tree).</div>`; return;
     }
-    $("uiResults").innerHTML = `
-      <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
-      <div style="margin-top:8px;">${path
-        .map((p) => `<div style="display:flex;align-items:center;gap:8px;"><code>${escapeHtml(p)}</code><button class="uiNodeMini" data-addr="${escapeHtml(
-          p
-        )}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button></div>`)
-        .join("")}</div>
-    `;
-
-    Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-      btn.addEventListener("click", () => showNodeModal(issuerRegistry.get(activeIssuer), btn.getAttribute("data-addr")))
-    );
+    const r = $("uiResults");
+    if (r) {
+      r.innerHTML = `
+        <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
+        <div style="margin-top:8px;">${path
+          .map((p) => `<div style="display:flex;align-items:center;gap:8px;"><code>${escapeHtml(p)}</code><button class="uiNodeMini" data-addr="${escapeHtml(
+            p
+          )}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button></div>`)
+          .join("")}</div>
+      `;
+      Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
+        btn.addEventListener("click", () => showNodeModal(issuerRegistry.get(activeIssuer), btn.getAttribute("data-addr")))
+      );
+    }
   }
 
   function patternsClicked() {
@@ -2221,41 +2230,44 @@
           .join("")
       : `<div style="padding:12px;opacity:.75;">No cycles found (within current graph bounds).</div>`;
 
-    $("uiResults").innerHTML = `
-      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-        <div style="font-weight:900;">Pattern summary</div>
-        <div style="margin-top:10px;opacity:.9;">
-          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
-          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
-          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
-          <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
-          <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
-          <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
-          <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
-        </div>
+    const r = $("uiResults");
+    if (r) {
+      r.innerHTML = `
+        <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+          <div style="font-weight:900;">Pattern summary</div>
+          <div style="margin-top:10px;opacity:.9;">
+            <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
+            <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
+            <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
+            <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
+            <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
+            <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
+            <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
+          </div>
 
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${hubRows}
+          <div style="margin-top:14px;">
+            <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
+            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+              ${hubRows}
+            </div>
+          </div>
+
+          <div style="margin-top:14px;">
+            <div style="font-weight:900;">Bursts (high-density outgoing)</div>
+            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+              ${burstRows}
+            </div>
+          </div>
+
+          <div style="margin-top:14px;">
+            <div style="font-weight:900;">Cycles (bounded)</div>
+            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+              ${cycleRows}
+            </div>
           </div>
         </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Bursts (high-density outgoing)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${burstRows}
-          </div>
-        </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Cycles (bounded)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${cycleRows}
-          </div>
-        </div>
-      </div>
-    `;
+      `;
+    }
   }
 
   // ---------------- INIT ----------------
