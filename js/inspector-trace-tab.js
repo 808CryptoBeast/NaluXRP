@@ -1,985 +1,854 @@
 /* =========================================================
-   inspector-trace-tab.js — Adds "🚨 Trace Funds" tab to Inspector
-   - Injects a new tab into existing inspector tablist (if present)
-   - Adds a new tab panel with tracing UI (Payments hop-by-hop BFS)
-   - Cancel + Export JSON/CSV
-   - Prefill from current Inspector account when possible
-   - Safe: no duplicate tabs/panels; works with most tab systems
+   FILE: js/inspector-trace-tab.js
+   NaluXrp 🌊 — Inspector Trace Tab (Stable Mount + No ReferenceErrors)
+
+   Purpose:
+   - Renders the "Trace" tab UI inside a mount element (default: #inspectorTraceMount)
+   - Provides hop-by-hop tracing from a seed account using public XRPL APIs
+   - Integrates with Unified Inspector via:
+       window.initInspectorTraceTab({ mountId })
+       window.InspectorTraceTab.setSeedAddress(address)
+
+   Fixes (required):
+   - Prevents "runTrace is not defined" by using function declarations (hoisted)
+   - Safe transport wrapper: WS → wrapper → HTTP JSON-RPC fallback
+   - Handles NotConnectedError by falling back to HTTP and/or requesting reconnect
+
+   Notes:
+   - Client-side only; no secrets stored.
+   - Minimal dependencies: uses xrpl-connection.js if present, otherwise falls back to JSON-RPC.
    ========================================================= */
 
 (function () {
-  const VERSION = "inspector-trace-tab@1.0.0";
+  "use strict";
 
-  // Seed address can be set before the panel is mounted
-  let pendingSeedAddress = null;
+  const MODULE_VERSION = "inspector-trace-tab@1.4.1-stable";
 
-  const TAB_ID = "nalu-trace";
-  const TAB_LABEL = "Trace Funds";
-  const TAB_ICON = "🚨";
+  // ---------------- CONFIG ----------------
+  const DEPLOYED_PROXY =
+    typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY
+      ? String(window.NALU_DEPLOYED_PROXY)
+      : "";
 
-  const DEFAULTS = {
-    maxHops: 4,
-    perAccountTxLimit: 60,
-    maxEdges: 400,
-    ledgerMin: -1,
-    ledgerMax: -1
+  // Prefer known working JSON-RPC endpoints (set window.NALU_RPC_HTTP to override)
+  const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
+  const RPC_HTTP_OVERRIDE =
+    typeof window !== "undefined" && window.NALU_RPC_HTTP
+      ? String(window.NALU_RPC_HTTP)
+      : "";
+
+  const PAGE_LIMIT = 200;
+  const MAX_PAGES_PER_ACCOUNT = 60; // keep sane (trace should be quick)
+  const DEFAULT_HOPS = 3;
+  const DEFAULT_PER_NODE = 80;
+  const DEFAULT_MAX_NODES = 400;
+  const DEFAULT_MAX_EDGES = 2500;
+
+  // ---------------- STATE ----------------
+  const state = {
+    mountId: "inspectorTraceMount",
+    mounted: false,
+    seedAddress: "",
+    busy: false,
+    lastError: null,
+    transport: {
+      lastSource: "—",
+      wsConnected: false,
+      lastError: null
+    },
+    graph: {
+      builtAt: null,
+      seed: null,
+      params: null,
+      nodes: new Map(), // addr -> { address, level, outCount, inCount }
+      edges: [] // { from,to,type,amount,currency,issuer,ledger_index,date,tx_hash,kind }
+    }
   };
 
-  let traceRunning = false;
-  let traceCancelled = false;
-
-  function el(id) { return document.getElementById(id); }
+  // ---------------- HELPERS ----------------
+  function $(id) {
+    return document.getElementById(id);
+  }
 
   function escapeHtml(s) {
-    return String(s ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function shortAddr(a) {
-    const s = String(a || "");
-    if (s.length < 12) return s;
-    return `${s.slice(0, 6)}…${s.slice(-4)}`;
+  function isValidXrpAddress(addr) {
+    return /^r[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(String(addr || "").trim());
   }
 
-  function isXRPLAccount(s) {
-    return /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(String(s || ""));
-  }
-
-  function clampInt(v, min, max, fallback) {
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(min, Math.min(max, n));
-  }
-
-  // -----------------------------
-  // XRPL request wrapper
-  // -----------------------------
-  function getXRPLRequester() {
-    // Prefer UnifiedInspector (shares transport with the main Inspector)
-    if (window.UnifiedInspector?.request) return (payload, opts) => window.UnifiedInspector.request(payload, opts || {});
-    // Prefer shared wrapper if available
-    if (window.requestXrpl) return (payload, opts) => window.requestXrpl(payload, opts);
-    // Legacy shared connection wrapper (older builds)
-    if (window.xrplConnection?.request) return (payload) => window.xrplConnection.request(payload);
-    // NaluXrp connection module (window.XRPL.client)
-    if (window.XRPL?.client?.request) return (payload) => window.XRPL.client.request(payload);
-    // Legacy global client
-    if (window.xrpl?.Client && window.xrplClient?.request) return (payload) => window.xrplClient.request(payload);
+  function safeToIso(x) {
+    try {
+      if (x == null) return null;
+      if (typeof x === "string") {
+        const d = new Date(x);
+        if (!Number.isNaN(d.getTime())) return d.toISOString();
+      }
+      if (typeof x === "number") {
+        if (x > 10_000_000_000) return new Date(x).toISOString(); // ms epoch
+        if (x > 1_000_000_000) return new Date(x * 1000).toISOString(); // sec epoch
+        const rippleEpochMs = Date.UTC(2000, 0, 1);
+        return new Date(rippleEpochMs + x * 1000).toISOString(); // ripple epoch seconds
+      }
+      const d = new Date(x);
+      if (!Number.isNaN(d.getTime())) return d.toISOString();
+    } catch (_) {}
     return null;
   }
 
-
-  async function requestWithRetry(payload, tries = 3) {
-    const req = getXRPLRequester();
-    if (!req) throw new Error("XRPL request interface not found (expected window.xrplConnection.request / window.xrplClient.request).");
-
-    let lastErr = null;
-    for (let i = 0; i < tries; i++) {
-      try {
-        return await req(payload);
-      } catch (err) {
-        lastErr = err;
-        await sleep(300 * (i + 1));
-      }
+  function parseAmount(amount) {
+    if (amount == null) return { value: 0, currency: "XRP", issuer: null, raw: amount };
+    if (typeof amount === "string") {
+      const v = Number(amount);
+      return { value: Number.isFinite(v) ? v / 1_000_000 : 0, currency: "XRP", issuer: null, raw: amount };
     }
-    throw lastErr || new Error("XRPL request failed");
-  }
-
-  // -----------------------------
-  // Inspector integration hooks
-  // -----------------------------
-  function getInspectorRoot() {
-    return el("inspector");
-  }
-
-  function isInspectorActive() {
-    const root = getInspectorRoot();
-    return !!(root && root.classList.contains("active"));
-  }
-
-  function findTabList(root) {
-    // Prefer ARIA tablist
-    let tablist = root.querySelector('[role="tablist"]');
-    if (tablist) return tablist;
-
-    // Common class fallbacks
-    tablist =
-      root.querySelector(".inspector-tabs") ||
-      root.querySelector(".tabs") ||
-      root.querySelector(".tab-bar") ||
-      root.querySelector(".tablist");
-
-    return tablist || null;
-  }
-
-  function findPanelsContainer(root) {
-    // If ARIA tabpanels exist, container is parent of first panel
-    const panel = root.querySelector('[role="tabpanel"]');
-    if (panel && panel.parentElement) return panel.parentElement;
-
-    // Common fallbacks
-    return (
-      root.querySelector(".inspector-panels") ||
-      root.querySelector(".tab-panels") ||
-      root.querySelector(".panels") ||
-      root
-    );
-  }
-
-  function findAnyTabButton(tablist) {
-    return tablist.querySelector('[role="tab"], button, a');
-  }
-
-  function findAnyPanel(root) {
-    return root.querySelector('[role="tabpanel"], .tab-panel, .panel, section, div');
-  }
-
-  function alreadyInstalled(root) {
-    return !!root.querySelector(`#${TAB_ID}-tab`) || !!root.querySelector(`#${TAB_ID}-panel`);
-  }
-
-  function getCurrentInspectorAccount() {
-    const root = getInspectorRoot();
-    if (!root) return "";
-
-    // Try known ids
-    const candidates = [
-      root.querySelector("#inspectorAccount"),
-      root.querySelector("#accountInput"),
-      root.querySelector("#account-input"),
-      root.querySelector("input[name='account']"),
-      root.querySelector("input[type='text']")
-    ].filter(Boolean);
-
-    for (const inp of candidates) {
-      const v = (inp.value || "").trim();
-      if (isXRPLAccount(v)) return v;
-
-      const ph = (inp.getAttribute("placeholder") || "").toLowerCase();
-      if (ph.includes("r...") || ph.includes("account")) {
-        if (isXRPLAccount(v)) return v;
-      }
+    if (typeof amount === "object" && amount.value != null) {
+      const v = Number(amount.value);
+      return {
+        value: Number.isFinite(v) ? v : 0,
+        currency: amount.currency || "???",
+        issuer: amount.issuer || null,
+        raw: amount
+      };
     }
-
-    // Try reading any inspector state if you exposed it
-    if (typeof window.getInspectorAccount === "function") {
-      const v = String(window.getInspectorAccount() || "").trim();
-      if (isXRPLAccount(v)) return v;
-    }
-
-    return "";
+    if (typeof amount === "number") return { value: amount, currency: "XRP", issuer: null, raw: amount };
+    return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
-  function trySetInspectorAccount(account) {
-    if (!isXRPLAccount(account)) return;
-
-    if (typeof window.setInspectorAccount === "function") {
-      try { window.setInspectorAccount(account); } catch (_) {}
-      return;
-    }
-
-    const root = getInspectorRoot();
-    if (!root) return;
-
-    const inp =
-      root.querySelector("#inspectorAccount") ||
-      root.querySelector("#accountInput") ||
-      root.querySelector("#account-input") ||
-      root.querySelector("input[name='account']") ||
-      root.querySelector("input[type='text']");
-
-    if (inp) inp.value = account;
+  function formatAmountPretty(cur, val, issuer) {
+    const n = Number(val);
+    const vv = Number.isFinite(n) ? n : 0;
+    if (cur === "XRP") return `${vv.toFixed(6)} XRP`;
+    return `${vv} ${cur}${issuer ? ` • ${String(issuer).slice(0, 6)}…` : ""}`;
   }
 
-  // -----------------------------
-  // Tab injection
-  // -----------------------------
-  function injectTraceTab() {
-// Prefer the Unified Inspector trace mount if present (tabs are handled by account-inspector.js)
-const mount = document.getElementById("inspectorTraceMount");
-if (mount) {
-  let panel = mount.querySelector("#inspectorTracePanel");
-  if (!panel) {
-    panel = document.createElement("div");
-    panel.id = "inspectorTracePanel";
-    mount.innerHTML = "";
-    mount.appendChild(panel);
-  }
-  if (!panel.querySelector(".trace-controls")) {
-    panel.innerHTML = renderTracePanelHTML();
-  }
-  ensureTracePanelReady();
-  if (pendingSeedAddress) {
-    const inp = document.getElementById("traceVictimInInspector");
-    if (inp) inp.value = pendingSeedAddress;
-  }
-  return;
-}
-
-    const root = getInspectorRoot();
-    if (!root) return;
-
-    if (alreadyInstalled(root)) return;
-
-    const tablist = findTabList(root);
-    if (!tablist) {
-      // If inspector has no tablist, we won’t force a new global layout.
-      // We’ll inject a collapsible section at the top instead (still accessible).
-      injectFallbackSection(root);
-      return;
-    }
-
-    const panelsContainer = findPanelsContainer(root);
-
-    // Create new tab
-    const templateTab = findAnyTabButton(tablist);
-    const tab = templateTab ? templateTab.cloneNode(true) : document.createElement("button");
-
-    tab.id = `${TAB_ID}-tab`;
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("type", "button");
-    tab.setAttribute("aria-selected", "false");
-    tab.setAttribute("aria-controls", `${TAB_ID}-panel`);
-    tab.classList.add("nalu-trace-tab");
-
-    // Normalize text
-    tab.innerHTML = `
-      <span class="nav-icon" style="font-size:1.05rem;">${TAB_ICON}</span>
-      <span class="nav-label">${TAB_LABEL}</span>
-    `;
-
-    // Create panel
-    const panel = document.createElement("div");
-    panel.id = `${TAB_ID}-panel`;
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-labelledby", tab.id);
-    panel.hidden = true;
-
-    // Use about card styles (already in your app) so we don’t need extra CSS
-    panel.innerHTML = renderTracePanelHTML();
-
-    // Insert tab near other “action” tabs (end)
-    tablist.appendChild(tab);
-    panelsContainer.appendChild(panel);
-
-    // Add tab click behavior (works even if inspector has its own)
-    tab.addEventListener("click", (e) => {
-      e.preventDefault();
-      activateTab(root, tablist, panelsContainer, tab.id, panel.id);
-      ensureTracePanelReady();
-    });
-
-    // Capture clicks on other tabs to hide our panel (prevents “stuck open”)
-    tablist.addEventListener("click", (e) => {
-      const t = e.target.closest('[role="tab"], button, a');
-      if (!t) return;
-      if (t.id === tab.id) return;
-
-      // If some other tab was clicked, hide trace panel
-      panel.hidden = true;
-      tab.setAttribute("aria-selected", "false");
-      tab.classList.remove("active", "is-active", "selected");
-    }, true);
-
-    // Prefill victim field when installed
-    setTimeout(() => {
-      const acct = getCurrentInspectorAccount();
-      if (acct) el("traceVictimInInspector").value = acct;
-    }, 50);
-
-    // Bind panel UI
-    ensureTracePanelReady();
-
-    console.log(`✅ Trace tab injected (${VERSION})`);
+  function explorerLinks(txHash) {
+    if (!txHash) return { xrpscan: null, bithomp: null };
+    return {
+      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
+      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
+    };
   }
 
-  function activateTab(root, tablist, panelsContainer, tabId, panelId) {
-    // Deactivate all tabs
-    tablist.querySelectorAll('[role="tab"], button, a').forEach((t) => {
-      t.setAttribute?.("aria-selected", "false");
-      t.classList.remove("active", "is-active", "selected");
-    });
-
-    // Hide all panels if they use role=tabpanel
-    root.querySelectorAll('[role="tabpanel"]').forEach((p) => {
-      if (p.id !== panelId) p.hidden = true;
-    });
-
-    const tab = el(tabId);
-    const panel = el(panelId);
-    if (tab) {
-      tab.setAttribute("aria-selected", "true");
-      tab.classList.add("active");
-    }
-    if (panel) panel.hidden = false;
-  }
-
-  // If no tab system exists, we still add it (not as a tab) so feature exists
-  function injectFallbackSection(root) {
-    const existing = root.querySelector("#nalu-trace-fallback");
-    if (existing) return;
-
-    const wrap = document.createElement("div");
-    wrap.id = "nalu-trace-fallback";
-    wrap.innerHTML = `
-      <div class="about-card" style="margin-top: 14px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">${TAB_ICON}</div>
-          <div class="about-card-title">${TAB_LABEL}</div>
-          <button class="about-acc-toggle" type="button" id="traceFallbackToggle">
-            <span>Open</span><span class="about-acc-chevron">▾</span>
-          </button>
-        </div>
-        <div class="about-acc-body" id="traceFallbackBody" style="display:none;">
-          ${renderTracePanelInnerHTML()}
-        </div>
-      </div>
-    `;
-
-    root.prepend(wrap);
-
-    const toggle = el("traceFallbackToggle");
-    const body = el("traceFallbackBody");
-    if (toggle && body) {
-      toggle.addEventListener("click", () => {
-        const open = body.style.display !== "none";
-        body.style.display = open ? "none" : "block";
-        const chev = toggle.querySelector(".about-acc-chevron");
-        if (chev) chev.textContent = open ? "▾" : "▴";
-      });
-    }
-
-    setTimeout(() => {
-      const acct = getCurrentInspectorAccount();
-      const v = el("traceVictimInInspector");
-      if (acct && v) v.value = acct;
-      ensureTracePanelReady();
-    }, 50);
-
-    console.log(`✅ Trace fallback injected (${VERSION})`);
-  }
-
-  // -----------------------------
-  // Panel HTML + bindings
-  // -----------------------------
-  function renderTracePanelHTML() {
-    return `
-      <div style="padding-top: 10px;">
-        ${renderTracePanelInnerHTML()}
-      </div>
-    `;
-  }
-
-  function renderTracePanelInnerHTML() {
-    return `
-      <div class="about-card" style="margin-top: 10px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">🧾</div>
-          <div class="about-card-title">Incident tracing (Payments)</div>
-          <button class="about-acc-toggle" type="button" id="traceHelpBtnInInspector" aria-expanded="false">
-            <span>How it works</span><span class="about-acc-chevron">▾</span>
-          </button>
-        </div>
-
-        <div class="about-card-body">
-          Follow outgoing <strong>Payment</strong> flows hop-by-hop. This is <strong>on-ledger</strong> only.
-          Exchanges may “absorb” funds off-ledger after a deposit — so treat results as investigative pivots, not conclusions.
-        </div>
-
-        <div class="about-acc-body" id="traceHelpBodyInInspector" style="display:none;">
-          <ul class="about-bullets">
-            <li><strong>Hop 0</strong>: victim → destinations found in account_tx</li>
-            <li><strong>Hop 1+</strong>: each destination → its destinations (BFS)</li>
-            <li><strong>Limits</strong>: per-account tx cap + global edge cap to avoid rate limits</li>
-            <li><strong>Best practice</strong>: use a narrow ledger window around the incident</li>
-          </ul>
-        </div>
-
-        <div style="margin-top: 12px; display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; align-items: end;">
-          <div style="grid-column: 1 / -1;">
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Victim account</label>
-            <input id="traceVictimInInspector" type="text" placeholder="r..."
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Max hops</label>
-            <input id="traceHopsInInspector" type="number" min="1" max="10" value="${DEFAULTS.maxHops}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Ledger min</label>
-            <input id="traceLedgerMinInInspector" type="number" value="${DEFAULTS.ledgerMin}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Ledger max</label>
-            <input id="traceLedgerMaxInInspector" type="number" value="${DEFAULTS.ledgerMax}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Per-account tx</label>
-            <input id="tracePerAcctInInspector" type="number" min="10" max="400" value="${DEFAULTS.perAccountTxLimit}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Max edges</label>
-            <input id="traceMaxEdgesInInspector" type="number" min="50" max="5000" value="${DEFAULTS.maxEdges}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
-          </div>
-
-          <div style="grid-column: 1 / -1; display:flex; gap:10px; flex-wrap:wrap; margin-top: 6px;">
-            <button id="traceUseCurrentAccount" class="about-btn" type="button">Use inspector account</button>
-            <button id="traceRunInInspector" class="about-btn" type="button">Start trace</button>
-            <button id="traceCancelInInspector" class="about-btn" type="button" style="opacity:0.85;">Cancel</button>
-            <button id="traceExportJsonInInspector" class="about-btn" type="button" disabled>Export JSON</button>
-            <button id="traceExportCsvInInspector" class="about-btn" type="button" disabled>Export CSV</button>
-          </div>
-
-          <div style="grid-column: 1 / -1; margin-top: 10px;">
-            <div id="traceStatusInInspector" style="color: var(--text-secondary);"></div>
-          </div>
-        </div>
-      </div>
-
-      <div id="traceResultsInInspector" style="margin-top: 14px;"></div>
-    `;
-  }
-
-  function ensureTracePanelReady() {
-    // Avoid double binding
-    const runBtn = el("traceRunInInspector");
-    if (runBtn && runBtn.__bound) return;
-    if (runBtn) runBtn.__bound = true;
-
-    // Help accordion
-    el("traceHelpBtnInInspector")?.addEventListener("click", () => {
-      const body = el("traceHelpBodyInInspector");
-      const btn = el("traceHelpBtnInInspector");
-      if (!body || !btn) return;
-      const open = body.style.display !== "none";
-      body.style.display = open ? "none" : "block";
-      btn.setAttribute("aria-expanded", open ? "false" : "true");
-      const chev = btn.querySelector(".about-acc-chevron");
-      if (chev) chev.textContent = open ? "▾" : "▴";
-    });
-
-    // Use current inspector account
-    el("traceUseCurrentAccount")?.addEventListener("click", () => {
-      const acct = getCurrentInspectorAccount();
-      if (acct) el("traceVictimInInspector").value = acct;
-      else setTraceStatus("⚠️ No inspector account detected yet. Enter an account, or load one in the inspector first.", false);
-    });
-
-    // Trace buttons
-    el("traceRunInInspector")?.addEventListener("click", () => (typeof runTrace === "function" ? runTrace() : null));
-    el("traceCancelInInspector")?.addEventListener("click", cancelTrace);
-  }
-
-  function setTraceStatus(msg, isError) {
-    const out = el("traceStatusInInspector");
-    if (!out) return;
-    out.style.color = isError ? "#ff6e6e" : "var(--text-secondary)";
-    out.innerHTML = msg;
-  }
-
-  function disableTraceControls(disabled) {
-    ["traceRunInInspector", "traceUseCurrentAccount"].forEach((id) => {
-      const b = el(id);
-      if (b) b.disabled = !!disabled;
-    });
-    const cancelBtn = el("traceCancelInInspector");
-    if (cancelBtn) cancelBtn.disabled = false;
-
-    const ej = el("traceExportJsonInInspector");
-    const ec = el("traceExportCsvInInspector");
-    if (ej) ej.disabled = true;
-    if (ec) ec.disabled = true;
-  }
-
-  function clearResults() {
-    const r = el("traceResultsInInspector");
-    if (r) r.innerHTML = "";
-  }
-
-  // -----------------------------
-  // Trace engine (Payments BFS)
-  // -----------------------------
-  async function runTrace() {
-    if (traceRunning) return;
-
-    const victim = (el("traceVictimInInspector")?.value || "").trim();
-    if (!isXRPLAccount(victim)) {
-      setTraceStatus("❌ Please enter a valid XRPL account (r...).", true);
-      return;
-    }
-
-    const maxHops = clampInt(el("traceHopsInInspector")?.value, 1, 10, DEFAULTS.maxHops);
-    const ledgerMin = parseInt(el("traceLedgerMinInInspector")?.value ?? DEFAULTS.ledgerMin, 10);
-    const ledgerMax = parseInt(el("traceLedgerMaxInInspector")?.value ?? DEFAULTS.ledgerMax, 10);
-    const perAcct = clampInt(el("tracePerAcctInInspector")?.value, 10, 400, DEFAULTS.perAccountTxLimit);
-    const maxEdges = clampInt(el("traceMaxEdgesInInspector")?.value, 50, 5000, DEFAULTS.maxEdges);
-
-    traceRunning = true;
-    traceCancelled = false;
-
-    setTraceStatus("⏳ Starting trace…", false);
-    disableTraceControls(true);
-    clearResults();
-
+  // ---------------- TRANSPORT (WS → HTTP fallback) ----------------
+  function computeWsConnected() {
     try {
-      const result = await traceOutgoingPaymentsBFS({
-        victim,
-        maxHops,
-        ledgerMin: Number.isFinite(ledgerMin) ? ledgerMin : -1,
-        ledgerMax: Number.isFinite(ledgerMax) ? ledgerMax : -1,
-        perAccountTxLimit: perAcct,
-        maxEdges
+      if (typeof window.isXRPLConnected === "function") return !!window.isXRPLConnected();
+      if (window.XRPL?.connected) return true;
+      if (window.XRPL?.client && typeof window.XRPL.client.isConnected === "function") return !!window.XRPL.client.isConnected();
+    } catch (_) {}
+    return false;
+  }
+
+  function setTransportLastSource(src) {
+    state.transport.lastSource = src || "—";
+    state.transport.wsConnected = computeWsConnected();
+    updateTransportBadge();
+  }
+
+  function requestSharedReconnect(reason) {
+    try {
+      state.transport.lastError = reason || "reconnect requested";
+      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
+      else if (typeof window.connectXRPL === "function") window.connectXRPL();
+    } catch (e) {
+      state.transport.lastError = e?.message ? e.message : String(e);
+    }
+    updateTransportBadge();
+  }
+
+  async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000 } = {}) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers: {
+          Accept: "application/json",
+          ...(body ? { "Content-Type": "application/json" } : {})
+        },
+        body: body ? JSON.stringify(body) : null,
+        signal: controller.signal
       });
-
-      if (traceCancelled) {
-        setTraceStatus("🟡 Trace cancelled.", false);
-        return;
-      }
-
-      renderTraceResults(result);
-      wireExportButtons(result);
-      setTraceStatus(`✅ Trace complete: ${result.edges.length} edges • ${result.nodes.size} accounts • depth ${result.maxDepthReached}`, false);
-    } catch (err) {
-      console.error(err);
-      setTraceStatus(`❌ Trace failed: ${escapeHtml(err?.message || String(err))}`, true);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
     } finally {
-      traceRunning = false;
-      disableTraceControls(false);
+      clearTimeout(id);
     }
   }
 
-  function cancelTrace() {
-    if (!traceRunning) return;
-    traceCancelled = true;
-    setTraceStatus("🟡 Cancelling…", false);
+  function unwrapRpcResult(json) {
+    const r = json?.result;
+    if (!r) return null;
+    if (r.error) return null;
+    if (r.status === "success" && r.result && typeof r.result === "object") return r.result;
+    return r;
   }
 
-  async function traceOutgoingPaymentsBFS(opts) {
-    const { victim, maxHops, ledgerMin, ledgerMax, perAccountTxLimit, maxEdges } = opts;
+  async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
+    const endpoints = [];
+    if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) endpoints.push(DEPLOYED_PROXY);
+    if (RPC_HTTP_OVERRIDE && RPC_HTTP_OVERRIDE.startsWith("http")) endpoints.push(RPC_HTTP_OVERRIDE);
+    endpoints.push(...RPC_HTTP_ENDPOINTS);
 
-    const visited = new Set();
-    const nodes = new Set();
-    const edges = [];
-    const queue = [{ account: victim, depth: 0 }];
+    const body = { method, params: [paramsObj] };
 
-    visited.add(victim);
-    nodes.add(victim);
-
-    let maxDepthReached = 0;
-
-    while (queue.length) {
-      if (traceCancelled) break;
-      if (edges.length >= maxEdges) break;
-
-      const { account, depth } = queue.shift();
-      maxDepthReached = Math.max(maxDepthReached, depth);
-
-      setTraceStatus(`🔍 Depth ${depth}/${maxHops} • edges ${edges.length}/${maxEdges} • ${escapeHtml(shortAddr(account))}`, false);
-
-      if (depth >= maxHops) continue;
-
-      const outgoing = await fetchOutgoingPaymentEdges(account, {
-        ledgerMin,
-        ledgerMax,
-        perAccountTxLimit
-      });
-
-      for (const e of outgoing) {
-        if (traceCancelled) break;
-        edges.push(e);
-        nodes.add(e.from);
-        nodes.add(e.to);
-
-        if (!visited.has(e.to)) {
-          visited.add(e.to);
-          queue.push({ account: e.to, depth: depth + 1 });
+    for (const base of endpoints) {
+      const url = base.endsWith("/") ? base : base + "/";
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const j = await tryFetchJson(url, { method: "POST", body, timeoutMs });
+          const out = unwrapRpcResult(j);
+          if (out) {
+            setTransportLastSource(base.includes("localhost") ? "local_proxy_http_rpc" : "http_rpc");
+            state.transport.lastError = null;
+            return out;
+          }
+        } catch (e) {
+          state.transport.lastError = e?.message ? e.message : String(e);
         }
-
-        if (edges.length >= maxEdges) break;
+        if (attempt < retries) await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
       }
-
-      await sleep(80);
     }
-
-    return {
-      victim,
-      maxHops,
-      ledgerMin,
-      ledgerMax,
-      perAccountTxLimit,
-      maxEdges,
-      maxDepthReached,
-      nodes,
-      edges,
-      createdAt: new Date().toISOString()
-    };
+    return null;
   }
 
-  async function fetchOutgoingPaymentEdges(account, params) {
-    const { ledgerMin, ledgerMax, perAccountTxLimit } = params;
-
-    const edges = [];
-    let marker = undefined;
-    let fetched = 0;
-
-    while (true) {
-      if (traceCancelled) break;
-      if (fetched >= perAccountTxLimit) break;
-
-      const limit = Math.min(200, perAccountTxLimit - fetched);
-      const payload = {
-        command: "account_tx",
-        account,
-        ledger_index_min: Number.isFinite(ledgerMin) ? ledgerMin : -1,
-        ledger_index_max: Number.isFinite(ledgerMax) ? ledgerMax : -1,
-        limit,
-        binary: false
-      };
-      if (marker) payload.marker = marker;
-
-      const res = await requestWithRetry(payload, 3);
-      const txs = res?.result?.transactions || [];
-      fetched += txs.length;
-
-      for (const item of txs) {
-        const tx = item?.tx || item;
-        const meta = item?.meta || item?.metaData;
-
-        if (!tx || tx.TransactionType !== "Payment") continue;
-        if (tx.Account !== account) continue;
-        if (!tx.Destination) continue;
-
-        const delivered = meta?.delivered_amount ?? meta?.DeliveredAmount;
-        const amt = delivered ?? tx.Amount;
-
-        const parsed = parseAmount(amt);
-
-        edges.push({
-          from: tx.Account,
-          to: tx.Destination,
-          amount: parsed.display,
-          amount_xrp: parsed.xrp,
-          currency: parsed.currency,
-          issuer: parsed.issuer,
-          tx_hash: item?.hash || tx?.hash || tx?.TransactionHash || null,
-          ledger_index: item?.ledger_index ?? tx?.ledger_index ?? null,
-          validated: !!item?.validated
-        });
-
-        if (edges.length >= perAccountTxLimit) break;
+  async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
+    // Preferred: UnifiedInspector wrapper (shares logic + metrics)
+    if (window.UnifiedInspector && typeof window.UnifiedInspector.request === "function") {
+      try {
+        const out = await window.UnifiedInspector.request(payload, { timeoutMs, allowHttpFallback });
+        setTransportLastSource("UnifiedInspector.request");
+        state.transport.lastError = null;
+        return out;
+      } catch (e) {
+        state.transport.lastError = e?.message ? e.message : String(e);
       }
-
-      marker = res?.result?.marker;
-      if (!marker) break;
     }
 
-    return edges;
-  }
-
-  function parseAmount(amt) {
-    if (typeof amt === "string") {
-      const drops = Number(amt);
-      const xrp = Number.isFinite(drops) ? drops / 1_000_000 : null;
-      return {
-        xrp,
-        currency: "XRP",
-        issuer: null,
-        display: Number.isFinite(xrp) ? `${trimFloat(xrp)} XRP` : `${amt} drops`
-      };
+    // Next: requestXrpl wrapper, if present
+    if (typeof window.requestXrpl === "function") {
+      try {
+        const r = await window.requestXrpl(payload, { timeoutMs });
+        setTransportLastSource(computeWsConnected() ? "shared_ws" : "shared_wrapper_http_fallback");
+        state.transport.lastError = null;
+        return r?.result || r;
+      } catch (e) {
+        state.transport.lastError = e?.message ? e.message : String(e);
+      }
     }
 
-    if (amt && typeof amt === "object") {
-      const cur = amt.currency || "???";
-      const iss = amt.issuer || null;
-      const val = amt.value ?? "";
-      const issuerShort = iss ? shortAddr(iss) : "";
-      return {
-        xrp: null,
-        currency: cur,
-        issuer: iss,
-        display: `${val} ${cur}${issuerShort ? " · " + issuerShort : ""}`
-      };
-    }
-
-    return { xrp: null, currency: null, issuer: null, display: "unknown" };
-  }
-
-  function trimFloat(n) {
-    const s = String(n);
-    if (s.includes("e") || s.includes("E")) return n.toFixed(6);
-    const fixed = n.toFixed(6);
-    return fixed.replace(/\.?0+$/, "");
-  }
-
-  // -----------------------------
-  // Results + exports
-  // -----------------------------
-  function renderTraceResults(result) {
-    const r = el("traceResultsInInspector");
-    if (!r) return;
-
-    const summary = summarizeEdges(result.edges, result.victim);
-
-    r.innerHTML = `
-      <div class="about-card">
-        <div class="about-card-top">
-          <div class="about-card-icon">📌</div>
-          <div class="about-card-title">Summary</div>
-          <div></div>
-        </div>
-        <div class="about-card-body">
-          <div style="display:flex; gap:14px; flex-wrap:wrap;">
-            <div><strong>Victim:</strong> ${escapeHtml(result.victim)}</div>
-            <div><strong>Edges:</strong> ${result.edges.length}</div>
-            <div><strong>Accounts:</strong> ${result.nodes.size}</div>
-            <div><strong>Depth reached:</strong> ${result.maxDepthReached}</div>
-          </div>
-
-          <div class="about-divider"></div>
-
-          <div style="font-weight:950; color: var(--text-primary); margin-bottom: 8px;">Top destinations (by outgoing count)</div>
-          <div style="display:grid; gap:8px;">
-            ${summary.topDests.slice(0, 10).map(d => `
-              <div class="whale-item">
-                <span>${escapeHtml(d.to)} <span style="color:var(--text-secondary)">(${escapeHtml(shortAddr(d.to))})</span></span>
-                <span style="color: var(--text-primary); font-weight:900;">${d.count}</span>
-              </div>
-            `).join("")}
-          </div>
-
-          ${summary.totalXrpOut != null ? `
-            <div style="margin-top: 10px; color: var(--text-secondary);">
-              Estimated XRP out (victim payments parsed): <strong style="color: var(--text-primary);">${escapeHtml(trimFloat(summary.totalXrpOut))} XRP</strong>
-            </div>
-          ` : `
-            <div style="margin-top: 10px; color: var(--text-secondary);">
-              Note: XRP totals may be incomplete if payments are issued assets / partials / non-standard.
-            </div>
-          `}
-        </div>
-      </div>
-
-      <div class="about-card" style="margin-top: 14px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">🧾</div>
-          <div class="about-card-title">Extracted payment edges</div>
-          <div style="color: var(--text-secondary); font-weight: 800;">Payments only</div>
-        </div>
-        <div class="about-card-body" style="overflow:auto;">
-          ${renderEdgesTable(result.edges)}
-        </div>
-      </div>
-    `;
-  }
-
-  function summarizeEdges(edges, victim) {
-    const destCount = new Map();
-    let totalXrpOut = 0;
-    let sawXrp = false;
-
-    for (const e of edges) {
-      if (e.from === victim) {
-        destCount.set(e.to, (destCount.get(e.to) || 0) + 1);
-        if (typeof e.amount_xrp === "number") {
-          totalXrpOut += e.amount_xrp;
-          sawXrp = true;
+    // Direct WS client (guarded; fall back on NotConnected)
+    if (window.XRPL?.client?.request) {
+      try {
+        const out = await window.XRPL.client.request(payload);
+        setTransportLastSource("direct_ws_client");
+        state.transport.lastError = null;
+        return out?.result || out;
+      } catch (e) {
+        const msg = e?.message ? e.message : String(e);
+        state.transport.lastError = msg;
+        // Common in xrpl.js when socket dropped
+        if (/NotConnected/i.test(msg) || /closed/i.test(msg)) {
+          requestSharedReconnect("ws NotConnected — falling back");
         }
       }
     }
 
-    const topDests = Array.from(destCount.entries())
-      .map(([to, count]) => ({ to, count }))
-      .sort((a, b) => b.count - a.count);
-
-    return { topDests, totalXrpOut: sawXrp ? totalXrpOut : null };
-  }
-
-  function renderEdgesTable(edges) {
-    const rows = edges.slice(0, 1200).map((e) => `
-      <tr>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(shortAddr(e.from))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(shortAddr(e.to))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(e.amount)}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(String(e.ledger_index ?? ""))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--text-secondary);">${escapeHtml((e.tx_hash || "").slice(0, 10) + (e.tx_hash ? "…" : ""))}</td>
-      </tr>
-    `).join("");
-
-    return `
-      <table style="width:100%; border-collapse: collapse; min-width: 860px;">
-        <thead>
-          <tr>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">From</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">To</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Amount</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Ledger</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Tx</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      ${edges.length > 1200 ? `<div style="margin-top:10px; color:var(--text-secondary);">Showing first 1200 edges. Export for full data.</div>` : ""}
-    `;
-  }
-
-  function wireExportButtons(result) {
-    const ej = el("traceExportJsonInInspector");
-    const ec = el("traceExportCsvInInspector");
-    if (ej) {
-      ej.disabled = false;
-      ej.onclick = () => downloadJSON(serializeResult(result), `nalu_trace_${result.victim}_${Date.now()}.json`);
+    if (allowHttpFallback) {
+      const out = await rpcCall(payload.command, { ...payload }, { timeoutMs, retries: 2 });
+      if (out) return out;
     }
-    if (ec) {
-      ec.disabled = false;
-      ec.onclick = () => downloadCSV(result.edges, `nalu_trace_edges_${result.victim}_${Date.now()}.csv`);
-    }
+
+    throw new Error("No XRPL transport available");
   }
 
-  function serializeResult(result) {
+  // ---------------- TX NORMALIZATION ----------------
+  function normalizeTxEntry(entry) {
+    const t0 = entry?.tx || entry?.transaction || entry?.tx_json || entry;
+    if (!t0) return null;
     return {
-      victim: result.victim,
-      createdAt: result.createdAt,
-      params: {
-        maxHops: result.maxHops,
-        ledgerMin: result.ledgerMin,
-        ledgerMax: result.ledgerMax,
-        perAccountTxLimit: result.perAccountTxLimit,
-        maxEdges: result.maxEdges
-      },
-      nodes: Array.from(result.nodes),
-      edges: result.edges
+      ...t0,
+      _meta: entry?.meta || entry?.metaData || t0?.meta || t0?.metaData || null,
+      hash: t0.hash || entry?.hash || t0?.tx_hash || null,
+      ledger_index: Number(t0.ledger_index ?? t0.LedgerIndex ?? entry?.ledger_index ?? entry?.ledger_index_min ?? 0),
+      _iso: safeToIso(t0.date ?? entry?.date ?? null)
     };
   }
 
-  function downloadJSON(obj, filename) {
-    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
+  function extractCounterparty(tx) {
+    const type = tx.TransactionType || tx.type || "Unknown";
 
-  function downloadCSV(edges, filename) {
-    const headers = ["from", "to", "amount", "amount_xrp", "currency", "issuer", "ledger_index", "tx_hash", "validated"];
-    const lines = [headers.join(",")];
-
-    for (const e of edges) {
-      const row = headers.map((h) => csvCell(e[h]));
-      lines.push(row.join(","));
+    if (type === "Payment") {
+      const to = tx.Destination || tx.destination || null;
+      if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
+      return null;
     }
 
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    if (type === "TrustSet") {
+      const lim = tx.LimitAmount || tx.limit_amount || null;
+      const issuer = lim && typeof lim === "object" ? lim.issuer : null;
+      if (issuer && isValidXrpAddress(issuer)) return { counterparty: issuer, kind: "LimitAmount.issuer" };
+      return null;
+    }
+
+    if (type === "OfferCreate") {
+      const a = tx.TakerGets || tx.taker_gets || null;
+      const b = tx.TakerPays || tx.taker_pays || null;
+      const issuers = [];
+      if (a && typeof a === "object" && a.issuer && isValidXrpAddress(a.issuer)) issuers.push(a.issuer);
+      if (b && typeof b === "object" && b.issuer && isValidXrpAddress(b.issuer)) issuers.push(b.issuer);
+      if (issuers.length) return { counterparty: issuers[0], kind: "OfferCreate.issuer" };
+      return null;
+    }
+
+    return null;
   }
 
-  function csvCell(v) {
-    if (v == null) return "";
-    const s = String(v);
-    if (/[,"\n]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
-    return s;
+  async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
+    const payload = {
+      command: "account_tx",
+      account: address,
+      limit: limit || PAGE_LIMIT,
+      forward: !!forward,
+      ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
+      ledger_index_max: ledgerMax == null ? -1 : ledgerMax
+    };
+    if (marker) payload.marker = marker;
+
+    const out = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
+    const txs = Array.isArray(out?.transactions) ? out.transactions : [];
+    const nextMarker = out?.marker || null;
+    return { txs, marker: nextMarker };
   }
 
-  // -----------------------------
-  // Install: watch inspector section activation
-  // -----------------------------
-  function install() {
-    const root = getInspectorRoot();
-    if (!root) return;
+  // ---------------- UI RENDER ----------------
+  function render(mountId) {
+    state.mountId = mountId || state.mountId;
 
-    // Inject immediately if already active
-    if (isInspectorActive()) injectTraceTab();
+    const host = document.getElementById(state.mountId);
+    if (!host) return;
 
-    // Observe class changes to detect when inspector becomes active
-    if (!root.__naluTraceObserver) {
-      const obs = new MutationObserver(() => {
-        if (isInspectorActive()) injectTraceTab();
+    host.innerHTML = `
+      <div class="chart-section" style="padding:16px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <h2 style="margin:0;">🧭 Trace</h2>
+          <div style="opacity:.75;">hop-by-hop graph</div>
+          <div style="opacity:.55;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
+
+          <div id="traceConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
+            <div id="traceConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
+            <div id="traceConnText" style="font-weight:900;font-size:12px;">—</div>
+            <button id="traceRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+          <input id="traceSeed" placeholder="Seed address (r...)" style="min-width:320px;flex:1;padding:10px;border-radius:12px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85;">
+            hops
+            <input id="traceHops" type="number" min="1" max="8" value="${DEFAULT_HOPS}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85;">
+            per-node
+            <input id="tracePerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85;">
+            max nodes
+            <input id="traceMaxNodes" type="number" min="50" max="4000" value="${DEFAULT_MAX_NODES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85;">
+            max edges
+            <input id="traceMaxEdges" type="number" min="100" max="20000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          </label>
+          <button id="traceRun" class="nav-btn" type="button"
+            style="padding:10px 14px;border-radius:12px;border:none;background:#50fa7b;color:#000;font-weight:900;">
+            Run Trace
+          </button>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+          <label style="font-size:12px;opacity:.85;">Min XRP</label>
+          <input id="traceMinXrp" type="number" placeholder="0" style="width:120px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          <label style="font-size:12px;opacity:.85;">Ledger min/max</label>
+          <input id="traceLedgerMin" type="number" placeholder="min" style="width:130px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          <input id="traceLedgerMax" type="number" placeholder="max" style="width:130px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          <label style="font-size:12px;opacity:.85;">Date</label>
+          <input id="traceStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+          <input id="traceEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+
+          <button id="traceExport" type="button" class="nav-btn"
+            style="margin-left:auto;padding:10px 12px;border-radius:12px;border:none;background:#50a8ff;color:#000;font-weight:900;">
+            Export JSON
+          </button>
+        </div>
+
+        <div id="traceProgressWrap" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
+          <div id="traceProgress" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
+        </div>
+
+        <div id="traceStatus" style="margin-top:10px;color:var(--text-secondary)">Ready</div>
+
+        <div style="display:grid;grid-template-columns:1fr 420px;gap:12px;margin-top:12px;align-items:start;">
+          <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);">
+            <div style="font-weight:900;">Edges</div>
+            <div id="traceEdges" style="margin-top:10px;max-height:560px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);"></div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+              <div style="font-weight:900;">Summary</div>
+              <div id="traceSummary" style="margin-top:10px;opacity:.9;">—</div>
+            </div>
+
+            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+              <div style="font-weight:900;">Top recipients (by edge count)</div>
+              <div id="traceTop" style="margin-top:10px;max-height:240px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Bind events (IMPORTANT: runTrace is a function declaration; no TDZ issues)
+    const runBtn = $("traceRun");
+    if (runBtn) runBtn.addEventListener("click", runTrace);
+
+    const retryBtn = $("traceRetryWs");
+    if (retryBtn) {
+      retryBtn.addEventListener("click", function () {
+        requestSharedReconnect("manual retry");
+        setStatus("Retry requested.");
       });
-      obs.observe(root, { attributes: true, attributeFilter: ["class"] });
-      root.__naluTraceObserver = obs;
+    }
+
+    const exportBtn = $("traceExport");
+    if (exportBtn) exportBtn.addEventListener("click", exportGraphJson);
+
+    // Restore seed from state
+    const seedEl = $("traceSeed");
+    if (seedEl && state.seedAddress) seedEl.value = state.seedAddress;
+
+    state.mounted = true;
+    updateTransportBadge();
+  }
+
+  function setStatus(msg) {
+    const el = $("traceStatus");
+    if (el) el.textContent = msg || "";
+  }
+
+  function setProgress(p) {
+    const wrap = $("traceProgressWrap");
+    const bar = $("traceProgress");
+    if (!wrap || !bar) return;
+    if (p == null || p < 0) {
+      wrap.style.display = "none";
+      bar.style.width = "0%";
+      return;
+    }
+    wrap.style.display = "block";
+    const clamped = Math.max(0, Math.min(1, Number(p) || 0));
+    bar.style.width = `${Math.round(clamped * 100)}%`;
+  }
+
+  function updateTransportBadge() {
+    const badge = $("traceConnBadge");
+    const text = $("traceConnText");
+    const dot = $("traceConnDot");
+    if (!badge || !text || !dot) return;
+
+    state.transport.wsConnected = computeWsConnected();
+
+    if (state.transport.wsConnected) {
+      badge.style.background = "linear-gradient(135deg,#50fa7b,#2ecc71)";
+      badge.style.color = "#000";
+      dot.style.background = "rgba(0,0,0,0.35)";
+      text.textContent = `WS live • last: ${state.transport.lastSource || "—"}`;
+    } else {
+      badge.style.background = "rgba(255,255,255,0.10)";
+      badge.style.color = "var(--text-primary)";
+      dot.style.background = "rgba(255,255,255,0.25)";
+      const err = state.transport.lastError ? ` • ${state.transport.lastError}` : "";
+      text.textContent = `WS offline • last: ${state.transport.lastSource || "—"}${err}`;
     }
   }
 
-  // ---------------------------------------------------------------------------
-// Unified Inspector integration
-//  - account-inspector.js calls window.initInspectorTraceTab({ mountId })
-//  - other modules can call window.InspectorTraceTab.setSeedAddress(address)
-// ---------------------------------------------------------------------------
-function setSeedAddressForTrace(addr) {
-  const v = String(addr || "").trim();
-  if (v) pendingSeedAddress = v;
-  const inp = document.getElementById("traceVictimInInspector");
-  if (inp && v) inp.value = v;
-}
+  // ---------------- CONSTRAINTS ----------------
+  function parseNullableInt(v) {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.floor(n) : null;
+  }
 
-window.initInspectorTraceTab = function initInspectorTraceTab(opts) {
-  try {
-    const mountId = (opts && opts.mountId) ? String(opts.mountId) : "inspectorTraceMount";
-    const mount = document.getElementById(mountId);
-    if (!mount) return false;
+  function getConstraintsFromUI() {
+    const startDate = $("traceStart")?.value ? new Date($("traceStart").value).toISOString() : null;
+    const endDate = $("traceEnd")?.value ? new Date($("traceEnd").value).toISOString() : null;
+    const ledgerMin = parseNullableInt($("traceLedgerMin")?.value);
+    const ledgerMax = parseNullableInt($("traceLedgerMax")?.value);
+    const minXrp = Number($("traceMinXrp")?.value || 0);
+    return { startDate, endDate, ledgerMin, ledgerMax, minXrp };
+  }
 
-    let panel = mount.querySelector("#inspectorTracePanel");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "inspectorTracePanel";
-      mount.innerHTML = "";
-      mount.appendChild(panel);
-    }
+  function withinConstraints(tx, constraints) {
+    const l = Number(tx.ledger_index || 0);
 
-    if (!panel.querySelector(".trace-controls")) {
-      panel.innerHTML = renderTracePanelHTML();
-    }
+    if (constraints.ledgerMin != null && l < constraints.ledgerMin) return false;
+    if (constraints.ledgerMax != null && l > constraints.ledgerMax) return false;
 
-    ensureTracePanelReady();
+    if (constraints.startDate && tx._iso && tx._iso < constraints.startDate) return false;
+    if (constraints.endDate && tx._iso && tx._iso > constraints.endDate) return false;
 
-    if (pendingSeedAddress) {
-      const inp = document.getElementById("traceVictimInInspector");
-      if (inp) inp.value = pendingSeedAddress;
+    if (constraints.minXrp) {
+      const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
+      if (amt.currency === "XRP" && amt.value < constraints.minXrp) return false;
     }
 
     return true;
-  } catch (e) {
-    console.warn("initInspectorTraceTab failed:", e && e.message ? e.message : e);
-    return false;
   }
-};
 
-window.InspectorTraceTab = window.InspectorTraceTab || {};
-window.InspectorTraceTab.version = VERSION;
-window.InspectorTraceTab.setSeedAddress = setSeedAddressForTrace;
-window.InspectorTraceTab.runTrace = function () {
-  return typeof runTrace === "function" ? runTrace() : null;
-};
+  // ---------------- TRACE ENGINE ----------------
+  function ensureNode(levels, addr, level) {
+    if (!state.graph.nodes.has(addr)) {
+      state.graph.nodes.set(addr, { address: addr, level, outCount: 0, inCount: 0 });
+    } else {
+      const n = state.graph.nodes.get(addr);
+      n.level = Math.min(n.level, level);
+    }
+    if (!levels.has(addr)) levels.set(addr, level);
+  }
 
+  function addEdge(e) {
+    state.graph.edges.push(e);
+    const a = state.graph.nodes.get(e.from);
+    const b = state.graph.nodes.get(e.to);
+    if (a) a.outCount += 1;
+    if (b) b.inCount += 1;
+  }
 
-document.addEventListener("DOMContentLoaded", () => {
-    install();
-    console.log(`✅ ${VERSION} loaded`);
-  });
+  async function collectOutgoingMostRecent(address, needCount, constraints) {
+    const collected = [];
+    let marker = null;
+    let pages = 0;
+
+    const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
+    const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
+
+    while (pages < MAX_PAGES_PER_ACCOUNT) {
+      pages += 1;
+      const resp = await fetchAccountTxPaged(address, {
+        marker,
+        limit: PAGE_LIMIT,
+        forward: false,
+        ledgerMin,
+        ledgerMax
+      });
+
+      const txs = Array.isArray(resp.txs) ? resp.txs : [];
+      if (!txs.length) break;
+
+      for (const entry of txs) {
+        const tx = normalizeTxEntry(entry);
+        if (!tx) continue;
+        if (!withinConstraints(tx, constraints)) continue;
+
+        const from = tx.Account || tx.account;
+        if (from !== address) continue;
+
+        collected.push(tx);
+        if (collected.length >= needCount) break;
+      }
+
+      if (collected.length >= needCount) break;
+      marker = resp.marker;
+      if (!marker) break;
+    }
+
+    // Sort ASC for readability (older->newer)
+    collected.sort((a, b) => {
+      const la = Number(a.ledger_index || 0);
+      const lb = Number(b.ledger_index || 0);
+      if (la !== lb) return la - lb;
+      const da = a._iso ? new Date(a._iso).getTime() : 0;
+      const db = b._iso ? new Date(b._iso).getTime() : 0;
+      return da - db;
+    });
+
+    return { txs: collected.slice(0, needCount), pages };
+  }
+
+  async function runTrace() {
+    if (state.busy) return;
+
+    const seed = String($("traceSeed")?.value || "").trim();
+    if (!isValidXrpAddress(seed)) {
+      setStatus("Enter a valid XRPL address (r...).");
+      return;
+    }
+
+    // Save seed for external callers
+    state.seedAddress = seed;
+
+    const hops = Math.max(1, Math.min(8, Number($("traceHops")?.value || DEFAULT_HOPS)));
+    const perNode = Math.max(10, Math.min(300, Number($("tracePerNode")?.value || DEFAULT_PER_NODE)));
+    const maxNodes = Math.max(50, Math.min(4000, Number($("traceMaxNodes")?.value || DEFAULT_MAX_NODES)));
+    const maxEdges = Math.max(100, Math.min(20000, Number($("traceMaxEdges")?.value || DEFAULT_MAX_EDGES)));
+
+    const constraints = getConstraintsFromUI();
+
+    state.busy = true;
+    state.lastError = null;
+    setProgress(0);
+    setStatus(`Tracing from ${seed.slice(0, 6)}…`);
+
+    // ensure WS tries to come back if available
+    if (!computeWsConnected()) requestSharedReconnect("trace started");
+
+    // Reset graph
+    state.graph = {
+      builtAt: null,
+      seed,
+      params: { hops, perNode, maxNodes, maxEdges, constraints },
+      nodes: new Map(),
+      edges: []
+    };
+
+    const levels = new Map();
+    ensureNode(levels, seed, 0);
+
+    const queue = [{ addr: seed, level: 0 }];
+    const seen = new Set([seed]);
+    let processed = 0;
+
+    const denom = () => Math.max(1, Math.min(maxNodes, processed + queue.length));
+
+    try {
+      while (queue.length) {
+        const { addr, level } = queue.shift();
+        processed += 1;
+
+        setStatus(
+          `Tracing… nodes:${processed}/${Math.min(maxNodes, processed + queue.length)} • edges:${state.graph.edges.length} • ${addr.slice(0, 6)}… lvl ${level}/${hops}`
+        );
+        setProgress(processed / denom());
+
+        if (level >= hops) continue;
+        if (state.graph.nodes.size >= maxNodes) break;
+        if (state.graph.edges.length >= maxEdges) break;
+
+        const res = await collectOutgoingMostRecent(addr, perNode, constraints);
+
+        for (const tx of res.txs) {
+          if (state.graph.edges.length >= maxEdges) break;
+
+          const from = tx.Account || tx.account;
+          if (!from || from !== addr) continue;
+
+          const cp = extractCounterparty(tx);
+          if (!cp?.counterparty) continue;
+
+          const to = cp.counterparty;
+          const kind = cp.kind;
+
+          const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
+
+          ensureNode(levels, to, level + 1);
+          ensureNode(levels, from, level);
+
+          addEdge({
+            from,
+            to,
+            ledger_index: Number(tx.ledger_index || 0),
+            date: tx._iso || null,
+            amount: amt.value,
+            currency: amt.currency,
+            issuer: amt.issuer || null,
+            tx_hash: String(tx.hash || ""),
+            type: tx.TransactionType || tx.type || "Unknown",
+            kind
+          });
+
+          if (!seen.has(to) && state.graph.nodes.size < maxNodes) {
+            seen.add(to);
+            queue.push({ addr: to, level: level + 1 });
+          }
+        }
+      }
+
+      state.graph.builtAt = new Date().toISOString();
+      setProgress(-1);
+      setStatus(`Trace complete: ${state.graph.nodes.size} nodes • ${state.graph.edges.length} edges`);
+
+      renderSummaryAndEdges();
+    } catch (e) {
+      state.lastError = e?.message ? e.message : String(e);
+      setProgress(-1);
+      setStatus(`Trace failed: ${state.lastError}`);
+      console.error(e);
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  function renderSummaryAndEdges() {
+    const g = state.graph;
+
+    const summaryEl = $("traceSummary");
+    const edgesEl = $("traceEdges");
+    const topEl = $("traceTop");
+
+    const nodes = g.nodes.size;
+    const edges = g.edges.length;
+
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div>Seed: <code>${escapeHtml(g.seed || "—")}</code></div>
+        <div style="margin-top:6px;">Nodes: <strong>${escapeHtml(nodes)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
+        <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
+      `;
+    }
+
+    // Top recipients
+    const recipCounts = new Map();
+    for (const e of g.edges) recipCounts.set(e.to, (recipCounts.get(e.to) || 0) + 1);
+    const top = Array.from(recipCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 40);
+
+    if (topEl) {
+      topEl.innerHTML =
+        top
+          .map(([addr, c]) => {
+            return `
+              <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+                <div><code>${escapeHtml(addr)}</code></div>
+                <div style="opacity:.85;margin-top:4px;">edges in: <strong>${escapeHtml(c)}</strong></div>
+                <div style="margin-top:6px;">
+                  <button class="traceSetSeed" data-addr="${escapeHtml(addr)}"
+                    style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.14);background:transparent;color:var(--text-primary);cursor:pointer;">
+                    Set as seed
+                  </button>
+                </div>
+              </div>
+            `;
+          })
+          .join("") || `<div style="padding:10px;opacity:.75;font-size:12px;">No edges.</div>`;
+
+      Array.from(document.querySelectorAll(".traceSetSeed")).forEach((btn) =>
+        btn.addEventListener("click", function () {
+          const addr = btn.getAttribute("data-addr");
+          setSeedAddress(addr);
+        })
+      );
+    }
+
+    // Edges list
+    if (edgesEl) {
+      const slice = g.edges.slice(-600); // show last 600 (most recent discovered)
+      edgesEl.innerHTML =
+        slice
+          .map((e) => {
+            const shortHash = e.tx_hash ? String(e.tx_hash).slice(0, 10) + "…" : "";
+            const amt = formatAmountPretty(e.currency, e.amount, e.issuer);
+            const links = e.tx_hash ? explorerLinks(e.tx_hash) : null;
+            const txLink = links?.xrpscan
+              ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>`
+              : "";
+            return `
+              <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+                <div><code>${escapeHtml(String(e.from).slice(0, 10))}…</code> → <code>${escapeHtml(String(e.to).slice(0, 10))}…</code>
+                  • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind || "—")})</span>
+                  • ledger ${escapeHtml(e.ledger_index)}
+                </div>
+                <div style="margin-top:4px;opacity:.85;">${escapeHtml(amt)} • ${escapeHtml(e.date || "—")} • ${txLink} <span style="opacity:.6;">${escapeHtml(shortHash)}</span></div>
+              </div>
+            `;
+          })
+          .join("") || `<div style="padding:10px;opacity:.75;font-size:12px;">No edges collected. Try increasing per-node or relaxing filters.</div>`;
+    }
+  }
+
+  function exportGraphJson() {
+    try {
+      const g = state.graph;
+      if (!g || !g.seed) {
+        setStatus("Nothing to export yet. Run a trace first.");
+        return;
+      }
+
+      const obj = {
+        version: MODULE_VERSION,
+        exported_at: new Date().toISOString(),
+        transport: { ...state.transport },
+        graph: {
+          seed: g.seed,
+          builtAt: g.builtAt,
+          params: g.params,
+          nodes: Array.from(g.nodes.values()),
+          edges: g.edges
+        }
+      };
+
+      const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `naluxrp-trace-${g.seed}-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setStatus("Exported JSON.");
+    } catch (e) {
+      setStatus(`Export failed: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
+  // ---------------- PUBLIC API ----------------
+  function initInspectorTraceTab(opts) {
+    const mountId = (opts && opts.mountId) ? String(opts.mountId) : "inspectorTraceMount";
+    render(mountId);
+  }
+
+  function setSeedAddress(addr) {
+    const a = String(addr || "").trim();
+    state.seedAddress = a;
+    const input = $("traceSeed");
+    if (input) input.value = a;
+    setStatus(a ? `Seed set: ${a.slice(0, 6)}…` : "Seed cleared.");
+  }
+
+  window.InspectorTraceTab = {
+    version: MODULE_VERSION,
+    init: initInspectorTraceTab,
+    setSeedAddress,
+    run: runTrace,
+    getState: () => ({
+      ...state,
+      graph: {
+        builtAt: state.graph.builtAt,
+        seed: state.graph.seed,
+        params: state.graph.params,
+        nodes: state.graph.nodes ? Array.from(state.graph.nodes.values()) : [],
+        edges: state.graph.edges || []
+      }
+    })
+  };
+
+  window.initInspectorTraceTab = initInspectorTraceTab;
+
+  // Keep badge updated if connection events exist
+  if (typeof window !== "undefined") {
+    window.addEventListener("xrpl-connection", function () {
+      state.transport.wsConnected = computeWsConnected();
+      updateTransportBadge();
+    });
+  }
+
+  console.log(`✅ Trace tab loaded (${MODULE_VERSION})`);
 })();
