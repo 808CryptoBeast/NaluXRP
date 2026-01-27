@@ -1,13 +1,26 @@
 /* =========================================================
    FILE: js/account-inspector.js
-   NaluXrp — Unified Inspector (One Page, Data-First, Ledger-First)
-   v2.3.0 (Cytoscape interactive graphs + configurable explorer)
-   - Replaced lightweight SVG flows with Cytoscape interactive graphs
-   - Explorer host configurable in UI (preset + custom)
-   - Cytoscape loaded on-demand from CDN
-   - Added XRPL consumer registration + listeners so Inspector
-     receives full ledger processing while visible. Handles
-     lightweight ledgerClosed events and triggers targeted refreshes.
+   NaluXrp — Unified Inspector (Tabs + Tree + Quick Inspect + Token/IOU Support)
+
+   WHAT'S NEW (v3):
+   ✅ Tabs added: "Issuer Tree" + "Trace"
+   ✅ Trace mount point added (inspector-trace-tab.js renders inside it)
+   ✅ Quick Inspect modal (works for ANY address, no tree needed)
+   ✅ Issued Tokens / Trustlines support:
+      - account_lines aggregation
+      - issuer-side "outstanding issued" estimation (negative balances)
+      - optional gateway_balances attempt (best effort)
+   ✅ Public API expanded:
+      window.UnifiedInspector.quickInspect(address)
+      window.UnifiedInspector.request(payload, opts)
+      window.UnifiedInspector.getTokenSummary(address)
+      window.UnifiedInspector.getTransportState()
+      window.UnifiedInspector.switchToTrace(address)
+
+   NOTES:
+   - No secrets are stored here.
+   - All analysis is client-side, using public XRPL RPC/WS via your connection module.
+
    ========================================================= */
 
 (function () {
@@ -26,7 +39,7 @@
   // paging / caps
   const PAGE_LIMIT = 200;
 
-  // Tree scan caps (keep sane; tree scan uses RECENT pages so should finish quickly)
+  // Tree scan caps (keep sane)
   const MAX_PAGES_TREE_SCAN = 200;
   const MAX_TX_SCAN_PER_NODE = 50_000;
 
@@ -35,20 +48,23 @@
   const DEFAULT_MAX_ACCTS = 250;
   const DEFAULT_MAX_EDGES = 1600;
 
-  // activation lookup caps (needs earliest-forward, so can be bigger)
+  // activation lookup caps (earliest-forward scan)
   const ACTIVATION_PAGE_LIMIT = 200;
   const ACTIVATION_MAX_PAGES = 2000;
   const ACTIVATION_MAX_TX_SCAN = 350_000;
 
+  // account_lines caps
+  const LINES_PAGE_LIMIT = 400;
+  const LINES_MAX_PAGES = 50;
+
   // localStorage keys
   const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
   const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
-  const LOCAL_KEY_EXPLORER = "naluxrp_explorer";
 
   // auto-retry
   const SHARED_RETRY_COOLDOWN_MS = 10_000;
 
-  const MODULE_VERSION = "unified-inspector@2.3.0-cyto";
+  const MODULE_VERSION = "unified-inspector@3.0.0-tabs-trace-quickinspect-tokens";
 
   // ---------------- STATE ----------------
   let buildingTree = false;
@@ -57,7 +73,7 @@
   const issuerRegistry = new Map(); // issuer -> graph
   const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
   const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
-  const sessionCache = { account_tx: new Map() }; // simple session-only cache
+  const tokenSummaryCache = new Map(); // addr -> token summary
 
   const transportState = {
     wsConnected: false,
@@ -65,9 +81,6 @@
     lastError: null,
     lastSharedReconnectAttemptAt: 0
   };
-
-  // Cytoscape instances store
-  window._naluCyInstances = window._naluCyInstances || {};
 
   // ---------------- DOM ----------------
   const $ = (id) => document.getElementById(id);
@@ -97,7 +110,7 @@
 
   function setStatus(s) {
     const el = $("uiStatus");
-    if (el) el.innerHTML = s;
+    if (el) el.textContent = s;
   }
 
   function setProgress(p) {
@@ -126,20 +139,13 @@
   }
 
   function openModal(title, html) {
-    const overlay = $("uiModalOverlay");
-    const titleEl = $("uiModalTitle");
-    const body = $("uiModalBody");
-    if (!overlay || !titleEl || !body) return;
-    titleEl.textContent = title || "Details";
-    body.innerHTML = html || "";
-    overlay.style.display = "flex";
-    // allow scrolling to top
-    body.scrollTop = 0;
+    $("uiModalTitle").textContent = title || "Details";
+    $("uiModalBody").innerHTML = html || "";
+    $("uiModalOverlay").style.display = "flex";
   }
 
   function closeModal() {
-    const overlay = $("uiModalOverlay");
-    if (overlay) overlay.style.display = "none";
+    $("uiModalOverlay").style.display = "none";
   }
 
   async function copyToClipboard(text) {
@@ -176,63 +182,12 @@
     URL.revokeObjectURL(url);
   }
 
-  // ---------------- EXPLORER CONFIG ----------------
-  const EXPLORER_PRESETS = {
-    xrpscan: {
-      id: "xrpscan",
-      label: "XRPScan",
-      acct: "https://xrpscan.com/account/{acct}",
-      tx: "https://xrpscan.com/tx/{tx}"
-    },
-    bithomp: {
-      id: "bithomp",
-      label: "Bithomp",
-      acct: "https://bithomp.com/explorer/{acct}",
-      tx: "https://bithomp.com/explorer/{tx}"
-    },
-    custom: {
-      id: "custom",
-      label: "Custom"
-    }
-  };
-
-  function loadExplorerSettings() {
-    try {
-      const raw = safeGetStorage(LOCAL_KEY_EXPLORER);
-      if (!raw) return { selected: "xrpscan", customAcct: "", customTx: "" };
-      const p = JSON.parse(raw);
-      return { selected: p.selected || "xrpscan", customAcct: p.customAcct || "", customTx: p.customTx || "" };
-    } catch (_) {
-      return { selected: "xrpscan", customAcct: "", customTx: "" };
-    }
-  }
-
-  function saveExplorerSettings(settings) {
-    try {
-      safeSetStorage(LOCAL_KEY_EXPLORER, JSON.stringify(settings || {}));
-    } catch (_) {}
-  }
-
-  function getExplorerUrlForAccount(acct) {
-    const s = loadExplorerSettings();
-    if (s.selected && s.selected !== "custom") {
-      const preset = EXPLORER_PRESETS[s.selected];
-      if (preset && preset.acct) return preset.acct.replace("{acct}", encodeURIComponent(acct));
-    }
-    if (s.customAcct) return s.customAcct.replace("{acct}", encodeURIComponent(acct));
-    // fallback
-    return `https://xrpscan.com/account/${encodeURIComponent(acct)}`;
-  }
-
-  function getExplorerUrlForTx(tx) {
-    const s = loadExplorerSettings();
-    if (s.selected && s.selected !== "custom") {
-      const preset = EXPLORER_PRESETS[s.selected];
-      if (preset && preset.tx) return preset.tx.replace("{tx}", encodeURIComponent(tx));
-    }
-    if (s.customTx) return s.customTx.replace("{tx}", encodeURIComponent(tx));
-    // fallback
-    return `https://xrpscan.com/tx/${encodeURIComponent(tx)}`;
+  function explorerLinks(txHash) {
+    if (!txHash) return { xrpscan: null, bithomp: null };
+    return {
+      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
+      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
+    };
   }
 
   // ---------------- TIME / INPUT HELPERS ----------------
@@ -279,7 +234,7 @@
       const v = Number(amount.value);
       return {
         value: Number.isFinite(v) ? v : 0,
-        currency: amount.currency || "XRP",
+        currency: amount.currency || "???",
         issuer: amount.issuer || null,
         raw: amount
       };
@@ -288,11 +243,16 @@
     return { value: 0, currency: "XRP", issuer: null, raw: amount };
   }
 
+  function formatAmountPretty(cur, val, issuer) {
+    const n = Number(val);
+    const vv = Number.isFinite(n) ? n : 0;
+    if (cur === "XRP") return `${vv.toFixed(6)} XRP`;
+    return `${vv} ${cur}${issuer ? ` • ${String(issuer).slice(0, 6)}…` : ""}`;
+  }
+
   // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
   function computeWsConnected() {
-    // Prefer your connection module's health check (best)
     if (typeof window.isXRPLConnected === "function") return !!window.isXRPLConnected();
-    // Fallbacks
     if (window.XRPL?.connected) return true;
     if (window.XRPL?.client && typeof window.XRPL.client.isConnected === "function") return !!window.XRPL.client.isConnected();
     return false;
@@ -356,18 +316,12 @@
     transportState.lastSharedReconnectAttemptAt = now;
 
     try {
-      // Your connection module exports these:
-      if (typeof window.reconnectXRPL === "function") {
-        window.reconnectXRPL();
-      } else if (typeof window.connectXRPL === "function") {
-        window.connectXRPL();
-      }
-
+      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
+      else if (typeof window.connectXRPL === "function") window.connectXRPL();
       transportState.lastError = reason || "reconnect requested";
     } catch (e) {
       transportState.lastError = e?.message ? e.message : String(e);
     }
-
     updateConnBadge();
   }
 
@@ -400,10 +354,6 @@
   }
 
   function unwrapRpcResult(json) {
-    // Handles shapes:
-    // 1) { result: { ... } }
-    // 2) { result: { result: { ... }, status:"success" } }
-    // 3) { status:"success", result:{...} }
     const r = json?.result;
     if (!r) return null;
     if (r.error) return null;
@@ -440,9 +390,9 @@
     return null;
   }
 
-  // Prefer shared WS request wrapper (it already has HTTP fallback in your hardened xrpl-connection.js)
+  // Prefer shared WS request wrapper
   async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
-    // 1) shared WS wrapper (best)
+    // 1) shared wrapper (preferred)
     if (typeof window.requestXrpl === "function") {
       try {
         const r = await window.requestXrpl(payload, { timeoutMs });
@@ -455,19 +405,30 @@
         transportState.lastError = e?.message ? e.message : String(e);
         updateConnBadge();
         if (!allowHttpFallback) throw e;
+        // fall through to HTTP fallback (do NOT hard-fail build)
       }
     }
 
-    // 2) raw ws client (if present)
-    if (window.XRPL?.client?.request) {
-      const out = await window.XRPL.client.request(payload);
-      setTransportLastSource("direct_ws_client");
-      transportState.lastError = null;
-      updateConnBadge();
-      return out?.result || out;
+    // 2) direct WS client (only if wrapper not present)
+    if (!window.requestXrpl && window.XRPL?.client?.request) {
+      try {
+        // If it's not actually connected, skip straight to HTTP fallback.
+        if (computeWsConnected()) {
+          const out = await window.XRPL.client.request(payload);
+          setTransportLastSource("direct_ws_client");
+          transportState.lastError = null;
+          updateConnBadge();
+          return out?.result || out;
+        }
+      } catch (e) {
+        transportState.lastError = e?.message ? e.message : String(e);
+        updateConnBadge();
+        if (!allowHttpFallback) throw e;
+        // fall through
+      }
     }
 
-    // 3) http json-rpc fallback (proxy/public)
+    // 3) HTTP fallback
     if (allowHttpFallback) {
       const out = await rpcCall(payload.command, { ...payload }, { timeoutMs, retries: 2 });
       if (out) return out;
@@ -530,7 +491,6 @@
     };
     if (marker) payload.marker = marker;
 
-    // Try shared wrapper first (ledger data directly)
     const rr = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
 
     const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
@@ -576,21 +536,128 @@
     };
   }
 
-  async function fetchAccountInfo(address, { force = false } = {}) {
+  async function fetchAccountInfo(address) {
     if (!isValidXrpAddress(address)) return null;
-    if (!force && accountInfoCache.has(address)) return accountInfoCache.get(address);
+    if (accountInfoCache.has(address)) return accountInfoCache.get(address);
 
+    const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
+    const data = out?.account_data || out?.result?.account_data || null;
+    const normalized = normalizeAccountInfo(data);
+    accountInfoCache.set(address, normalized);
+    return normalized;
+  }
+
+  // ---------------- ACCOUNT LINES + ISSUED TOKENS ----------------
+  async function fetchAccountLinesAll(address) {
+    if (!isValidXrpAddress(address)) return { lines: [], pages: 0, complete: true, source: "invalid" };
+
+    let marker = null;
+    let pages = 0;
+    const lines = [];
+
+    while (pages < LINES_MAX_PAGES) {
+      pages += 1;
+
+      const payload = {
+        command: "account_lines",
+        account: address,
+        ledger_index: "validated",
+        limit: LINES_PAGE_LIMIT
+      };
+      if (marker) payload.marker = marker;
+
+      const out = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
+      const got = Array.isArray(out?.lines) ? out.lines : [];
+      got.forEach((x) => lines.push(x));
+
+      marker = out?.marker || null;
+      if (!marker) break;
+    }
+
+    return {
+      lines,
+      pages,
+      complete: !marker,
+      source: transportState.lastSource || "unknown"
+    };
+  }
+
+  async function fetchGatewayBalances(address) {
     try {
-      const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
-      const data = out?.account_data || out?.result?.account_data || null;
-      const normalized = normalizeAccountInfo(data);
-      accountInfoCache.set(address, normalized);
-      return normalized;
+      const out = await xrplRequest(
+        {
+          command: "gateway_balances",
+          account: address,
+          ledger_index: "validated"
+        },
+        { timeoutMs: 20000, allowHttpFallback: true }
+      );
+      return out || null;
     } catch (e) {
-      // leave null but cache negative result to avoid repeated failures
-      accountInfoCache.set(address, null);
       return null;
     }
+  }
+
+  function buildTokenSummaryFromLines(address, linesResp, gatewayResp) {
+    const lines = linesResp?.lines || [];
+    const trustlines = lines.map((l) => {
+      const bal = Number(l.balance);
+      return {
+        peer: l.account || null,
+        currency: l.currency || "???",
+        balance: Number.isFinite(bal) ? bal : 0,
+        limit: l.limit != null ? Number(l.limit) : null,
+        limit_peer: l.limit_peer != null ? Number(l.limit_peer) : null,
+        quality_in: l.quality_in ?? null,
+        quality_out: l.quality_out ?? null
+      };
+    });
+
+    // issuer-side estimate (negative balances on issuer line = others holding positive)
+    const issuedMap = new Map(); // currency -> { holders, outstanding }
+    for (const t of trustlines) {
+      if (!t.currency) continue;
+      if (t.balance < 0) {
+        const cur = t.currency;
+        if (!issuedMap.has(cur)) issuedMap.set(cur, { currency: cur, holders: 0, outstanding: 0 });
+        const row = issuedMap.get(cur);
+        row.holders += 1;
+        row.outstanding += Math.abs(t.balance);
+      }
+    }
+
+    const issuedEstimated = Array.from(issuedMap.values()).sort((a, b) => b.outstanding - a.outstanding);
+
+    const obligations = gatewayResp?.obligations ? gatewayResp.obligations : null;
+
+    const topTrust = trustlines
+      .slice()
+      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
+      .slice(0, 18);
+
+    return {
+      address,
+      source: linesResp?.source || "unknown",
+      linesPages: linesResp?.pages ?? 0,
+      linesComplete: linesResp?.complete ?? true,
+      trustlineCount: trustlines.length,
+      topTrustlines: topTrust,
+      issuedEstimated,
+      gatewayObligations: obligations
+    };
+  }
+
+  async function getTokenSummary(address) {
+    const addr = String(address || "").trim();
+    if (!isValidXrpAddress(addr)) return null;
+    if (tokenSummaryCache.has(addr)) return tokenSummaryCache.get(addr);
+
+    const lines = await fetchAccountLinesAll(addr);
+    const gateway = await fetchGatewayBalances(addr);
+
+    const summary = buildTokenSummaryFromLines(addr, lines, gateway);
+    tokenSummaryCache.set(addr, summary);
+    return summary;
   }
 
   // ---------------- ACTIVATION (activated_by) ----------------
@@ -607,7 +674,6 @@
     let source = "unknown";
     let complete = true;
 
-    // Activation must scan earliest->latest (forward:true)
     while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
       pages += 1;
 
@@ -670,14 +736,12 @@
   function extractCounterparty(tx) {
     const type = tx.TransactionType || tx.type || "Unknown";
 
-    // Payment => Destination
     if (type === "Payment") {
       const to = tx.Destination || tx.destination || null;
       if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
       return null;
     }
 
-    // TrustSet => LimitAmount.issuer
     if (type === "TrustSet") {
       const lim = tx.LimitAmount || tx.limit_amount || null;
       const issuer = lim && typeof lim === "object" ? lim.issuer : null;
@@ -685,7 +749,6 @@
       return null;
     }
 
-    // OfferCreate => if either side is issued currency, use issuer (maps issuer relationships)
     if (type === "OfferCreate") {
       const a = tx.TakerGets || tx.taker_gets || null;
       const b = tx.TakerPays || tx.taker_pays || null;
@@ -711,27 +774,8 @@
     const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
     const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
 
-    // forward:false gives newest->older (most recent first)
     while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
       pages += 1;
-
-      const cacheKey = `${address}_${marker || "nomarker"}_${pages}_${ledgerMin}_${ledgerMax}`;
-      // session cache for account_tx pages to avoid repeated fetches inside same run
-      if (sessionCache.account_tx.has(cacheKey)) {
-        const cached = sessionCache.account_tx.get(cacheKey);
-        scanned += cached.length;
-        for (const entry of cached) {
-          const tx = normalizeTxEntry(entry);
-          if (!tx) continue;
-          if (!withinConstraints(tx, constraints)) continue;
-          const from = tx.Account || tx.account;
-          if (from !== address) continue;
-          collected.push(tx);
-          if (collected.length >= needCount) break;
-        }
-        if (collected.length >= needCount) break;
-        // can't get next marker from cached unless we store it; fallthrough to fetch if necessary
-      }
 
       const resp = await fetchAccountTxPaged(address, {
         marker,
@@ -743,9 +787,6 @@
 
       if (!resp.txs.length) break;
       scanned += resp.txs.length;
-
-      // cache raw page for session
-      sessionCache.account_tx.set(cacheKey, resp.txs);
 
       for (const entry of resp.txs) {
         const tx = normalizeTxEntry(entry);
@@ -767,7 +808,6 @@
       if (pages % 10 === 0) setStatus(`Scanning recent outgoing ${address.slice(0, 6)}… pages:${pages} found:${collected.length}`);
     }
 
-    // collected is newest->older subset; sort ascending for display
     const picked = normalizeAndSortTxsAsc(collected.slice(0, needCount));
 
     return {
@@ -776,16 +816,16 @@
     };
   }
 
-  // ---------------- GRAPH ----------------
+  // ---------------- GRAPH (ISSUER TREE) ----------------
   function makeGraph(issuer, params) {
     return {
       issuer,
       builtAt: null,
       params,
-      nodes: new Map(), // addr -> node
-      edges: [], // { from,to,ledger_index,date,amount,currency,tx_hash,type,kind }
-      adjacency: new Map(), // from -> [edgeIdx]
-      parentChoice: new Map() // child -> parent (tree)
+      nodes: new Map(),
+      edges: [],
+      adjacency: new Map(),
+      parentChoice: new Map()
     };
   }
 
@@ -800,7 +840,7 @@
         inXrp: 0,
         activation: null,
         acctInfo: null,
-        outgoingFirst: [], // last N outgoing (shown chronologically)
+        outgoingFirst: [],
         outgoingMeta: null
       });
     } else {
@@ -835,7 +875,6 @@
 
     ensureNode(g, g.issuer, 0);
 
-    // Seed issuer data
     g.nodes.get(g.issuer).acctInfo = await fetchAccountInfo(g.issuer);
     g.nodes.get(g.issuer).activation = await getActivatedByStrict(g.issuer, constraints);
 
@@ -874,11 +913,11 @@
           ledger_index: Number(tx.ledger_index || 0),
           date: tx._iso || null,
           amount: amt.value,
-          currency: amt.currency
+          currency: amt.currency,
+          issuer: amt.issuer || null
         };
       });
 
-      // add edges only when counterparty exists
       for (const tx of txs) {
         if (g.edges.length >= maxEdges) break;
 
@@ -901,6 +940,7 @@
           date: tx._iso || null,
           amount: amt.value,
           currency: amt.currency,
+          issuer: amt.issuer || null,
           tx_hash: String(tx.hash || ""),
           type,
           kind
@@ -910,7 +950,6 @@
           seen.add(to);
           ensureNode(g, to, level + 1);
 
-          // fetch info/activation (these are the expensive parts; still worth it for data completeness)
           g.nodes.get(to).acctInfo = await fetchAccountInfo(to);
           g.nodes.get(to).activation = await getActivatedByStrict(to, constraints);
 
@@ -954,7 +993,7 @@
     return null;
   }
 
-  // ---------------- PATTERNS (burst + cycles + reconsolidation) ----------------
+  // ---------------- PATTERNS ----------------
   function runPatternScanFull(g) {
     const outBy = new Map();
     const inBy = new Map();
@@ -965,15 +1004,13 @@
       inBy.get(e.to).push(e);
     }
 
-    // ---- issuer first-hop dominance ----
     const issuerOut = outBy.get(g.issuer) || [];
     const firstHopCounts = new Map();
     for (const e of issuerOut) firstHopCounts.set(e.to, (firstHopCounts.get(e.to) || 0) + 1);
     const top = Array.from(firstHopCounts.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
     const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
 
-    // ---- reconsolidation: issuer -> many -> hub (fan-in) ----
-    const hubCounts = new Map(); // hub -> set(of firsthop contributors)
+    const hubCounts = new Map();
     const firstHop = new Set(issuerOut.map((e) => e.to));
 
     for (const leaf of firstHop) {
@@ -991,8 +1028,6 @@
       .sort((a, b) => b.contributors - a.contributors)
       .slice(0, 120);
 
-    // ---- burst detection (based on outgoingFirst txs per node) ----
-    // Burst = many outgoing txs clustered in a small ledger window (approx)
     const bursts = [];
     const BURST_LEDGER_WINDOW = 200;
     const BURST_MIN_TX = 12;
@@ -1004,7 +1039,6 @@
       const ledgers = txs.map((t) => Number(t.ledger_index || 0)).filter((x) => x > 0).sort((a, b) => a - b);
       if (ledgers.length < BURST_MIN_TX) continue;
 
-      // sliding window
       let best = 0;
       let bestSpan = null;
 
@@ -1025,8 +1059,6 @@
 
     bursts.sort((a, b) => b.txs - a.txs);
 
-    // ---- cycle detection (bounded DFS) ----
-    // Find cycles up to length 6, prioritizing those that include issuer.
     const cycles = [];
     const seenCycle = new Set();
 
@@ -1034,8 +1066,7 @@
     const nodeList = Array.from(g.nodes.keys()).slice(0, nodesLimit);
 
     function canonicalizeCycle(path) {
-      // rotate so smallest string is first (simple canonical)
-      const strs = path.slice(0, -1); // last repeats start
+      const strs = path.slice(0, -1);
       if (!strs.length) return "";
       let best = strs;
       for (let i = 1; i < strs.length; i++) {
@@ -1052,7 +1083,6 @@
       for (const ei of idxs) {
         const nxt = g.edges[ei].to;
 
-        // close cycle
         if (nxt === start && stack.length >= 2) {
           const cyc = stack.concat([start]);
           const key = canonicalizeCycle(cyc);
@@ -1074,7 +1104,6 @@
       }
     }
 
-    // Prefer starting at issuer, then a few high-activity nodes
     const startNodes = [g.issuer]
       .concat(
         nodeList
@@ -1092,8 +1121,6 @@
 
     cycles.sort((a, b) => a.length - b.length);
 
-    // ---- reconsolidation hubs (classic) ----
-    // many parents -> hub -> few children
     const classicHubs = [];
     for (const addr of g.nodes.keys()) {
       const ins = inBy.get(addr) || [];
@@ -1160,7 +1187,6 @@
   function hydrateIssuerSelect() {
     const list = getIssuerList();
     const sel = $("uiIssuerSelect");
-    if (!sel) return;
     sel.innerHTML = "";
 
     if (!list.length) {
@@ -1199,111 +1225,55 @@
     clearViews();
     setStatus("Ready");
 
-    if (autoBuildIfMissing) buildTreeClicked().catch(() => {});
-  }
-
-  // ---------------- CYTOSCAPE LOADER + HELPERS ----------------
-  function ensureCytoscapeLoaded() {
-    return new Promise((resolve, reject) => {
-      if (window.cytoscape) return resolve(window.cytoscape);
-      // load script
-      const existing = document.querySelector('script[data-nalu-cyto]');
-      if (existing) {
-        existing.addEventListener("load", () => resolve(window.cytoscape));
-        existing.addEventListener("error", (e) => reject(e));
-        return;
+    // Guard: avoid ReferenceError if this file is ever partially loaded / older cached version
+    if (autoBuildIfMissing) {
+      if (typeof buildTreeClicked === "function") {
+        buildTreeClicked().catch(() => {});
+      } else {
+        setStatus("Inspector loaded (build handler not ready yet). Click Build.");
       }
-      const s = document.createElement("script");
-      s.src = "https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js";
-      s.async = true;
-      s.setAttribute("data-nalu-cyto", "1");
-      s.onload = () => {
-        if (window.cytoscape) resolve(window.cytoscape);
-        else reject(new Error("cytoscape failed to initialize"));
-      };
-      s.onerror = (e) => reject(e);
-      document.head.appendChild(s);
-    });
+    }
   }
 
-  function destroyCyInstance(containerId) {
-    try {
-      const key = `cy__${containerId}`;
-      const prev = window._naluCyInstances[key];
-      if (prev && prev.destroy) {
-        prev.destroy();
-      }
-      delete window._naluCyInstances[key];
-    } catch (_) {}
-  }
+  // ---------------- TABS ----------------
+  function bindInspectorTabs() {
+    const tabs = document.querySelectorAll(".inspector-tab-btn[data-tab]");
+    const panels = document.querySelectorAll(".inspector-tab-panel[data-panel]");
+    if (!tabs.length || !panels.length) return;
 
-  // create or update a cytoscape instance for given container and elements
-  async function renderCytoscape(container, elements, opts = {}) {
-    if (!container) return null;
-    await ensureCytoscapeLoaded();
-    const key = `cy__${container.id || String(Math.random()).slice(2)}`;
-
-    destroyCyInstance(container.id);
-
-    const cy = window.cytoscape({
-      container,
-      elements,
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "text-wrap": "wrap",
-            "text-max-width": 120,
-            "background-color": "data(color)",
-            width: "data(size)",
-            height: "data(size)",
-            "font-size": 11,
-            color: "#fff",
-            "text-valign": "center",
-            "text-halign": "center",
-            "overlay-padding": "6px"
-          }
-        },
-        {
-          selector: "edge",
-          style: {
-            width: "data(width)",
-            "line-color": "data(color)",
-            "curve-style": "bezier",
-            "target-arrow-shape": "triangle",
-            "target-arrow-color": "data(color)",
-            opacity: 0.9
-          }
-        },
-        {
-          selector: ".highlight",
-          style: {
-            "background-color": "#ffd54f",
-            "line-color": "#ffd54f",
-            "target-arrow-color": "#ffd54f"
-          }
-        }
-      ],
-      layout: { name: opts.layout || "cose", animate: true, fit: true }
-    });
-
-    // basic interaction: click node -> callback if provided
-    if (typeof opts.onNodeClick === "function") {
-      cy.on("tap", "node", (evt) => {
-        const node = evt.target;
-        opts.onNodeClick(node.data());
+    function activate(name) {
+      tabs.forEach((t) => {
+        const on = t.getAttribute("data-tab") === name;
+        t.classList.toggle("is-active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
       });
+      panels.forEach((p) => {
+        const on = p.getAttribute("data-panel") === name;
+        p.style.display = on ? "block" : "none";
+      });
+
+      if (name === "trace" && typeof window.initInspectorTraceTab === "function") {
+        window.initInspectorTraceTab({ mountId: "inspectorTraceMount" });
+      }
     }
 
-    // zoom/fit controls if requested
-    if (opts.fitAfter !== false) cy.fit();
-
-    window._naluCyInstances[key] = cy;
-    return cy;
+    tabs.forEach((t) => t.addEventListener("click", () => activate(t.getAttribute("data-tab"))));
+    activate("tree");
   }
 
-  // ---------------- RESULTS / RENDER ----------------
+  function switchToTraceTab() {
+    const btn = document.querySelector('.inspector-tab-btn[data-tab="trace"]');
+    if (btn) btn.click();
+  }
+
+  function switchToTraceAndSetSeed(addr) {
+    switchToTraceTab();
+    if (window.InspectorTraceTab && typeof window.InspectorTraceTab.setSeedAddress === "function") {
+      window.InspectorTraceTab.setSeedAddress(addr);
+    }
+  }
+
+  // ---------------- RENDER ----------------
   function ensurePage() {
     let page = document.getElementById("inspector");
     if (!page) {
@@ -1318,120 +1288,133 @@
 
   function renderPage() {
     const page = ensurePage();
-    const explorerSettings = loadExplorerSettings();
 
     page.innerHTML = `
       <div class="chart-section" style="padding:18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">issuer tree • activated_by • recent outgoing (ledger-first)</div>
+          <div style="opacity:.85">tree • trace • token-aware • investigation-first</div>
           <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
 
-          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,25[...]
+          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
             <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
             <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
             <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;align-items:start;">
-          <div style="display:flex;flex-direction:column;gap:10px;">
-            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                <div style="font-weight:900;">Issuers</div>
-                <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></s[...]
-                <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</butt[...]
-              </div>
+        <!-- Tabs -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+          <button class="nav-btn inspector-tab-btn is-active" data-tab="tree" aria-selected="true" type="button"
+            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
+            🌳 Issuer Tree
+          </button>
+          <button class="nav-btn inspector-tab-btn" data-tab="trace" aria-selected="false" type="button"
+            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
+            🧭 Trace
+          </button>
 
-              <details style="margin-top:10px;">
-                <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
-                <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                  <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--acc[...]
-                  <div style="display:flex;flex-direction:column;gap:8px;">
-                    <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
-                    <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
-                  </div>
-                </div>
-              </details>
-
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                <label style="font-size:13px;">Depth</label>
-                <input id="uiDepth" type="number" min="1" max="6" value="${DEFAULT_DEPTH}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <label style="font-size:13px;">Per-node</label>
-                <input id="uiPerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <label style="font-size:13px;">Max accts</label>
-                <input id="uiMaxA" type="number" min="20" max="2000" value="${DEFAULT_MAX_ACCTS}" style="width:100px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                <label style="font-size:13px;">Max edges</label>
-                <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-              </div>
-
-              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                <label style="font-size:13px;">Date</label>
-                <input id="uiStart" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiEnd" type="date" style="padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
-                <label style="font-size:13px;margin-left:8px;">Ledger</label>
-                <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
-                <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--accent-tertiary);" />
-              </div>
-
-              <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                <label style="font-size:13px;font-weight:700;">Explorer</label>
-                <select id="uiExplorerSelect" style="padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);">
-                  <option value="xrpscan">XRPScan</option>
-                  <option value="bithomp">Bithomp</option>
-                  <option value="custom">Custom...</option>
-                </select>
-                <input id="uiExplorerAcct" placeholder="account template (use {acct})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:tr[...]
-                <input id="uiExplorerTx" placeholder="tx template (use {tx})" style="flex:1;min-width:220px;padding:6px;border-radius:8px;border:1px solid var(--accent-tertiary);background:transparent[...]
-                <button id="uiExplorerSave" class="nav-btn" style="padding:6px 10px;border-radius:8px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
-              </div>
-
-              <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
-                <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
-              </div>
-
-              <div id="uiStatus" style="margin-top:8px;color:var(--text-secondary)">Ready</div>
-            </div>
-
-            <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <div style="font-weight:900;">Issuer Tree</div>
-                <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:tra[...]
-              </div>
-
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:trans[...]
-                <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
-                <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
-              </div>
-
-              <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
-            </div>
+          <div style="margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;">
+            <input id="uiQuickAddr" placeholder="Quick inspect address (paste r...)" style="min-width:280px;padding:10px;border-radius:12px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
+            <button id="uiQuickInspectBtn" class="nav-btn" type="button"
+              style="padding:10px 14px;border-radius:12px;border:none;background:#50fa7b;color:#000;font-weight:900;">
+              Quick Inspect
+            </button>
           </div>
+        </div>
 
-          <div style="display:flex;flex-direction:column;gap:10px;">
-            <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
-              <div style="opacity:.8">Tree summary appears here.</div>
-              <div id="uiFlowMini" style="margin-top:10px;"></div>
-            </div>
+        <!-- Panels -->
+        <div class="inspector-tab-panel" data-panel="tree" style="display:block;margin-top:12px;">
+          <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:start;">
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                  <div style="font-weight:900;">Issuers</div>
+                  <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
+                  <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
+                </div>
 
-            <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
-              <div style="opacity:.8">Path + patterns appear here.</div>
-            </div>
+                <details style="margin-top:10px;">
+                  <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
+                  <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
+                    <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                      <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
+                      <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
+                    </div>
+                  </div>
+                </details>
 
-            <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <strong>Edges (counterparty-derived)</strong>
-                <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export[...]
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                  <label style="font-size:13px;">Depth</label>
+                  <input id="uiDepth" type="number" min="1" max="6" value="${DEFAULT_DEPTH}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <label style="font-size:13px;">Per-node</label>
+                  <input id="uiPerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <label style="font-size:13px;">Max accts</label>
+                  <input id="uiMaxA" type="number" min="20" max="2000" value="${DEFAULT_MAX_ACCTS}" style="width:100px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <label style="font-size:13px;">Max edges</label>
+                  <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                </div>
+
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                  <label style="font-size:13px;">Date</label>
+                  <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <label style="font-size:13px;margin-left:8px;">Ledger</label>
+                  <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                  <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
+                </div>
+
+                <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
+                  <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
+                </div>
+
+                <div id="uiStatus" style="margin-top:8px;color:var(--text-secondary)">Ready</div>
               </div>
-              <div id="uiEdgeItems" style="margin-top:10px;"></div>
+
+              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <div style="font-weight:900;">Issuer Tree</div>
+                  <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                </div>
+
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                  <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
+                  <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
+                  <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
+                </div>
+
+                <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
+                <div style="opacity:.8">Tree summary appears here.</div>
+              </div>
+
+              <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
+                <div style="opacity:.8">Path + patterns appear here.</div>
+              </div>
+
+              <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                  <strong>Edges (counterparty-derived)</strong>
+                  <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
+                </div>
+                <div id="uiEdgeItems" style="margin-top:10px;"></div>
+              </div>
             </div>
           </div>
         </div>
 
+        <div class="inspector-tab-panel" data-panel="trace" style="display:none;margin-top:12px;">
+          <div id="inspectorTraceMount"></div>
+        </div>
+
         <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
-          <div style="width:min(940px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
+          <div style="width:min(980px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
               <strong id="uiModalTitle">Details</strong>
               <button id="uiModalClose">✕</button>
@@ -1442,11 +1425,6 @@
       </div>
     `;
 
-    // hydrate explorer UI defaults
-    $("uiExplorerSelect").value = explorerSettings.selected || "xrpscan";
-    $("uiExplorerAcct").value = explorerSettings.customAcct || "";
-    $("uiExplorerTx").value = explorerSettings.customTx || "";
-
     $("uiModalClose").addEventListener("click", closeModal);
 
     $("uiRetryWs").addEventListener("click", () => {
@@ -1454,12 +1432,9 @@
       setStatus("Retry requested.");
     });
 
-    $("uiExplorerSave").addEventListener("click", () => {
-      const sel = $("uiExplorerSelect").value;
-      const acct = $("uiExplorerAcct").value.trim();
-      const tx = $("uiExplorerTx").value.trim();
-      saveExplorerSettings({ selected: sel, customAcct: acct, customTx: tx });
-      setStatus("Explorer saved.");
+    $("uiQuickInspectBtn").addEventListener("click", () => {
+      const addr = ($("uiQuickAddr")?.value || "").trim();
+      quickInspectAddress(addr, { perNode: 160 });
     });
 
     updateConnBadge();
@@ -1477,24 +1452,13 @@
       hydrateIssuerSelect();
       setStatus(`Saved issuer list (${arr.length})`);
     });
-
-    // Clear cache with undo
     $("uiClearCache").addEventListener("click", () => {
-      const prevIssuerRegistry = new Map(issuerRegistry);
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
+      tokenSummaryCache.clear();
       clearViews();
-      setStatus("Cache cleared. <button id='uiUndoClear' class='nav-btn'>Undo</button>");
-      const undoBtn = $("uiUndoClear");
-      if (undoBtn) {
-        undoBtn.addEventListener("click", () => {
-          // restore previous registry (shallow)
-          for (const [k, v] of prevIssuerRegistry.entries()) issuerRegistry.set(k, v);
-          setStatus("Cache restored (undo).");
-          renderAll(issuerRegistry.get(activeIssuer) || {});
-        });
-      }
+      setStatus("Cache cleared");
     });
 
     $("uiBuild").addEventListener("click", () => buildTreeClicked().catch(() => {}));
@@ -1502,14 +1466,15 @@
     $("uiFindPath").addEventListener("click", findPathClicked);
     $("uiPatterns").addEventListener("click", patternsClicked);
     $("uiExportGraph").addEventListener("click", exportActiveGraph);
+
+    bindInspectorTabs();
   }
 
   function clearViews() {
-    const tree = $("uiTree"); if (tree) tree.innerHTML = "";
-    const summary = $("uiSummary"); if (summary) summary.innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
-    const results = $("uiResults"); if (results) results.innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
-    const edges = $("uiEdgeItems"); if (edges) edges.innerHTML = "";
-    const mini = $("uiFlowMini"); if (mini) mini.innerHTML = "";
+    if ($("uiTree")) $("uiTree").innerHTML = "";
+    if ($("uiSummary")) $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
+    if ($("uiResults")) $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
+    if ($("uiEdgeItems")) $("uiEdgeItems").innerHTML = "";
   }
 
   function renderAll(g) {
@@ -1519,9 +1484,6 @@
   }
 
   function renderSummary(g) {
-    if (!g) {
-      const s = $("uiSummary"); if (s) s.innerHTML = `<div style="opacity:.8">No graph</div>`; return;
-    }
     const issuer = g.issuer;
     const edges = g.edges.length;
     const accounts = g.nodes.size;
@@ -1536,7 +1498,7 @@
 
     const actHtml = act
       ? (() => {
-          const links = act.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
+          const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
           const txLinks = links
             ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
                <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
@@ -1552,28 +1514,17 @@
           actEntry?.source || "unknown"
         )}${actEntry && !actEntry.complete ? ", incomplete" : ""})</span></div>`;
 
-    const summaryEl = $("uiSummary");
-    if (summaryEl) {
-      summaryEl.innerHTML = `
-        <div><strong>Issuer</strong>: <code>${escapeHtml(issuer)}</code></div>
-        <div style="margin-top:8px;"><strong>Domain</strong>: ${domain}</div>
-        <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
-        ${actHtml}
-        <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
-        <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
-      `;
-    }
-
-    // Render mini flow for issuer: top incoming/outgoing using Cytoscape
-    const mini = $("uiFlowMini");
-    if (mini) {
-      mini.innerHTML = `<div id="cyMini" style="width:100%;height:84px;border-radius:8px;background:rgba(0,0,0,0.02);padding:6px;"></div>`;
-      renderMiniFlow(g, g.issuer, "cyMini").catch((e) => {
-        // fallback: simple text
-        mini.innerHTML = `<div style="opacity:.8">Flow preview unavailable</div>`;
-        console.warn("cy mini failed", e);
-      });
-    }
+    $("uiSummary").innerHTML = `
+      <div><strong>Issuer</strong>: <code>${escapeHtml(issuer)}</code></div>
+      <div style="margin-top:8px;"><strong>Domain</strong>: ${domain}</div>
+      <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+      ${actHtml}
+      <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
+      <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
+      <div style="margin-top:10px;padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);font-size:12px;opacity:.85;">
+        Tip: For drain-style tracking, use the <strong>Trace</strong> tab (hop-by-hop graph).
+      </div>
+    `;
   }
 
   function renderTree(g) {
@@ -1631,13 +1582,18 @@
       const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
 
       return `
-        <div>
-          <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
-          ${activationLine(n?.activation)}
-          <div style="opacity:.75;font-size:12px;margin-top:4px;">
-            edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-            edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-            recent outgoing loaded:${escapeHtml(firstN)}
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <div>
+            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
+            ${activationLine(n?.activation)}
+            <div style="opacity:.75;font-size:12px;margin-top:4px;">
+              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
+              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
+              recent outgoing loaded:${escapeHtml(firstN)}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
           </div>
         </div>
       `;
@@ -1653,14 +1609,10 @@
           <div style="display:flex;align-items:flex-start;gap:8px;">
             ${
               hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent">▸<[...]
+                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
                 : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
             }
             <div style="flex:1;">${nodeRow(addr)}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-              <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</butt[...]
-              <button class="uiMiniFlow" data-addr="${escapeHtml(addr)}" title="Flow" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;cursor:p[...]
-            </div>
           </div>
           ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
         </div>
@@ -1688,13 +1640,9 @@
     );
 
     Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
-      btn.addEventListener("click", () => showNodeModal(g, btn.getAttribute("data-addr")))
-    );
-
-    Array.from(document.querySelectorAll(".uiMiniFlow")).forEach((btn) =>
       btn.addEventListener("click", () => {
-        // open small modal with a mini cytoscape flow
-        renderMiniFlow(g, btn.getAttribute("data-addr"), null, { openPanel: true }).catch(() => {});
+        const addr = btn.getAttribute("data-addr");
+        quickInspectAddress(addr, { perNode: 180 });
       })
     );
   }
@@ -1706,7 +1654,7 @@
 
     const filtered = q
       ? g.edges.filter((e) => {
-          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
+          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.issuer || ""} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
           return hay.includes(q);
         })
       : g.edges;
@@ -1716,13 +1664,12 @@
       slice
         .map((e) => {
           const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
-          const txLink = e.tx_hash ? getExplorerUrlForTx(e.tx_hash) : "#";
+          const cur = e.currency === "XRP" ? "XRP" : `${e.currency}${e.issuer ? ` • ${e.issuer.slice(0, 6)}…` : ""}`;
           return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
             <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
               • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
               • ledger ${escapeHtml(e.ledger_index)}
-              • ${escapeHtml(e.currency)} ${escapeHtml(e.amount)}
-              <span style="margin-left:8px;"><a href="${escapeHtml(txLink)}" target="_blank" rel="noopener noreferrer">tx</a></span>
+              • ${escapeHtml(cur)} ${escapeHtml(e.amount)}
             </div>
             <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
           </div>`;
@@ -1736,170 +1683,326 @@
     renderEdgeFilter(g);
   }
 
-  // ---------------- NODE MODAL + CYTOSCAPE FLOW ----------------
-  function showNodeModal(g, addr) {
-    if (!addr) return;
-    const n = g.nodes.get(addr);
-    if (!n) return;
+  // ---------------- QUICK INSPECT ----------------
+  function getCurrentConstraintsFromUI() {
+    const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
+    const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
+    const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
+    const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
+    const minXrp = Number(($("uiMinXrp") || {}).value || 0);
+    return { startDate, endDate, ledgerMin, ledgerMax, minXrp };
+  }
 
-    const actEntry = n.activation;
-    const act = actEntry?.act || null;
+  function renderTokenSummaryBlock(summary) {
+    if (!summary) return `<div style="opacity:.75;">Token data unavailable.</div>`;
 
-    const info = n.acctInfo;
-    const domain = info?.domain || null;
-    const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
+    const topTrust = (summary.topTrustlines || []).slice(0, 12);
+    const issued = (summary.issuedEstimated || []).slice(0, 10);
 
-    const outgoing = Array.isArray(n.outgoingFirst) ? n.outgoingFirst : [];
+    const obligations = summary.gatewayObligations
+      ? Object.entries(summary.gatewayObligations)
+          .slice(0, 10)
+          .map(([cur, amt]) => `<div style="font-size:12px;"><strong>${escapeHtml(cur)}</strong>: ${escapeHtml(String(amt))}</div>`)
+          .join("")
+      : "";
 
-    const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
-    const csv = [
-      ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency"].join(","),
-      ...outgoing.map((x) =>
-        [
-          `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
-          `"${String(x.type || "").replace(/"/g, '""')}"`,
-          `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
-          `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
-          Number(x.ledger_index || 0),
-          `"${String(x.date || "").replace(/"/g, '""')}"`,
-          Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
-          `"${String(x.currency || "").replace(/"/g, '""')}"`
-        ].join(",")
-      )
-    ].join("\n");
+    return `
+      <details style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
+        <summary style="cursor:pointer;font-weight:900;">Trustlines & Issued Tokens</summary>
 
-    const actLinks = act?.tx_hash ? { xrpscan: getExplorerUrlForTx(act.tx_hash), bithomp: getExplorerUrlForTx(act.tx_hash) } : null;
+        <div style="margin-top:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div style="font-size:12px;opacity:.8;">lines: ${escapeHtml(summary.trustlineCount)} • src: ${escapeHtml(summary.source)}</div>
+          <div style="font-size:12px;opacity:.75;">pages: ${escapeHtml(summary.linesPages)} • complete: ${escapeHtml(String(summary.linesComplete))}</div>
+        </div>
 
-    const actBlock = act
-      ? `
+        ${
+          issued.length
+            ? `
+              <div style="margin-top:10px;">
+                <div style="font-weight:900;font-size:13px;">Estimated outstanding (issuer-side heuristic)</div>
+                <div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;">
+                  ${issued
+                    .map(
+                      (x) => `
+                      <div style="padding:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+                        <div><strong>${escapeHtml(x.currency)}</strong></div>
+                        <div style="font-size:12px;opacity:.85;">holders: ${escapeHtml(x.holders)}</div>
+                        <div style="font-size:12px;opacity:.85;">outstanding: ${escapeHtml(String(x.outstanding))}</div>
+                      </div>
+                    `
+                    )
+                    .join("")}
+                </div>
+              </div>
+            `
+            : `
+              <div style="margin-top:10px;opacity:.85;font-size:12px;">
+                No issuer-style outstanding balances detected from account_lines (may not be an issuer).
+              </div>
+            `
+        }
+
+        ${
+          obligations
+            ? `
+              <div style="margin-top:10px;">
+                <div style="font-weight:900;font-size:13px;">Gateway obligations (if available)</div>
+                <div style="margin-top:6px;opacity:.9;">${obligations}</div>
+              </div>
+            `
+            : `
+              <div style="margin-top:10px;opacity:.75;font-size:12px;">
+                gateway_balances not available (some nodes restrict this). Estimate above comes from account_lines.
+              </div>
+            `
+        }
+
         <div style="margin-top:10px;">
-          <div style="font-weight:900;">Activated by</div>
-          <div style="margin-top:6px;">
-            <code>${escapeHtml(act.activatedBy)}</code>
-            <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
-          </div>
-          <div style="margin-top:6px;opacity:.9;">
-            ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
-            <span style="opacity:.7;">(${escapeHtml(actEntry.source || "unknown")})</span>
-          </div>
-          <div style="margin-top:6px;font-size:12px;opacity:.9;">
+          <div style="font-weight:900;font-size:13px;">Top trustlines (largest abs balances)</div>
+          <div style="margin-top:6px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
             ${
-              actLinks?.xrpscan
-                ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-                   <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
-                : `<span style="opacity:.75;">no tx link</span>`
+              topTrust.length
+                ? topTrust
+                    .map(
+                      (t) => `
+                      <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+                        <div><strong>${escapeHtml(t.currency)}</strong> • peer: <code>${escapeHtml((t.peer || "").slice(0, 10))}…</code></div>
+                        <div style="opacity:.85;margin-top:4px;">balance: ${escapeHtml(String(t.balance))} • limit: ${escapeHtml(String(t.limit ?? "—"))}</div>
+                      </div>
+                    `
+                    )
+                    .join("")
+                : `<div style="padding:10px;opacity:.75;font-size:12px;">No trustlines found.</div>`
             }
           </div>
         </div>
-      `
-      : `
-        <div style="margin-top:10px;">
-          <div style="font-weight:900;">Activated by</div>
-          <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(actEntry?.source || "unknown")}${
-            actEntry && !actEntry.complete ? ", incomplete" : ""
-          })</span></div>
+
+        <div style="margin-top:10px;opacity:.75;font-size:12px;">
+          Note: issued-token totals are heuristics. DEX/AMM routing may move value without obvious Payment edges.
+        </div>
+      </details>
+    `;
+  }
+
+  async function quickInspectAddress(address, { perNode = 120 } = {}) {
+    const addr = String(address || "").trim();
+    if (!isValidXrpAddress(addr)) {
+      setStatus("Quick inspect: invalid address.");
+      return;
+    }
+
+    try {
+      setStatus(`Quick inspect: ${addr.slice(0, 6)}…`);
+      setProgress(0.1);
+
+      waitForSharedConn(1200).then((ok) => {
+        if (!ok) attemptSharedReconnect("quick inspect requested but ws offline");
+      });
+
+      const constraints = getCurrentConstraintsFromUI();
+
+      const info = await fetchAccountInfo(addr);
+      setProgress(0.25);
+
+      const activation = await getActivatedByStrict(addr, constraints);
+      setProgress(0.45);
+
+      const res = await collectOutgoingTxsMostRecent(addr, clampInt(perNode, 10, 300), constraints);
+      setProgress(0.65);
+
+      let tokenSummary = null;
+      try {
+        tokenSummary = await getTokenSummary(addr);
+      } catch (_) {
+        tokenSummary = null;
+      }
+      setProgress(0.85);
+
+      const outgoing = (res.txs || []).map((tx) => {
+        const type = tx.TransactionType || tx.type || "Unknown";
+        const cp = extractCounterparty(tx);
+        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
+        return {
+          tx_hash: String(tx.hash || ""),
+          type,
+          counterparty: cp?.counterparty || null,
+          counterpartyKind: cp?.kind || null,
+          ledger_index: Number(tx.ledger_index || 0),
+          date: tx._iso || null,
+          amount: amt.value,
+          currency: amt.currency,
+          issuer: amt.issuer || null
+        };
+      });
+
+      const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
+
+      const csv = [
+        ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency", "issuer"].join(","),
+        ...outgoing.map((x) =>
+          [
+            `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
+            `"${String(x.type || "").replace(/"/g, '""')}"`,
+            `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
+            `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
+            Number(x.ledger_index || 0),
+            `"${String(x.date || "").replace(/"/g, '""')}"`,
+            Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
+            `"${String(x.currency || "").replace(/"/g, '""')}"`,
+            `"${String(x.issuer || "").replace(/"/g, '""')}"`,
+          ].join(",")
+        )
+      ].join("\n");
+
+      const domain = info?.domain || null;
+      const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
+
+      const act = activation?.act || null;
+      const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
+
+      const actBlock = act
+        ? `
+          <div style="margin-top:10px;">
+            <div style="font-weight:900;">Activated by</div>
+            <div style="margin-top:6px;">
+              <code>${escapeHtml(act.activatedBy)}</code>
+              <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
+            </div>
+            <div style="margin-top:6px;opacity:.9;">
+              ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
+              <span style="opacity:.7;">(${escapeHtml(activation.source || "unknown")})</span>
+            </div>
+            <div style="margin-top:6px;font-size:12px;opacity:.9;">
+              ${
+                actLinks?.xrpscan
+                  ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
+                     <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
+                  : `<span style="opacity:.75;">no tx link</span>`
+              }
+            </div>
+          </div>
+        `
+        : `
+          <div style="margin-top:10px;">
+            <div style="font-weight:900;">Activated by</div>
+            <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(activation?.source || "unknown")}${
+              activation && !activation.complete ? ", incomplete" : ""
+            })</span></div>
+          </div>
+        `;
+
+      const metaLine = res?.meta
+        ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(res.meta.pages)} • scanned=${escapeHtml(
+            res.meta.scanned
+          )} • mode=${escapeHtml(res.meta.mode)}</div>`
+        : "";
+
+      const rows = outgoing
+        .slice(0, 220)
+        .map((x, i) => {
+          const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
+          const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
+          const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
+          const amt = formatAmountPretty(x.currency, x.amount, x.issuer);
+          const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
+          return `
+            <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
+              <div style="display:flex;justify-content:space-between;gap:10px;">
+                <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
+                <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
+              </div>
+              <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const tokenBlock = renderTokenSummaryBlock(tokenSummary);
+
+      const html = `
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+            <div style="font-weight:900;">Account</div>
+            <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
+            <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
+            <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
+            ${actBlock}
+            ${metaLine}
+            ${tokenBlock}
+          </div>
+
+          <div style="width:340px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
+            <div style="font-weight:900;">Actions</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+              <button id="qiCopyAddr" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy address</button>
+              <button id="qiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
+              <button id="qiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
+              <button id="qiExportJson" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Export JSON</button>
+              <button id="qiTraceFrom" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Trace from here</button>
+            </div>
+            <div style="margin-top:10px;opacity:.85;font-size:12px;">
+              outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
+            </div>
+            <div style="margin-top:6px;opacity:.75;font-size:12px;">
+              note: issuer-tree edges only exist when counterparty exists (Payment/TrustSet/OfferCreate issuer).
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Recent outgoing transactions</div>
+            <div style="opacity:.75;font-size:12px;">(shown chronological)</div>
+          </div>
+          <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
+          </div>
         </div>
       `;
 
-    const metaLine = n.outgoingMeta
-      ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(n.outgoingMeta.pages)} • scanned=${escapeHtml(n.outgoingMeta.scanned)} • mode=${escapeHtml(n.outgoingMeta.[...]
-      : "";
+      openModal(`Quick Inspect: ${addr}`, html);
+      setProgress(-1);
+      setStatus("Ready");
 
-    const rows = outgoing
-      .slice(0, 200)
-      .map((x, i) => {
-        const links = x.tx_hash ? { xrpscan: getExplorerUrlForTx(x.tx_hash) } : null;
-        const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
-        const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
-        const amt = `${escapeHtml(x.currency)} ${Number.isFinite(Number(x.amount)) ? escapeHtml(Number(x.amount).toFixed(6)) : "—"}`;
-        const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
-        return `
-          <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-            <div style="display:flex;justify-content:space-between;gap:10px;">
-              <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
-              <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
-            </div>
-            <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
-          </div>
-        `;
-      })
-      .join("");
+      $("qiCopyAddr").onclick = async () => {
+        const ok = await copyToClipboard(addr);
+        $("qiCopyAddr").textContent = ok ? "Copied ✅" : "Copy failed ❌";
+        setTimeout(() => ($("qiCopyAddr").textContent = "Copy address"), 1200);
+      };
 
-    const html = `
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
-        <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-          <div style="font-weight:900;">Account</div>
-          <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
-          <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
-          <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${esca[...]
-          ${actBlock}
-          ${metaLine}
-        </div>
+      $("qiCopyHashes").onclick = async () => {
+        const ok = await copyToClipboard(hashesOnly || "");
+        $("qiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
+        setTimeout(() => ($("qiCopyHashes").textContent = "Copy hashes"), 1200);
+      };
 
-        <div style="width:360px;min-width:300px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-          <div style="font-weight:900;">Actions</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-            <button id="uiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
-            <button id="uiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-            <button id="uiExportTxt" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Download hashe[...]
-            <button id="uiShowRaw" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Raw JSON</button>
-            <a id="uiExplorerAcct" class="about-btn" style="padding:8px 10px;border-radius:10px;background:transparent;color:var(--text-primary);" target="_blank" href="${escapeHtml(getExplorerUrlForA[...]
-          </div>
-          <div style="margin-top:10px;opacity:.85;font-size:12px;">
-            outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
-          </div>
-          <div style="margin-top:6px;opacity:.75;font-size:12px;">
-            note: edges only created when counterparty exists (Payment/TrustSet/OfferCreate issuer).
-          </div>
-        </div>
+      $("qiExportCsv").onclick = () => downloadText(csv, `naluxrp-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
 
-        <div style="width:100%;margin-top:12px;">
-          <div style="font-weight:900;margin-bottom:8px;">Flow: where value came from → ${escapeHtml(addr)} → where it went (top counterparties)</div>
-          <div id="uiFlowDiagram" style="width:100%;height:360px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.04);padding:6px;">
-            <div id="cyFlowContainer" style="width:100%;height:100%;"></div>
-          </div>
-        </div>
-      </div>
+      $("qiExportJson").onclick = () => {
+        const obj = {
+          version: MODULE_VERSION,
+          address: addr,
+          fetched_at: new Date().toISOString(),
+          transport: { ...transportState },
+          accountInfo: info || null,
+          activation: activation || null,
+          tokenSummary: tokenSummary || null,
+          outgoing,
+          outgoingMeta: res?.meta || null
+        };
+        downloadText(JSON.stringify(obj, null, 2), `naluxrp-quickinspect-${addr}-${Date.now()}.json`, "application/json");
+      };
 
-      <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <div style="font-weight:900;">Recent outgoing transactions</div>
-          <div style="opacity:.75;font-size:12px;">(shown chronological)</div>
-        </div>
-        <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-          ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
-        </div>
-      </div>
-    `;
-
-    openModal(`Node: ${addr}`, html);
-
-    const copyBtn = $("uiCopyHashes");
-    if (copyBtn) copyBtn.onclick = async () => {
-      const ok = await copyToClipboard(hashesOnly || "");
-      copyBtn.textContent = ok ? "Copied ✅" : "Copy failed ❌";
-      setTimeout(() => { if (copyBtn) copyBtn.textContent = "Copy hashes"; }, 1200);
-    };
-    const csvBtn = $("uiExportCsv");
-    if (csvBtn) csvBtn.onclick = () => downloadText(csv, `naluxrp-node-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
-    const txtBtn = $("uiExportTxt");
-    if (txtBtn) txtBtn.onclick = () => downloadText(hashesOnly, `naluxrp-node-${addr}-tx-hashes.txt`, "text/plain");
-    const rawBtn = $("uiShowRaw");
-    if (rawBtn) rawBtn.onclick = () => {
-      const rawObj = { address: addr, node: n };
-      openModal(`Raw: ${addr}`, `<pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(rawObj, null, 2))}</pre>`);
-    };
-
-    // render flow diagram for this node using Cytoscape
-    renderFlowDiagramForNode(g, addr, "cyFlowContainer").catch((e) => {
-      console.warn("Flow cytoscape error", e);
-      const c = $("cyFlowContainer");
-      if (c) c.innerHTML = `<div style="padding:12px;color:var(--text-secondary)">Flow preview unavailable</div>`;
-    });
+      $("qiTraceFrom").onclick = () => {
+        closeModal();
+        switchToTraceAndSetSeed(addr);
+      };
+    } catch (e) {
+      console.error(e);
+      setProgress(-1);
+      setStatus(`Quick inspect failed: ${e?.message ? e.message : String(e)}`);
+    }
   }
-
-  // ---------------- Mini flow & flow helpers (omitted for brevity) ----------------
-  // ... (unchanged) ...
 
   // ---------------- EXPORT GRAPH ----------------
   function exportActiveGraph() {
@@ -1954,9 +2057,8 @@
 
       activeIssuer = issuer;
 
-      // show something immediately in the tree container
-      const t = $("uiTree"); if (t) t.innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
-      const ei = $("uiEdgeItems"); if (ei) ei.innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
+      $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
+      $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
 
       const depth = clampInt(Number(($("uiDepth") || {}).value || DEFAULT_DEPTH), 1, 6);
       const perNode = clampInt(Number(($("uiPerNode") || {}).value || DEFAULT_PER_NODE), 10, 300);
@@ -1974,13 +2076,9 @@
       const g = makeGraph(issuer, { depth, perNode, maxAccounts, maxEdges, constraints });
       clearViews();
 
-      // ensure ws attempt exists (non-blocking)
       waitForSharedConn(1500).then((ok) => {
         if (!ok) attemptSharedReconnect("build requested but ws offline");
       });
-
-      // Clear session caches for this build
-      sessionCache.account_tx.clear();
 
       await buildIssuerTree(g);
 
@@ -2012,22 +2110,28 @@
     }
     const path = findShortestPath(g, g.issuer, target);
     if (!path) {
-      const r = $("uiResults"); if (r) r.innerHTML = `<div>No path found (within current tree).</div>`; return;
+      $("uiResults").innerHTML = `<div>No path found (within current tree).</div>`;
+      return;
     }
-    const r = $("uiResults");
-    if (r) {
-      r.innerHTML = `
-        <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
-        <div style="margin-top:8px;">${path
-          .map((p) => `<div style="display:flex;align-items:center;gap:8px;"><code>${escapeHtml(p)}</code><button class="uiNodeMini" data-addr="${escapeHtml(
-            p
-          )}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button></div>`)
-          .join("")}</div>
-      `;
-      Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-        btn.addEventListener("click", () => showNodeModal(issuerRegistry.get(activeIssuer), btn.getAttribute("data-addr")))
-      );
-    }
+    $("uiResults").innerHTML = `
+      <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
+      <div style="margin-top:8px;">${path
+        .map(
+          (p) => `<div style="display:flex;align-items:center;gap:8px;">
+            <code>${escapeHtml(p)}</code>
+            <button class="uiNodeMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button>
+            <button class="uiTraceMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Trace</button>
+          </div>`
+        )
+        .join("")}</div>
+    `;
+
+    Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
+      btn.addEventListener("click", () => quickInspectAddress(btn.getAttribute("data-addr"), { perNode: 160 }))
+    );
+    Array.from(document.querySelectorAll(".uiTraceMini")).forEach((btn) =>
+      btn.addEventListener("click", () => switchToTraceAndSetSeed(btn.getAttribute("data-addr")))
+    );
   }
 
   function patternsClicked() {
@@ -2077,154 +2181,63 @@
           .join("")
       : `<div style="padding:12px;opacity:.75;">No cycles found (within current graph bounds).</div>`;
 
-    const r = $("uiResults");
-    if (r) {
-      r.innerHTML = `
-        <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-          <div style="font-weight:900;">Pattern summary</div>
-          <div style="margin-top:10px;opacity:.9;">
-            <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
-            <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
-            <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
-            <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
-            <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
-            <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
-            <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
-          </div>
+    $("uiResults").innerHTML = `
+      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
+        <div style="font-weight:900;">Pattern summary</div>
+        <div style="margin-top:10px;opacity:.9;">
+          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
+          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
+          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
+          <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
+          <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
+          <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
+          <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
+        </div>
 
-          <div style="margin-top:14px;">
-            <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
-            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-              ${hubRows}
-            </div>
-          </div>
-
-          <div style="margin-top:14px;">
-            <div style="font-weight:900;">Bursts (high-density outgoing)</div>
-            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-              ${burstRows}
-            </div>
-          </div>
-
-          <div style="margin-top:14px;">
-            <div style="font-weight:900;">Cycles (bounded)</div>
-            <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-              ${cycleRows}
-            </div>
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${hubRows}
           </div>
         </div>
-      `;
-    }
-  }
 
-  // ---------------- XRPL CONSUMER INTEGRATION (NEW) ----------------
-  // Ensures the Inspector registers as a consumer while visible so the connection
-  // module provides full ledger processing. Also listens for ledger events to
-  // refresh light UI elements and clear caches.
-  let _inspectorConsumerStarted = false;
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Bursts (high-density outgoing)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${burstRows}
+          </div>
+        </div>
 
-  function handleFullLedgerEvent(ev) {
-    try {
-      const detail = ev && ev.detail;
-      const ledgerIndex = Number(detail?.ledgerIndex || (detail?.latestLedger && detail.latestLedger.ledgerIndex) || 0);
-      if (!ledgerIndex) return;
-
-      // Clear session account_tx cache to ensure inspector fetches fresh account_tx pages
-      sessionCache.account_tx.clear();
-
-      // Refresh issuer acct_info (fast) so summary updates with latest balance/seq
-      if (activeIssuer) {
-        fetchAccountInfo(activeIssuer, { force: true })
-          .then((info) => {
-            const g = issuerRegistry.get(activeIssuer);
-            if (g && g.nodes && g.nodes.has(activeIssuer)) {
-              g.nodes.get(activeIssuer).acctInfo = info;
-              renderSummary(g);
-            }
-          })
-          .catch(() => {});
-      }
-
-      // update connection badge to reflect live status
-      updateConnBadge();
-      // small status note
-      setStatus(`Ledger ${ledgerIndex} processed — inspector caches refreshed.`);
-    } catch (e) {
-      console.warn("handleFullLedgerEvent error", e && e.message ? e.message : e);
-    }
-  }
-
-  function handleLedgerClosedFast(ev) {
-    try {
-      const detail = ev && ev.detail;
-      const ledgerIndex = Number(detail?.ledgerIndex || detail?.ledger_index || 0);
-      if (!ledgerIndex) return;
-      // Update lightweight UI (badge/status) so inspector feels live
-      updateConnBadge();
-      setStatus(`Ledger closed: #${ledgerIndex}`);
-      // Do not trigger heavy fetch here — the connection module controls that.
-    } catch (e) {
-      console.warn("handleLedgerClosedFast error", e && e.message ? e.message : e);
-    }
-  }
-
-  function startInspectorConsumer() {
-    if (_inspectorConsumerStarted) return;
-    _inspectorConsumerStarted = true;
-    try {
-      if (typeof window.registerXRPLConsumer === "function") window.registerXRPLConsumer("account-inspector");
-    } catch (e) {
-      console.warn("registerXRPLConsumer failed", e && e.message ? e.message : e);
-    }
-    window.addEventListener("xrpl-ledger", handleFullLedgerEvent);
-    window.addEventListener("xrpl-ledger-closed", handleLedgerClosedFast);
-    // Also listen for raw tx batches (optional) — we don't auto-process but we can log/monitor
-    // window.addEventListener("xrpl-tx-batch", (e) => console.debug("inspector tx batch", e && e.detail && e.detail.ledgerIndex));
-    console.log("Account Inspector: consumer started");
-  }
-
-  function stopInspectorConsumer() {
-    if (!_inspectorConsumerStarted) return;
-    _inspectorConsumerStarted = false;
-    try {
-      if (typeof window.unregisterXRPLConsumer === "function") window.unregisterXRPLConsumer("account-inspector");
-    } catch (e) {
-      console.warn("unregisterXRPLConsumer failed", e && e.message ? e.message : e);
-    }
-    window.removeEventListener("xrpl-ledger", handleFullLedgerEvent);
-    window.removeEventListener("xrpl-ledger-closed", handleLedgerClosedFast);
-    console.log("Account Inspector: consumer stopped");
-  }
-
-  // Ensure registration on visibility / page lifecycle
-  function inspectorVisibilityHandler() {
-    if (document.hidden) {
-      stopInspectorConsumer();
-    } else {
-      startInspectorConsumer();
-    }
+        <div style="margin-top:14px;">
+          <div style="font-weight:900;">Cycles (bounded)</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
+            ${cycleRows}
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   // ---------------- INIT ----------------
   function initInspector() {
     renderPage();
-    setStatus("Ready — Tip: paste issuers, set window/ledger and press Build.");
-
-    // Start consumer when inspector loads
-    startInspectorConsumer();
-
-    // cleanup on unload + toggle on visibility changes
-    window.addEventListener("beforeunload", () => stopInspectorConsumer());
-    document.addEventListener("visibilitychange", inspectorVisibilityHandler);
+    setStatus("Ready");
   }
 
   window.initInspector = initInspector;
+
+  // ✅ Public API for Trace Tab + others
   window.UnifiedInspector = {
     version: MODULE_VERSION,
+    request: (payload, opts) => xrplRequest(payload, opts || {}),
+    quickInspect: (addr) => quickInspectAddress(addr, { perNode: 160 }),
+    getTokenSummary: (addr) => getTokenSummary(addr),
+    getTransportState: () => ({ ...transportState }),
+    attemptSharedReconnect,
+    exportActiveGraph,
     buildActive: () => buildTreeClicked(),
     getGraph: () => issuerRegistry.get(activeIssuer) || null,
-    exportActiveGraph,
-    attemptSharedReconnect
+    switchToTrace: (addr) => switchToTraceAndSetSeed(addr)
   };
 
   console.log(`✅ Unified Inspector loaded (${MODULE_VERSION})`);
