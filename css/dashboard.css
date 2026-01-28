@@ -1,15 +1,8 @@
-// =======================================================
-// File: css/dashboard.css
-// Your dashboard.css, kept intact + fixes:
-// - Prevent ledger card text overlap/rub-off
-// - Ensure aura is visible again (base opacity was 0.0)
-// - Make type rows more robust on small widths
-// =======================================================
-
 /* =========================================
    NaluXrp 🌊 — Dashboard V2 Styles
    ========================================= */
 
+/* Base container for dashboard page */
 .dashboard-page {
   width: 100%;
   max-width: 1400px;
@@ -19,6 +12,7 @@
   animation: fadeIn 0.7s ease-out;
 }
 
+/* Header: network selector + connection box */
 .dashboard-header {
   width: 100%;
   max-width: 1400px;
@@ -31,6 +25,7 @@
   gap: 15px;
 }
 
+/* Network selector */
 .network-selector {
   display: flex;
   align-items: center;
@@ -45,110 +40,34 @@
   white-space: nowrap;
 }
 
-/* Network button row */
-.network-selector{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  flex-wrap:wrap;
-}
-
-/* Uniform compact “pill” buttons */
-.net-btn{
-  --h: 36px;
-
-  display: inline-flex;
+.net-btn {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-
-  height: var(--h);
-  padding: 0 12px;
-  border-radius: 12px;
-
-  border: 1px solid rgba(255,255,255,0.14);
-  background: linear-gradient(135deg, rgba(0,0,0,0.38), rgba(0,0,0,0.62));
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0, 0, 0, 0.3);
   color: var(--text-primary);
-
   cursor: pointer;
-  font-size: 0.88rem;
-  font-weight: 700;
+  font-size: 0.9em;
+  font-weight: 600;
   white-space: nowrap;
-
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.03),
-    0 10px 22px rgba(0,0,0,0.45);
-
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease,
-    background 0.18s ease,
-    filter 0.18s ease;
+  transition: 0.2s ease;
 }
 
-/* Icon becomes a “mini badge” */
-.net-icon{
-  width: 18px;
-  height: 18px;
-  border-radius: 6px;
-  object-fit: cover;
-  flex: 0 0 auto;
-
-  border: 1px solid rgba(255,255,255,0.14);
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
-}
-
-/* Hover glow */
-.net-btn:hover{
-  transform: translateY(-1px);
-  border-color: rgba(0, 212, 255, 0.55);
-  background: linear-gradient(135deg, rgba(0,0,0,0.48), rgba(0,0,0,0.78));
-  box-shadow:
-    0 0 0 1px rgba(0, 212, 255, 0.14),
-    0 14px 28px rgba(0,0,0,0.55);
-  filter: saturate(1.08);
-}
-
-/* Click feedback */
-.net-btn:active{
-  transform: translateY(0px) scale(0.98);
-}
-
-/* Keyboard focus (accessibility) */
-.net-btn:focus-visible{
-  outline: none;
-  border-color: rgba(0, 212, 255, 0.85);
-  box-shadow:
-    0 0 0 3px rgba(0, 212, 255, 0.18),
-    0 14px 28px rgba(0,0,0,0.55);
-}
-
-/* Optional: “selected network” state if you toggle .is-active in JS */
-.net-btn.is-active{
+.net-btn:hover {
+  background: rgba(0, 0, 0, 0.5);
   border-color: var(--accent-secondary);
-  background:
-    radial-gradient(circle at 15% 10%, rgba(0, 212, 255, 0.16), transparent 55%),
-    linear-gradient(135deg, rgba(0,0,0,0.45), rgba(0,0,0,0.72));
-  box-shadow:
-    0 0 0 1px rgba(0, 212, 255, 0.18),
-    0 16px 32px rgba(0,0,0,0.6);
 }
 
-/* Small screens: slightly tighter */
-@media (max-width: 520px){
-  .net-btn{
-    --h: 34px;
-    padding: 0 10px;
-    font-size: 0.84rem;
-  }
-  .net-icon{
-    width: 17px;
-    height: 17px;
-  }
+.net-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
 }
 
-
+/* Connection box */
 .connection-box {
   display: flex;
   align-items: center;
@@ -180,6 +99,7 @@
   transition: color 0.2s ease;
 }
 
+/* Columns layout */
 .dashboard-columns {
   display: grid;
   grid-template-columns: 1fr 380px;
@@ -204,6 +124,7 @@
   flex-shrink: 0;
 }
 
+/* Metrics section */
 .dashboard-metrics-title {
   font-size: 1.4em;
   font-weight: 700;
@@ -223,6 +144,7 @@
   width: 100%;
 }
 
+/* Override metric-card slightly for dashboard */
 .dashboard-metric-grid .metric-card {
   text-align: left;
 }
@@ -230,6 +152,8 @@
 .dashboard-metric-grid .metric-value {
   font-size: 1.5em;
 }
+
+/* Use the centralized .card/.widget-card for widget visuals; keep widget-specific layout here */
 
 /* Widget header/body */
 .widget-header {
@@ -286,6 +210,7 @@
   z-index: -1;
 }
 
+/* Pills */
 .widget-pill {
   display: inline-block;
   padding: 4px 10px;
@@ -297,6 +222,7 @@
   margin: 3px;
 }
 
+/* Whale list */
 .whale-item {
   display: flex;
   justify-content: space-between;
@@ -315,6 +241,7 @@
   font-weight: 700;
 }
 
+/* Latency ribbon */
 .latency-ribbon {
   display: flex;
   width: 100%;
@@ -329,14 +256,21 @@
   opacity: 0.6;
 }
 
-.latency-segment.fast { background: #00e676; }
-.latency-segment.medium { background: #ffb86c; }
-.latency-segment.slow { background: #ff6e6e; }
+.latency-segment.fast {
+  background: #00e676;
+}
+.latency-segment.medium {
+  background: #ffb86c;
+}
+.latency-segment.slow {
+  background: #ff6e6e;
+}
 
 /* =========================================
    Neon Ledger Conveyor & Cards
    ========================================= */
 
+/* Conveyor shell */
 .ledger-stream-card {
   position: relative;
   overflow: hidden;
@@ -352,16 +286,21 @@
 
 .ledger-stream-track {
   display: inline-flex;
-  align-items: stretch;
   gap: 18px;
   white-space: nowrap;
   will-change: transform;
+}
+
+/* Apply animation class (keyframes are defined in components/animations.css) */
+.ledger-stream-animate {
+  animation: ledgerConveyorMove 40s linear infinite;
 }
 
 .ledger-stream-shell:hover .ledger-stream-animate {
   animation-play-state: paused;
 }
 
+/* Particles underneath */
 .ledger-stream-particles {
   pointer-events: none;
   position: absolute;
@@ -381,14 +320,12 @@
   animation: ledgerParticleDrift linear infinite;
 }
 
+/* Ledger cards — base properties moved to components/card.css; keep ledger-specific extras below */
 .ledger-card {
   position: relative;
-  flex: 0 0 auto;
   transform: translateZ(0);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
   z-index: 1;
-  width: 420px;
-  min-width: 420px;
 }
 
 .ledger-card:hover {
@@ -396,27 +333,21 @@
   filter: saturate(1.15);
 }
 
+/* Inner content */
 .ledger-card-inner {
-  position: relative;
-  z-index: 2;
-  box-sizing: border-box;
   background:
     radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 60%),
     linear-gradient(135deg, rgba(0,0,0,0.7), rgba(0,0,0,0.8));
   border-radius: 16px;
   padding: 14px 18px 16px;
-  overflow: hidden;
 }
 
-.ledger-card-body {
-  min-width: 0;
-}
-
+/* Aura underlay */
 .ledger-card::before {
   content: "";
   position: absolute;
   inset: -35%;
-  opacity: 0.35; /* FIX: was 0.0, made aura invisible */
+  opacity: 0.0;
   filter: blur(32px);
   z-index: 0;
   mix-blend-mode: screen;
@@ -463,11 +394,10 @@
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
 
+/* Ledger card header */
 .ledger-card-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
   margin-bottom: 10px;
 }
 
@@ -476,14 +406,17 @@
   font-size: 1.05rem;
   color: var(--accent-secondary);
   text-shadow: 0 0 10px var(--glow-color);
-  white-space: nowrap;
 }
 
 .ledger-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+}
+
+.ledger-time {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
 }
 
 .ledger-tag {
@@ -492,9 +425,9 @@
   border-radius: 999px;
   background: rgba(0,0,0,0.6);
   border: 1px solid rgba(255,255,255,0.2);
-  white-space: nowrap;
 }
 
+/* Stats row */
 .ledger-main-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -505,26 +438,21 @@
 .ledger-main-stat {
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
 .ledger-stat-label {
   font-size: 0.78rem;
   color: var(--text-secondary);
   margin-bottom: 3px;
-  white-space: nowrap;
 }
 
 .ledger-stat-value {
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--accent-secondary);
-  line-height: 1.15;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
+/* Type bars */
 .ledger-type-bars {
   display: flex;
   flex-direction: column;
@@ -533,16 +461,14 @@
 
 .ledger-type-row {
   display: grid;
-  grid-template-columns: 74px 1fr 52px;
-  gap: 8px;
+  grid-template-columns: 70px 1fr auto;
+  gap: 6px;
   align-items: center;
-  min-width: 0;
 }
 
 .ledger-type-label {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  white-space: nowrap;
 }
 
 .ledger-type-bar {
@@ -551,7 +477,6 @@
   border-radius: 999px;
   background: rgba(255,255,255,0.05);
   overflow: hidden;
-  min-width: 0;
 }
 
 .ledger-type-fill {
@@ -561,19 +486,173 @@
   box-shadow: 0 0 12px currentColor;
 }
 
-.type-payment { background: linear-gradient(90deg,#40a9ff,#00d4ff); color:#00d4ff; }
-.type-offer   { background: linear-gradient(90deg,#ff9f43,#ff6b1a); color:#ff9f43; }
-.type-nft     { background: linear-gradient(90deg,#ff9f43,#ff3f81); color:#ff9f43; }
-.type-trust   { background: linear-gradient(90deg,#00e6a8,#00b894); color:#00e6a8; }
-.type-other   { background: linear-gradient(90deg,#f1fa8c,#ffe66d); color:#f1fa8c; }
+/* Type colors */
+.type-payment {
+  background: linear-gradient(90deg,#40a9ff,#00d4ff);
+  color:#00d4ff;
+}
+.type-offer {
+  background: linear-gradient(90deg,#ff9f43,#ff6b1a);
+  color:#ff9f43;
+}
+.type-nft {
+  background: linear-gradient(90deg,#ff9f43,#ff3f81);
+  color:#ff9f43;
+}
+.type-trust {
+  background: linear-gradient(90deg,#00e6a8,#00b894);
+  color:#00e6a8;
+}
+.type-other {
+  background: linear-gradient(90deg,#f1fa8c,#ffe66d);
+  color:#f1fa8c;
+}
 
 .ledger-type-count {
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary);
-  text-align: right;
-  white-space: nowrap;
 }
+
+/* =========================================
+   Ledger Orb & Heatmap
+   ========================================= */
+
+.ledger-orb-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ledger-orb-wrapper {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 240px;
+}
+
+.ledger-orb-wrapper canvas {
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 50%;
+}
+
+.ledger-orb-stats {
+  flex: 1 1 180px;
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.orb-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+/* Heatmap */
+.tx-heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tx-heat-tile {
+  position: relative;
+  padding: 0.75rem 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--accent-tertiary);
+  background:
+    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent),
+    rgba(10,10,20,0.9);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.02),
+    0 10px 25px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+.tx-heat-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.7;
+  background: radial-gradient(circle at 0 0,
+    rgba(0, 212, 255, calc(var(--heat, 0.5) * 0.6)),
+    transparent 70%);
+  pointer-events: none;
+}
+
+.tx-heat-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.tx-heat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.tx-heat-percent {
+  font-size: 0.75rem;
+  color: var(--accent-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.tx-heat-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+
+.tx-heat-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    rgba(0, 212, 255, 0.15),
+    rgba(0, 212, 255, 0.9));
+}
+
+/* Optional per-type hues */
+.tx-heat-tile.heat-payment::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(80,250,123, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-offer::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(189,147,249, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-nft::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(255,184,108, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-trust::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(139,233,253, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+.tx-heat-tile.heat-other::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(255,121,198, calc(var(--heat, 0.5) * 0.7)),
+    transparent 70%);
+}
+
+/* =========================================
+   Dashboard Responsive
+   ========================================= */
 
 @media (max-width: 1200px) {
   .dashboard-columns {
@@ -595,7 +674,9 @@
 }
 
 @media (max-width: 768px) {
-  .dashboard-page { padding: 0 15px; }
+  .dashboard-page {
+    padding: 0 15px;
+  }
 
   .dashboard-header {
     flex-direction: column;
@@ -603,22 +684,45 @@
     gap: 10px;
   }
 
-  .network-selector { justify-content: center; }
-  .connection-box { justify-content: center; }
+  .network-selector {
+    justify-content: center;
+  }
 
-  .dashboard-metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .connection-box {
+    justify-content: center;
+  }
+
+  .ledger-orb-layout {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .ledger-orb-stats {
+    width: 100%;
+  }
+
+  .dashboard-metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 
   .ledger-card {
     width: 320px;
     min-width: 320px;
   }
 
-  .ledger-main-row { grid-template-columns: repeat(2, 1fr); }
-  .ledger-type-row { grid-template-columns: 70px 1fr 46px; }
+  .ledger-main-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 @media (max-width: 480px) {
-  .dashboard-metric-grid { grid-template-columns: 1fr; }
+  .dashboard-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tx-heatmap-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 
   .ledger-card {
     width: 280px;
@@ -626,6 +730,7 @@
   }
 }
 
+/* Extra animations (kept small; shared ones are in components/animations.css) */
 @keyframes fadeSlideIn {
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
