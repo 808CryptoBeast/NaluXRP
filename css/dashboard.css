@@ -19,7 +19,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: url("images/Dashboard-background.jpg") center / cover no-repeat;
+  background: url("/images/Dashboard-background.jpg") center / cover no-repeat;
   background-attachment: fixed;
   z-index: 0;
 }
@@ -779,6 +779,7 @@
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+
 
 
 
