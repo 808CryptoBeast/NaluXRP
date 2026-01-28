@@ -1,260 +1,253 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css)
-   FIXED:
-   - no hamburger, no toggle buttons
-   - dropdowns readable
-   - responsive layout (incl. ~1068px)
-   - dropdown open/close states
-   - NEW: dynamic content offset so navbar never blocks dashboard header
-   - NEW: connection badge has visible LIVE/CONNECTING styling
+   NaluXrp 🌊 – Futuristic Navbar Design
+   - Fully scalable and responsive
+   - Seamless transitions and modern gradients
+   - Flexible layout with mobile-first design
    ========================================= */
 
-:root{
-  --nav-height: 76px;
-  --nav-offset: 76px; /* updated by navbar.js via measurement */
+:root {
+  --nav-height: 80px;
+  --nav-offset: 80px;
+  --gradient-bg: linear-gradient(135deg, #1e1e1e, #111);
+  --text-primary: #e0e0e0; /* Bright text for accessibility */
+  --text-secondary: #9e9e9e;
+  --accent-primary: #ff007f; /* Pink futuristic accent */
+  --accent-secondary: #00d1ff; /* Light blue futuristic accent */
+  --bg-secondary: rgba(20, 20, 20, 0.95); /* Navbar background */
+  --dropdown-bg: rgba(30, 30, 30, 0.95);
+  --dropdown-hover: #222;
+  --hover-shadow: 0 12px 24px rgba(255, 0, 127, 0.5);
+  --focus-ring: 0 0 10px #00dfae;
 }
 
-/* ✅ push page content below fixed navbar (prevents blocking dashboard logos) */
-.container{
-  padding-top: calc(var(--nav-offset) + 14px);
+/* Push content below the navbar */
+.container {
+  padding-top: var(--nav-offset);
 }
 
-/* Fixed navbar */
+/* Base Navbar Structure */
 .navbar {
   position: fixed;
-  top: 0; left: 0; right: 0;
-  background: var(--bg-secondary);
-  backdrop-filter: blur(20px);
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--nav-height);
+  z-index: 9999;
+  background: var(--gradient-bg);
   border-bottom: 2px solid var(--accent-primary);
-  box-shadow: 0 5px 30px var(--glow-color);
-  z-index: 10000;
-  transform: translateY(0);
-  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
-}
-
-.navbar.hide { transform: translateY(-100%); }
-
-.nav-content {
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: 0 18px;
-  min-height: var(--nav-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  transition: transform 0.5s ease-in-out, background 0.3s ease;
+}
+
+.navbar.hide {
+  transform: translateY(-100%);
+}
+
+.nav-content {
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 /* Logo */
 .nav-logo {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   cursor: pointer;
-  flex: 0 0 auto;
-  min-width: 220px; /* helps prevent overlap around ~1068px */
-}
-
-.logo-text {
-  font-size: 1.45em;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  font-size: 1.5rem;
+  color: var(--text-primary);
+  font-weight: bold;
+  background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  letter-spacing: 1.6px;
-  line-height: 1.1;
+  user-select: none; /* Prevent text selection */
+  transition: transform 0.3s ease;
+}
+.nav-logo:hover {
+  transform: scale(1.1) translateY(-2px);
 }
 
 .logo-slogan {
-  font-size: 0.72em;
+  font-size: 0.75rem;
   color: var(--text-secondary);
-  opacity: 0.95;
 }
 
-/* Links row */
+/* Navigation links */
 .nav-links {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   align-items: center;
   justify-content: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-wrap: nowrap;
 }
 
-/* Buttons */
+/* Default Styled Buttons */
 .nav-btn,
 .dropdown-toggle {
-  padding: 9px 14px;
-  background: linear-gradient(135deg, rgba(0,0,0,0.55), rgba(0,0,0,0.75));
-  border-radius: 10px;
-  border: 2px solid rgba(255,255,255,0.10);
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--dropdown-bg);
+  border: 2px solid rgba(255, 255, 255, 0.15);
   color: var(--text-primary);
-  cursor: pointer;
-  font-weight: 750;
   font-size: 0.9rem;
-  white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  transition: all 0.2s ease;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  transition: border 0.3s ease, background 0.3s ease, transform 0.2s;
 }
 
-.nav-btn:hover,
-.dropdown-toggle:hover {
-  border-color: var(--accent-primary);
-  background: linear-gradient(135deg, rgba(0,0,0,0.65), rgba(0,0,0,0.88));
-  box-shadow: 0 10px 22px rgba(0,0,0,0.55);
-  transform: translateY(-2px);
+.nav-btn:hover {
+  background: var(--dropdown-hover);
+  border: 2px solid var(--accent-primary);
+  transform: translateY(-4px);
+  box-shadow: var(--hover-shadow);
+}
+.nav-btn:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.nav-icon { font-size: 1.1rem; }
-.nav-label { display: inline-block; }
+.nav-icon {
+  font-size: 1.3rem;
+}
 
-/* Dropdowns */
+/* Responsive Dropdown Menu */
 .nav-dropdown {
   position: relative;
-  display: inline-block;
 }
 
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 12px);
+  top: 100%;
   right: 0;
-  background: rgba(0,0,0,0.92);
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.14);
-  min-width: 210px;
+  border-radius: 10px;
+  background: var(--dropdown-bg);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   padding: 10px;
   display: none;
   flex-direction: column;
-  box-shadow: 0 16px 42px rgba(0,0,0,0.75);
-  z-index: 10002;
-
-  opacity: 0;
-  transform: translateY(-6px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  transition: all 0.3s ease;
 }
 
-/* Open state controlled by JS */
 .nav-dropdown.open .dropdown-menu {
   display: flex;
-  opacity: 1;
-  transform: translateY(0);
 }
 
-/* Dropdown items: readable even without hover */
 .dropdown-item {
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 0.92rem;
   color: var(--text-primary);
+  font-size: 0.9rem;
+  padding: 10px 14px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: 0.15s ease;
-  text-align: left;
-  font-weight: 750;
-  text-decoration: none;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.3s ease, transform 0.2s;
 }
-
 .dropdown-item:hover {
-  background: rgba(255,255,255,0.10);
-  border-color: rgba(255,255,255,0.14);
-  transform: translateX(2px);
+  background: var(--accent-secondary);
+  transform: translateX(4px);
 }
 
-/* Connection status (right side) */
+/* Connection Status Badge */
 .status-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
-  background: rgba(0,0,0,0.55);
+  padding: 8px 14px;
+  background: var(--bg-secondary);
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
-  font-size: 0.86rem;
-  white-space: nowrap;
-  flex: 0 0 auto;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.3);
 }
 
-/* State styling so it doesn't look "stuck" */
-.status-badge[data-state="connecting"]{
-  border-color: rgba(255,184,108,0.35);
-  box-shadow: 0 0 0 1px rgba(255,184,108,0.08);
+.status-badge[data-state="connecting"] {
+  border-color: var(--accent-secondary);
 }
-.status-badge[data-state="live"]{
-  border-color: rgba(80,250,123,0.35);
-  box-shadow: 0 0 0 1px rgba(80,250,123,0.10);
+
+.status-badge[data-state="live"] {
+  border-color: var(--accent-primary);
 }
 
 .status-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255,184,108,0.45);
+  box-shadow: 0px 0px 12px rgba(255, 184, 108, 0.5);
 }
 
 .status-dot.active {
   background: #50fa7b;
-  box-shadow: 0 0 12px rgba(80,250,123,0.55);
+  box-shadow: 0px 0px 12px rgba(80, 250, 123, 0.7);
 }
 
-/* -------------------------------------------------
-   REMOVE hamburger + toggle buttons (not used)
--------------------------------------------------- */
-.hamburger,
-#hamburger,
-.navbar-toggle,
-#navbarToggle,
-.navbar-toggle-btn,
-#navbarToggleBtn {
-  display: none !important;
-}
+/* RESPONSIVE STYLING */
 
-/* -------------------------------------------------
-   Responsive behavior
-   - Around 1068px: keep logo + status on row 1
-     move nav buttons to row 2 to prevent overlap
--------------------------------------------------- */
-@media (max-width: 1120px) {
-  .nav-content {
-    flex-wrap: wrap;
-    justify-content: space-between;
-    padding: 10px 14px;
+/* Tablet View (~1024px) */
+@media (max-width: 1024px) {
+  .nav-links {
     gap: 10px;
   }
 
-  .nav-logo { min-width: 200px; }
+  .nav-btn {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+  }
+}
 
-  .status-badge {
-    order: 2;
-    margin-left: auto;
+/* Mobile View (~768px) */
+@media (max-width: 768px) {
+  .nav-content {
+    flex-direction: column;
+    gap: 12px;
   }
 
   .nav-links {
-    order: 3;
-    width: 100%;
     justify-content: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding-bottom: 6px;
+    gap: 10px;
+  }
+
+  .nav-btn {
+    flex-direction: column;
+    gap: 4px;
+    width: 60px;
+    height: 60px;
+    font-size: 0.8rem;
+  }
+
+  .nav-label {
+    display: none; /* Icon-only mode */
   }
 }
 
-/* Smaller screens:
-   - keep icons, hide labels, maintain dropdown functionality */
-@media (max-width: 720px) {
-  .nav-logo .logo-slogan { display: none; }
-  .nav-btn, .dropdown-toggle { padding: 9px 11px; }
-  .nav-label { display: none; }
-  .nav-links { justify-content: center; }
-  .dropdown-menu { right: 0; min-width: 220px; }
-}
-
-/* Extra small */
+/* Extra Small Screens (~420px) */
 @media (max-width: 420px) {
-  .logo-text { font-size: 1.25em; }
-  .status-badge { font-size: 0.8rem; padding: 6px 10px; }
+  .nav-btn {
+    width: 50px;
+    height: 50px;
+    font-size: 0.75rem;
+  }
+
+  .logo-text {
+    font-size: 1.2rem;
+  }
+
+  .status-badge {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+  }
 }
