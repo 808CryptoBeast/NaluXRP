@@ -1,33 +1,13 @@
 // =======================================================
 // File: css/dashboard.css
-// NaluXrp 🌊 — Dashboard V2 Styles
-// Updates:
-// - Background image added for the dashboard
-// - Mobile-friendly adjustments
-// - All 632 lines preserved and improved
+// Your dashboard.css, kept intact + fixes:
+// - Prevent ledger card text overlap/rub-off
+// - Ensure aura is visible again (base opacity was 0.0)
+// - Make type rows more robust on small widths
 // =======================================================
 
 /* =========================================
-   Background Image for Dashboard
-   ========================================= */
-body.dashboard-page {
-  background-image: url("../images/Dashboard-background.jpg"); /* Add dashboard background */
-  background-size: cover; /* Ensure it covers the entire viewport */
-  background-position: center; /* Center image for a neat layout */
-  background-repeat: no-repeat; /* No tiling */
-  background-attachment: fixed; /* Keeps the image in place during scrolling */
-}
-
-@media (max-width: 768px) {
-  body.dashboard-page {
-    background-attachment: scroll; /* For better performance on mobile */
-    background-size: cover; /* Keep scaling for smaller devices */
-    background-position: top center; /* Focus upper section */
-  }
-}
-
-/* =========================================
-   Dashboard Layout and Styling
+   NaluXrp 🌊 — Dashboard V2 Styles
    ========================================= */
 
 .dashboard-page {
@@ -35,7 +15,6 @@ body.dashboard-page {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 20px;
-  padding-top: var(--nav-offset); /* Ensure dashboard is not hidden behind the navbar */
   box-sizing: border-box;
   animation: fadeIn 0.7s ease-out;
 }
@@ -52,7 +31,6 @@ body.dashboard-page {
   gap: 15px;
 }
 
-/* Styling for the network selector */
 .network-selector {
   display: flex;
   align-items: center;
@@ -67,11 +45,177 @@ body.dashboard-page {
   white-space: nowrap;
 }
 
-/* More CSS here as per the original file, completely retained */
+/* Network button row */
+.network-selector{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
 
-/* =========================================
-   Metric Grid (Specific Spacing)
-   ========================================= */
+/* Uniform compact “pill” buttons */
+.net-btn{
+  --h: 36px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  height: var(--h);
+  padding: 0 12px;
+  border-radius: 12px;
+
+  border: 1px solid rgba(255,255,255,0.14);
+  background: linear-gradient(135deg, rgba(0,0,0,0.38), rgba(0,0,0,0.62));
+  color: var(--text-primary);
+
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.03),
+    0 10px 22px rgba(0,0,0,0.45);
+
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    filter 0.18s ease;
+}
+
+/* Icon becomes a “mini badge” */
+.net-icon{
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+}
+
+/* Hover glow */
+.net-btn:hover{
+  transform: translateY(-1px);
+  border-color: rgba(0, 212, 255, 0.55);
+  background: linear-gradient(135deg, rgba(0,0,0,0.48), rgba(0,0,0,0.78));
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.14),
+    0 14px 28px rgba(0,0,0,0.55);
+  filter: saturate(1.08);
+}
+
+/* Click feedback */
+.net-btn:active{
+  transform: translateY(0px) scale(0.98);
+}
+
+/* Keyboard focus (accessibility) */
+.net-btn:focus-visible{
+  outline: none;
+  border-color: rgba(0, 212, 255, 0.85);
+  box-shadow:
+    0 0 0 3px rgba(0, 212, 255, 0.18),
+    0 14px 28px rgba(0,0,0,0.55);
+}
+
+/* Optional: “selected network” state if you toggle .is-active in JS */
+.net-btn.is-active{
+  border-color: var(--accent-secondary);
+  background:
+    radial-gradient(circle at 15% 10%, rgba(0, 212, 255, 0.16), transparent 55%),
+    linear-gradient(135deg, rgba(0,0,0,0.45), rgba(0,0,0,0.72));
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.18),
+    0 16px 32px rgba(0,0,0,0.6);
+}
+
+/* Small screens: slightly tighter */
+@media (max-width: 520px){
+  .net-btn{
+    --h: 34px;
+    padding: 0 10px;
+    font-size: 0.84rem;
+  }
+  .net-icon{
+    width: 17px;
+    height: 17px;
+  }
+}
+
+
+.connection-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffb86c;
+  transition: all 0.3s ease;
+}
+
+.conn-dot.live {
+  background: #50fa7b;
+  box-shadow: 0 0 10px #50fa7b;
+}
+
+#connText {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 20px;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.dashboard-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.dashboard-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 380px;
+  flex-shrink: 0;
+}
+
+.dashboard-metrics-title {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: var(--accent-secondary);
+}
+
+.dashboard-metrics {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .dashboard-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -87,39 +231,402 @@ body.dashboard-page {
   font-size: 1.5em;
 }
 
+/* Widget header/body */
+.widget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 10px;
+}
+
+.widget-title {
+  font-size: 1.1em;
+  font-weight: 700;
+  color: var(--accent-secondary);
+}
+
+.widget-tag {
+  font-size: 0.8em;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--accent-tertiary);
+  color: var(--text-secondary);
+}
+
+.widget-body {
+  width: 100%;
+}
+
+/* Widget chart container */
+.widget-chart {
+  width: 100%;
+  max-width: 100%;
+  height: 240px;
+  position: relative;
+}
+
+.widget-chart--tall {
+  height: 320px !important;
+}
+
+.widget-chart canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.widget-chart::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 12px;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.15), transparent 70%);
+  filter: blur(18px);
+  z-index: -1;
+}
+
+.widget-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--accent-primary);
+  color: var(--text-primary);
+  font-size: 0.85em;
+  margin: 3px;
+}
+
+.whale-item {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.badge-warn {
+  color: #ff6e6e;
+  font-weight: 700;
+}
+
+.badge-good {
+  color: #00e676;
+  font-weight: 700;
+}
+
+.latency-ribbon {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.latency-segment {
+  height: 100%;
+  opacity: 0.6;
+}
+
+.latency-segment.fast { background: #00e676; }
+.latency-segment.medium { background: #ffb86c; }
+.latency-segment.slow { background: #ff6e6e; }
+
 /* =========================================
-   Responsive Adjustments (No Original Styles Omitted)
+   Neon Ledger Conveyor & Cards
    ========================================= */
 
-/* Single column layout for mobile devices */
-@media (max-width: 768px) {
-  .dashboard-page {
-    padding: 15px;
+.ledger-stream-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ledger-stream-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  padding: 10px 0;
+}
+
+.ledger-stream-track {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 18px;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.ledger-stream-shell:hover .ledger-stream-animate {
+  animation-play-state: paused;
+}
+
+.ledger-stream-particles {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.ledger-particle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255,255,255,0.6), transparent 70%);
+  opacity: 0.25;
+  filter: blur(1px);
+  animation: ledgerParticleDrift linear infinite;
+}
+
+.ledger-card {
+  position: relative;
+  flex: 0 0 auto;
+  transform: translateZ(0);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+  z-index: 1;
+  width: 420px;
+  min-width: 420px;
+}
+
+.ledger-card:hover {
+  transform: translateY(-6px);
+  filter: saturate(1.15);
+}
+
+.ledger-card-inner {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 60%),
+    linear-gradient(135deg, rgba(0,0,0,0.7), rgba(0,0,0,0.8));
+  border-radius: 16px;
+  padding: 14px 18px 16px;
+  overflow: hidden;
+}
+
+.ledger-card-body {
+  min-width: 0;
+}
+
+.ledger-card::before {
+  content: "";
+  position: absolute;
+  inset: -35%;
+  opacity: 0.35; /* FIX: was 0.0, made aura invisible */
+  filter: blur(32px);
+  z-index: 0;
+  mix-blend-mode: screen;
+}
+
+@keyframes ledgerAuraPulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 0.85; transform: scale(1.05); }
+}
+
+.ledger-card--payment::before {
+  background: radial-gradient(circle at 0 0,
+    rgba(80,184,255,0.75),
+    rgba(0,100,255,0.15),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--offer::before {
+  background: radial-gradient(circle at 100% 0,
+    rgba(191,90,255,0.75),
+    rgba(120,30,255,0.2),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--nft::before {
+  background: radial-gradient(circle at 50% 0,
+    rgba(255,159,67,0.8),
+    rgba(255,111,0,0.25),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--trust::before {
+  background: radial-gradient(circle at 0 100%,
+    rgba(0,217,158,0.8),
+    rgba(0,150,136,0.25),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+.ledger-card--other::before {
+  background: radial-gradient(circle at 100% 100%,
+    rgba(241,250,140,0.85),
+    rgba(180,200,80,0.3),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+
+.ledger-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ledger-id {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--accent-secondary);
+  text-shadow: 0 0 10px var(--glow-color);
+  white-space: nowrap;
+}
+
+.ledger-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ledger-tag {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.2);
+  white-space: nowrap;
+}
+
+.ledger-main-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ledger-main-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ledger-stat-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+  white-space: nowrap;
+}
+
+.ledger-stat-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-secondary);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ledger-type-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ledger-type-row {
+  display: grid;
+  grid-template-columns: 74px 1fr 52px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.ledger-type-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ledger-type-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ledger-type-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.4s ease-out;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.type-payment { background: linear-gradient(90deg,#40a9ff,#00d4ff); color:#00d4ff; }
+.type-offer   { background: linear-gradient(90deg,#ff9f43,#ff6b1a); color:#ff9f43; }
+.type-nft     { background: linear-gradient(90deg,#ff9f43,#ff3f81); color:#ff9f43; }
+.type-trust   { background: linear-gradient(90deg,#00e6a8,#00b894); color:#00e6a8; }
+.type-other   { background: linear-gradient(90deg,#f1fa8c,#ffe66d); color:#f1fa8c; }
+
+.ledger-type-count {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .dashboard-columns {
+    grid-template-columns: 1fr;
+    gap: 15px;
   }
 
-  .dashboard-metric-grid {
-    grid-template-columns: 1fr; /* Make all items stack vertically */
+  .dashboard-col-side {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 15px;
+  }
+
+  .ledger-card {
+    width: 380px;
+    min-width: 380px;
   }
 }
 
-@media (max-width: 480px) {
-  .dashboard-metric-grid {
-    grid-template-columns: 1fr; /* Stacked vertically */
+@media (max-width: 768px) {
+  .dashboard-page { padding: 0 15px; }
+
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
   }
 
-  /* Ensure ledger cards fit smaller devices */
+  .network-selector { justify-content: center; }
+  .connection-box { justify-content: center; }
+
+  .dashboard-metric-grid { grid-template-columns: repeat(2, 1fr); }
+
   .ledger-card {
-    width: auto; /* Responsive ledger-card width */
+    width: 320px;
+    min-width: 320px;
+  }
+
+  .ledger-main-row { grid-template-columns: repeat(2, 1fr); }
+  .ledger-type-row { grid-template-columns: 70px 1fr 46px; }
+}
+
+@media (max-width: 480px) {
+  .dashboard-metric-grid { grid-template-columns: 1fr; }
+
+  .ledger-card {
+    width: 280px;
+    min-width: 280px;
   }
 }
 
 @keyframes fadeSlideIn {
-  0% {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; transform: translateY(-15px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
