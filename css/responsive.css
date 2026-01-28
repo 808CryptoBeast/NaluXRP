@@ -1,51 +1,65 @@
-/* =========================================
-   NaluXrp 🌊 – Responsive Tweaks
-   (responsive.css)
-   ========================================= */
-
-/* Container padding on mid screens */
-@media (max-width: 992px) {
-  .container {
-    padding: 20px;
-  }
+/* Global responsive fixes */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 100%; /* Base font-sized to scale for accessibility */
+  margin: 0;
+  padding: 0;
 }
 
-/* Phone-ish widths */
-@media (max-width: 768px) {
-  body {
-    padding-top: 70px;
-  }
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
 
+/* Small devices (portrait phones, less than 576px) */
+@media (max-width: 575.98px) {
   .container {
-    padding: 15px;
+    padding: 8px;
   }
 
-  .chart-section {
-    padding: 20px;
-  }
-
-  .chart-title {
-    font-size: 1.5em;
-  }
-
-  .tokens-controls {
+  .navbar {
     flex-direction: column;
-    gap: 14px;
+    padding: 10px;
   }
 
-  .tokens-stats {
-    flex-wrap: wrap;
+  .navbar .nav-links {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+  }
+
+  .navbar-toggle {
+    display: block;
+    background: var(--accent-primary);
+    border: none;
+    padding: 8px 16px;
+    font-size: 1rem;
+    cursor: pointer;
+    color: #fff;
+  }
+
+  .footer {
+    font-size: 0.8rem;
   }
 }
 
-/* Extra tiny screens */
-@media (max-width: 500px) {
-  .status-badge {
-    display: none;
+/* Medium devices (landscape tablets and smaller) */
+@media (max-width: 768px) {
+  .navbar .nav-links {
+    flex-direction: column;
   }
 
-  .navbar-toggle-btn {
-    right: 8px;
-    bottom: 8px;
+  .about-grid {
+    grid-template-columns: 1fr; /* One-column layout */
+  }
+}
+
+/* Larger than tablet but smaller than standard desktops */
+@media (max-width: 1200px) {
+  .about-hero {
+    padding: 10px;
   }
 }
