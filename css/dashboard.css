@@ -2,6 +2,50 @@
    NaluXrp 🌊 — Dashboard V2 Styles
    ========================================= */
 
+/* =========================================================
+   ✅ Dashboard Background Image (NEW)
+   Image exists at: /images/Dashboard-background.jpg
+   This CSS file is /css/dashboard.css, so use ../images/...
+   ========================================================= */
+
+#dashboard{
+  position: relative;
+  overflow: hidden;
+  min-height: 100vh;
+}
+
+/* Background image layer */
+#dashboard::before{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("../images/Dashboard-background.jpg") center / cover no-repeat;
+  background-attachment: fixed;
+  z-index: 0;
+}
+
+/* Readability overlay */
+#dashboard::after{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.55), rgba(0,0,0,0.82));
+  z-index: 0;
+}
+
+/* Keep dashboard content above background */
+#dashboard > *{
+  position: relative;
+  z-index: 1;
+}
+
+/* Mobile/iOS: fixed backgrounds can be glitchy */
+@media (max-width: 768px){
+  #dashboard::before{
+    background-attachment: scroll;
+  }
+}
+
 /* Base container for dashboard page */
 .dashboard-page {
   width: 100%;
