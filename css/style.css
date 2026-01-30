@@ -212,7 +212,7 @@ body.inspector {
 
 /* Landing Page Background */
 body.landing-page {
-  background-image: url("../images/LandingPage-background.jpg");
+  background-image: url("../images/Landingpage-background.jpg");
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
@@ -226,4 +226,5 @@ body.landing-page {
     background-attachment: scroll;
   }
 }
+
 
