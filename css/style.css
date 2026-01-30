@@ -178,17 +178,16 @@ body.theme-hawaiian {
 /* Dashboard Background */
 body.dashboard {
   background-image: url("../images/Dashboard-background.jpg");
-  background-size: cover; /* Ensure the background fully covers the viewport */
+  background-size: contain; /* Ensure the background fully fits in the viewport */
   background-position: center; /* Center the focal point */
   background-repeat: no-repeat; /* Prevent tiling */
-  background-attachment: fixed; /* Keep the background in place for desktop scrolling */
+  background-attachment: scroll; /* Scrolling background for performance */
 }
 
 @media (max-width: 768px) {
   /* Adjust dashboard background for smaller screens */
   body.dashboard {
-    background-size: cover; /* Still covers while fitting smaller screens */
-    background-attachment: scroll; /* Improve performance for scrolling on mobile */
+    background-size: contain; /* Keep fitting within smaller screens */
     background-position: top center; /* Refocus the top part of the image */
   }
 }
@@ -196,35 +195,31 @@ body.dashboard {
 /* Account Inspector Page Background */
 body.inspector {
   background-image: url("../images/InspectorPage-background.jpg");
-  background-size: cover;
-  background-position: center;
+  background-size: contain; /* Fit the full image */
+  background-position: center; /* Center for alignment */
   background-repeat: no-repeat;
-  background-attachment: fixed;
+  background-attachment: scroll; /* Better performance on mobile */
 }
 
 @media (max-width: 768px) {
   body.inspector {
-    background-size: auto 100%; /* Shrink to fit narrower devices */
-    background-position: center top; /* Focus main content */
-    background-attachment: scroll; /* Fix performance issues on mobile */
+    background-size: contain;
+    background-position: center top;
   }
 }
 
 /* Landing Page Background */
 body.landing-page {
   background-image: url("../images/Landingpage-background.jpg");
-  background-size: cover;
-  background-position: center;
+  background-size: contain; /* Ensure the image scales completely */
+  background-position: center; /* Align to center */
   background-repeat: no-repeat;
-  background-attachment: fixed;
+  background-attachment: scroll; /* Remove 'fixed' to align correctly */
 }
 
 @media (max-width: 768px) {
   body.landing-page {
-    background-size: contain; /* Ensure the image scales for readability */
+    background-size: contain;
     background-position: center top;
-    background-attachment: scroll;
   }
 }
-
-
