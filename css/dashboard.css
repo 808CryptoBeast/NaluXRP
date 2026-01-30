@@ -12,6 +12,10 @@
   position: relative;
   overflow: hidden;
   min-height: 100vh;
+
+  /* ✅ FORCE CENTERING OF THE DASHBOARD WRAPPER */
+  display: flex;
+  justify-content: center;
 }
 
 /* Background image layer */
@@ -19,8 +23,16 @@
   content: "";
   position: absolute;
   inset: 0;
+
+  /* ✅ ACTUAL BACKGROUND IMAGE + PROPERTIES */
+  background-image: url("../images/Dashboard-background.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+
   background-attachment: fixed;
   z-index: 0;
+  pointer-events: none;
 }
 
 /* Readability overlay */
@@ -30,6 +42,7 @@
   inset: 0;
   background: linear-gradient(180deg, rgba(0,0,0,0.55), rgba(0,0,0,0.82));
   z-index: 0;
+  pointer-events: none;
 }
 
 /* Keep dashboard content above background */
@@ -49,7 +62,14 @@
 .dashboard-page {
   width: 100%;
   max-width: 1400px;
-  margin: 0 auto;
+
+  /* ✅ FORCE CENTER (even if parent styles are weird) */
+  margin-left: auto !important;
+  margin-right: auto !important;
+  align-self: center;
+  justify-self: center;
+  float: none !important;
+
   padding: 0 20px;
   box-sizing: border-box;
   animation: fadeIn 0.7s ease-out;
@@ -778,10 +798,3 @@
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
-
-
-
-
-
-
-
