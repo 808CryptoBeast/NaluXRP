@@ -19,6 +19,69 @@
   };
 
   /* -----------------------------
+     ✅ BODY CLASS / BACKGROUND HELPERS (NEW)
+     - Preserve theme-* while allowing body.dashboard / body.inspector backgrounds
+     - Landing background applied inline to avoid conflicting with .landing-page container styles
+  ----------------------------- */
+  function applyThemeClass(theme) {
+    const body = document.body;
+    if (!body) return;
+
+    // Remove existing theme-* classes safely
+    (window.UI.themes || []).forEach((t) => body.classList.remove(`theme-${t}`));
+
+    // Add current theme class
+    body.classList.add(`theme-${theme}`);
+  }
+
+  function applyPageClass(pageId) {
+    const body = document.body;
+    if (!body) return;
+
+    // Clear landing inline background whenever we switch "real pages"
+    clearLandingBackground();
+
+    // Ensure only one of these page classes is active
+    body.classList.remove("dashboard", "inspector");
+
+    // Inspector uses its own background class; everything else uses dashboard background
+    if (pageId === "inspector") body.classList.add("inspector");
+    else body.classList.add("dashboard");
+  }
+
+  function setLandingBackground() {
+    const body = document.body;
+    if (!body) return;
+
+    // Mark so we only clear what we set
+    body.dataset.landingBg = "1";
+
+    // ✅ Uses correct path from index.html
+    body.style.backgroundImage = 'url("images/LandingPage-background.jpg")';
+    body.style.backgroundSize = "cover";
+    body.style.backgroundPosition = "center";
+    body.style.backgroundRepeat = "no-repeat";
+
+    // Match your mobile performance intent
+    const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+    body.style.backgroundAttachment = isMobile ? "scroll" : "fixed";
+  }
+
+  function clearLandingBackground() {
+    const body = document.body;
+    if (!body) return;
+
+    if (body.dataset.landingBg === "1") {
+      body.style.backgroundImage = "";
+      body.style.backgroundSize = "";
+      body.style.backgroundPosition = "";
+      body.style.backgroundRepeat = "";
+      body.style.backgroundAttachment = "";
+      delete body.dataset.landingBg;
+    }
+  }
+
+  /* -----------------------------
      PAGE INIT MAP
      (Single source of truth)
      NOTE: 'inspector' handler added — loads/initializes the full-page inspector
@@ -169,6 +232,9 @@
      NAVIGATION
   ----------------------------- */
   function switchPage(pageId) {
+    // ✅ Apply background class for page (dashboard vs inspector)
+    applyPageClass(pageId);
+
     // If the section doesn't exist, create a stub so handler can attach
     if (!document.getElementById(pageId)) {
       const stub = document.createElement("section");
@@ -201,6 +267,11 @@
      LANDING PAGE
   ----------------------------- */
   function showLandingPage() {
+    // ✅ Landing background (inline so we don't put "landing-page" on <body>)
+    // Keep body.dashboard class (it won't block inline background)
+    applyPageClass("dashboard");
+    setLandingBackground();
+
     const container = document.getElementById("dashboard");
     if (!container) return;
 
@@ -423,7 +494,9 @@
 
   function setTheme(theme) {
     window.UI.currentTheme = theme;
-    document.body.className = `theme-${theme}`;
+
+    // ✅ FIX: do NOT overwrite body.className (it kills dashboard/inspector classes)
+    applyThemeClass(theme);
   }
 
   /* -----------------------------
@@ -487,7 +560,12 @@
      INIT
   ----------------------------- */
   document.addEventListener("DOMContentLoaded", () => {
+    // Default page background class (dashboard)
+    applyPageClass("dashboard");
+
+    // Apply theme without wiping page classes
     setTheme(window.UI.currentTheme);
+
     initNavbar();
 
     document.querySelectorAll(".page-section").forEach((s) => {
@@ -499,6 +577,14 @@
       dash.style.display = "block";
       showLandingPage();
     }
+
+    // Keep landing bg attachment responsive if user rotates/resizes
+    window.addEventListener("resize", () => {
+      if (document.body && document.body.dataset.landingBg === "1") {
+        const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+        document.body.style.backgroundAttachment = isMobile ? "scroll" : "fixed";
+      }
+    });
 
     setInterval(updateLandingConnectionStatus, 1500);
   });
