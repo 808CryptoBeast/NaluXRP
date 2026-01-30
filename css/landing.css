@@ -6,6 +6,24 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 100px 20px;
+
+  /* ✅ Background image */
+  position: relative;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)),
+    url("../images/LandingPage-background.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Mobile browsers can be glitchy with background-attachment: fixed */
+@media (max-width: 900px) {
+  .landing-page {
+    background-attachment: scroll;
+  }
 }
 
 /* HERO */
