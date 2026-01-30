@@ -3,9 +3,9 @@
    ========================================= */
 
 /* =========================================================
-   ✅ Dashboard Background Image (NEW)
-   Image exists at: /images/Dashboard-background.jpg
-   This CSS file is /css/dashboard.css, so use ../images/...
+   ✅ DASHBOARD OVERLAY ONLY (NO BACKGROUND IMAGE)
+   - Keeps the opaque/dim tint layer
+   - DOES NOT set any background-image here
    ========================================================= */
 
 #dashboard{
@@ -13,29 +13,15 @@
   overflow: hidden;
   min-height: 100vh;
 
-  /* ✅ FORCE CENTERING OF THE DASHBOARD WRAPPER */
-  display: flex;
-  justify-content: center;
+  /* ✅ ensure the dashboard wrapper centers correctly */
+  width: 100%;
+  display: block !important;
 }
 
-/* Background image layer */
-#dashboard::before{
-  content: "";
-  position: absolute;
-  inset: 0;
+/* (Image layer removed on purpose) */
+/* If you had #dashboard::before with background-image before, it's gone. */
 
-  /* ✅ ACTUAL BACKGROUND IMAGE + PROPERTIES */
-  background-image: url("../images/Dashboard-background.jpg");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-
-  background-attachment: fixed;
-  z-index: 0;
-  pointer-events: none;
-}
-
-/* Readability overlay */
+/* Readability overlay (kept) */
 #dashboard::after{
   content: "";
   position: absolute;
@@ -45,30 +31,19 @@
   pointer-events: none;
 }
 
-/* Keep dashboard content above background */
+/* Keep dashboard content above overlay */
 #dashboard > *{
   position: relative;
   z-index: 1;
 }
 
-/* Mobile/iOS: fixed backgrounds can be glitchy */
-@media (max-width: 768px){
-  #dashboard::before{
-    background-attachment: scroll;
-  }
-}
-
 /* Base container for dashboard page */
-.dashboard-page {
+.dashboard-page{
   width: 100%;
   max-width: 1400px;
 
-  /* ✅ FORCE CENTER (even if parent styles are weird) */
-  margin-left: auto !important;
-  margin-right: auto !important;
-  align-self: center;
-  justify-self: center;
-  float: none !important;
+  /* ✅ hard-center the entire dashboard wrapper */
+  margin: 0 auto !important;
 
   padding: 0 20px;
   box-sizing: border-box;
@@ -76,11 +51,12 @@
 }
 
 /* Header: network selector + connection box */
-.dashboard-header {
+.dashboard-header{
   width: 100%;
   max-width: 1400px;
   margin: 0 auto 20px auto;
   padding: 0;
+
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -89,21 +65,21 @@
 }
 
 /* Network selector */
-.network-selector {
+.network-selector{
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.selector-label {
+.selector-label{
   font-size: 0.95em;
   color: var(--text-secondary);
   font-weight: 600;
   white-space: nowrap;
 }
 
-.net-btn {
+.net-btn{
   display: flex;
   align-items: center;
   gap: 6px;
@@ -119,19 +95,19 @@
   transition: 0.2s ease;
 }
 
-.net-btn:hover {
+.net-btn:hover{
   background: rgba(0, 0, 0, 0.5);
   border-color: var(--accent-secondary);
 }
 
-.net-icon {
+.net-icon{
   width: 16px;
   height: 16px;
   border-radius: 2px;
 }
 
 /* Connection box */
-.connection-box {
+.connection-box{
   display: flex;
   align-items: center;
   gap: 8px;
@@ -141,7 +117,7 @@
   border: 1px solid var(--accent-tertiary);
 }
 
-.conn-dot {
+.conn-dot{
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -149,12 +125,12 @@
   transition: all 0.3s ease;
 }
 
-.conn-dot.live {
+.conn-dot.live{
   background: #50fa7b;
   box-shadow: 0 0 10px #50fa7b;
 }
 
-#connText {
+#connText{
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -162,24 +138,41 @@
   transition: color 0.2s ease;
 }
 
-/* Columns layout */
-.dashboard-columns {
+/* =========================================================
+   ✅ CENTERING FIX FOR YOUR CURRENT MARKUP
+   Your dashboard markup often only renders .dashboard-col-main
+   (no .dashboard-col-side). If grid stays "1fr 380px", the
+   content looks shoved off-center.
+   FIX: default to 1-column; auto-upgrade to 2-col only if the
+   side column actually exists (modern browsers).
+   ========================================================= */
+
+.dashboard-columns{
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 1fr; /* ✅ default single column = centered */
   gap: 20px;
+
   width: 100%;
   max-width: 1400px;
   margin: 0 auto;
 }
 
-.dashboard-col-main {
+/* If the side column exists, use 2 columns */
+@supports selector(.dashboard-columns:has(.dashboard-col-side)){
+  .dashboard-columns:has(.dashboard-col-side){
+    grid-template-columns: minmax(0, 1fr) 380px;
+  }
+}
+
+.dashboard-col-main{
   display: flex;
   flex-direction: column;
   gap: 20px;
   min-width: 0;
+  width: 100%;
 }
 
-.dashboard-col-side {
+.dashboard-col-side{
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -188,19 +181,19 @@
 }
 
 /* Metrics section */
-.dashboard-metrics-title {
+.dashboard-metrics-title{
   font-size: 1.4em;
   font-weight: 700;
   margin-bottom: 12px;
   color: var(--accent-secondary);
 }
 
-.dashboard-metrics {
+.dashboard-metrics{
   width: 100%;
   box-sizing: border-box;
 }
 
-.dashboard-metric-grid {
+.dashboard-metric-grid{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 15px;
@@ -208,18 +201,16 @@
 }
 
 /* Override metric-card slightly for dashboard */
-.dashboard-metric-grid .metric-card {
+.dashboard-metric-grid .metric-card{
   text-align: left;
 }
 
-.dashboard-metric-grid .metric-value {
+.dashboard-metric-grid .metric-value{
   font-size: 1.5em;
 }
 
-/* Use the centralized .card/.widget-card for widget visuals; keep widget-specific layout here */
-
 /* Widget header/body */
-.widget-header {
+.widget-header{
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -227,13 +218,13 @@
   gap: 10px;
 }
 
-.widget-title {
+.widget-title{
   font-size: 1.1em;
   font-weight: 700;
   color: var(--accent-secondary);
 }
 
-.widget-tag {
+.widget-tag{
   font-size: 0.8em;
   padding: 3px 10px;
   border-radius: 8px;
@@ -242,28 +233,28 @@
   color: var(--text-secondary);
 }
 
-.widget-body {
+.widget-body{
   width: 100%;
 }
 
 /* Widget chart container */
-.widget-chart {
+.widget-chart{
   width: 100%;
   max-width: 100%;
   height: 240px;
   position: relative;
 }
 
-.widget-chart--tall {
+.widget-chart--tall{
   height: 320px !important;
 }
 
-.widget-chart canvas {
+.widget-chart canvas{
   width: 100% !important;
   height: 100% !important;
 }
 
-.widget-chart::after {
+.widget-chart::after{
   content: "";
   position: absolute;
   inset: -8px;
@@ -274,7 +265,7 @@
 }
 
 /* Pills */
-.widget-pill {
+.widget-pill{
   display: inline-block;
   padding: 4px 10px;
   border-radius: 10px;
@@ -286,7 +277,7 @@
 }
 
 /* Whale list */
-.whale-item {
+.whale-item{
   display: flex;
   justify-content: space-between;
   margin: 8px 0;
@@ -294,18 +285,18 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.badge-warn {
+.badge-warn{
   color: #ff6e6e;
   font-weight: 700;
 }
 
-.badge-good {
+.badge-good{
   color: #00e676;
   font-weight: 700;
 }
 
 /* Latency ribbon */
-.latency-ribbon {
+.latency-ribbon{
   display: flex;
   width: 100%;
   height: 10px;
@@ -314,40 +305,33 @@
   margin-bottom: 10px;
 }
 
-.latency-segment {
+.latency-segment{
   height: 100%;
   opacity: 0.6;
 }
 
-.latency-segment.fast {
-  background: #00e676;
-}
-.latency-segment.medium {
-  background: #ffb86c;
-}
-.latency-segment.slow {
-  background: #ff6e6e;
-}
+.latency-segment.fast{ background: #00e676; }
+.latency-segment.medium{ background: #ffb86c; }
+.latency-segment.slow{ background: #ff6e6e; }
 
 /* =========================================
    Neon Ledger Conveyor & Cards
    ========================================= */
 
-/* Conveyor shell */
-.ledger-stream-card {
+.ledger-stream-card{
   position: relative;
   overflow: hidden;
   width: 100%;
 }
 
-.ledger-stream-shell {
+.ledger-stream-shell{
   position: relative;
   width: 100%;
   overflow: hidden;
   padding: 10px 0;
 }
 
-.ledger-stream-track {
+.ledger-stream-track{
   display: inline-flex;
   gap: 18px;
   white-space: nowrap;
@@ -355,16 +339,16 @@
 }
 
 /* Apply animation class (keyframes are defined in components/animations.css) */
-.ledger-stream-animate {
+.ledger-stream-animate{
   animation: ledgerConveyorMove 40s linear infinite;
 }
 
-.ledger-stream-shell:hover .ledger-stream-animate {
+.ledger-stream-shell:hover .ledger-stream-animate{
   animation-play-state: paused;
 }
 
 /* Particles underneath */
-.ledger-stream-particles {
+.ledger-stream-particles{
   pointer-events: none;
   position: absolute;
   inset: 0;
@@ -372,7 +356,7 @@
   z-index: 0;
 }
 
-.ledger-particle {
+.ledger-particle{
   position: absolute;
   width: 8px;
   height: 8px;
@@ -383,21 +367,20 @@
   animation: ledgerParticleDrift linear infinite;
 }
 
-/* Ledger cards — base properties moved to components/card.css; keep ledger-specific extras below */
-.ledger-card {
+/* Ledger cards — keep ledger-specific extras below */
+.ledger-card{
   position: relative;
   transform: translateZ(0);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
   z-index: 1;
 }
 
-.ledger-card:hover {
+.ledger-card:hover{
   transform: translateY(-6px);
   filter: saturate(1.15);
 }
 
-/* Inner content */
-.ledger-card-inner {
+.ledger-card-inner{
   background:
     radial-gradient(circle at 20% 0%, rgba(255,255,255,0.06), transparent 60%),
     linear-gradient(135deg, rgba(0,0,0,0.7), rgba(0,0,0,0.8));
@@ -406,7 +389,7 @@
 }
 
 /* Aura underlay */
-.ledger-card::before {
+.ledger-card::before{
   content: "";
   position: absolute;
   inset: -35%;
@@ -416,40 +399,40 @@
   mix-blend-mode: screen;
 }
 
-@keyframes ledgerAuraPulse {
+@keyframes ledgerAuraPulse{
   0%, 100% { opacity: 0.35; transform: scale(1); }
   50%      { opacity: 0.85; transform: scale(1.05); }
 }
 
-.ledger-card--payment::before {
+.ledger-card--payment::before{
   background: radial-gradient(circle at 0 0,
     rgba(80,184,255,0.75),
     rgba(0,100,255,0.15),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
-.ledger-card--offer::before {
+.ledger-card--offer::before{
   background: radial-gradient(circle at 100% 0,
     rgba(191,90,255,0.75),
     rgba(120,30,255,0.2),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
-.ledger-card--nft::before {
+.ledger-card--nft::before{
   background: radial-gradient(circle at 50% 0,
     rgba(255,159,67,0.8),
     rgba(255,111,0,0.25),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
-.ledger-card--trust::before {
+.ledger-card--trust::before{
   background: radial-gradient(circle at 0 100%,
     rgba(0,217,158,0.8),
     rgba(0,150,136,0.25),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
-.ledger-card--other::before {
+.ledger-card--other::before{
   background: radial-gradient(circle at 100% 100%,
     rgba(241,250,140,0.85),
     rgba(180,200,80,0.3),
@@ -458,31 +441,31 @@
 }
 
 /* Ledger card header */
-.ledger-card-header {
+.ledger-card-header{
   display: flex;
   justify-content: space-between;
   margin-bottom: 10px;
 }
 
-.ledger-id {
+.ledger-id{
   font-weight: 700;
   font-size: 1.05rem;
   color: var(--accent-secondary);
   text-shadow: 0 0 10px var(--glow-color);
 }
 
-.ledger-meta {
+.ledger-meta{
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.ledger-time {
+.ledger-time{
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
 
-.ledger-tag {
+.ledger-tag{
   font-size: 0.8rem;
   padding: 4px 10px;
   border-radius: 999px;
@@ -491,50 +474,50 @@
 }
 
 /* Stats row */
-.ledger-main-row {
+.ledger-main-row{
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 10px;
 }
 
-.ledger-main-stat {
+.ledger-main-stat{
   display: flex;
   flex-direction: column;
 }
 
-.ledger-stat-label {
+.ledger-stat-label{
   font-size: 0.78rem;
   color: var(--text-secondary);
   margin-bottom: 3px;
 }
 
-.ledger-stat-value {
+.ledger-stat-value{
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--accent-secondary);
 }
 
 /* Type bars */
-.ledger-type-bars {
+.ledger-type-bars{
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.ledger-type-row {
+.ledger-type-row{
   display: grid;
   grid-template-columns: 70px 1fr auto;
   gap: 6px;
   align-items: center;
 }
 
-.ledger-type-label {
+.ledger-type-label{
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
 
-.ledger-type-bar {
+.ledger-type-bar{
   width: 100%;
   height: 8px;
   border-radius: 999px;
@@ -542,7 +525,7 @@
   overflow: hidden;
 }
 
-.ledger-type-fill {
+.ledger-type-fill{
   height: 100%;
   border-radius: inherit;
   transition: width 0.4s ease-out;
@@ -550,28 +533,13 @@
 }
 
 /* Type colors */
-.type-payment {
-  background: linear-gradient(90deg,#40a9ff,#00d4ff);
-  color:#00d4ff;
-}
-.type-offer {
-  background: linear-gradient(90deg,#ff9f43,#ff6b1a);
-  color:#ff9f43;
-}
-.type-nft {
-  background: linear-gradient(90deg,#ff9f43,#ff3f81);
-  color:#ff9f43;
-}
-.type-trust {
-  background: linear-gradient(90deg,#00e6a8,#00b894);
-  color:#00e6a8;
-}
-.type-other {
-  background: linear-gradient(90deg,#f1fa8c,#ffe66d);
-  color:#f1fa8c;
-}
+.type-payment{ background: linear-gradient(90deg,#40a9ff,#00d4ff); color:#00d4ff; }
+.type-offer{ background: linear-gradient(90deg,#ff9f43,#ff6b1a); color:#ff9f43; }
+.type-nft{ background: linear-gradient(90deg,#ff9f43,#ff3f81); color:#ff9f43; }
+.type-trust{ background: linear-gradient(90deg,#00e6a8,#00b894); color:#00e6a8; }
+.type-other{ background: linear-gradient(90deg,#f1fa8c,#ffe66d); color:#f1fa8c; }
 
-.ledger-type-count {
+.ledger-type-count{
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -581,7 +549,7 @@
    Ledger Orb & Heatmap
    ========================================= */
 
-.ledger-orb-layout {
+.ledger-orb-layout{
   display: flex;
   gap: 1.5rem;
   align-items: center;
@@ -590,7 +558,7 @@
   box-sizing: border-box;
 }
 
-.ledger-orb-wrapper {
+.ledger-orb-wrapper{
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -598,27 +566,27 @@
   max-width: 240px;
 }
 
-.ledger-orb-wrapper canvas {
+.ledger-orb-wrapper canvas{
   max-width: 100%;
   max-height: 240px;
   border-radius: 50%;
 }
 
-.ledger-orb-stats {
+.ledger-orb-stats{
   flex: 1 1 180px;
   display: grid;
   gap: 0.5rem;
   min-width: 0;
 }
 
-.orb-stat-row {
+.orb-stat-row{
   display: flex;
   justify-content: space-between;
   font-size: 0.9rem;
 }
 
 /* Heatmap */
-.tx-heatmap-grid {
+.tx-heatmap-grid{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 0.75rem;
@@ -626,7 +594,7 @@
   box-sizing: border-box;
 }
 
-.tx-heat-tile {
+.tx-heat-tile{
   position: relative;
   padding: 0.75rem 0.8rem;
   border-radius: 0.75rem;
@@ -640,7 +608,7 @@
   overflow: hidden;
 }
 
-.tx-heat-tile::before {
+.tx-heat-tile::before{
   content: "";
   position: absolute;
   inset: 0;
@@ -651,25 +619,25 @@
   pointer-events: none;
 }
 
-.tx-heat-label {
+.tx-heat-label{
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
 }
 
-.tx-heat-value {
+.tx-heat-value{
   font-size: 1.1rem;
   font-weight: 700;
 }
 
-.tx-heat-percent {
+.tx-heat-percent{
   font-size: 0.75rem;
   color: var(--accent-secondary);
   margin-bottom: 0.25rem;
 }
 
-.tx-heat-bar {
+.tx-heat-bar{
   position: relative;
   width: 100%;
   height: 6px;
@@ -678,7 +646,7 @@
   overflow: hidden;
 }
 
-.tx-heat-bar-fill {
+.tx-heat-bar-fill{
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg,
@@ -687,27 +655,27 @@
 }
 
 /* Optional per-type hues */
-.tx-heat-tile.heat-payment::before {
+.tx-heat-tile.heat-payment::before{
   background: radial-gradient(circle at 0 0,
     rgba(80,250,123, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
-.tx-heat-tile.heat-offer::before {
+.tx-heat-tile.heat-offer::before{
   background: radial-gradient(circle at 0 0,
     rgba(189,147,249, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
-.tx-heat-tile.heat-nft::before {
+.tx-heat-tile.heat-nft::before{
   background: radial-gradient(circle at 0 0,
     rgba(255,184,108, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
-.tx-heat-tile.heat-trust::before {
+.tx-heat-tile.heat-trust::before{
   background: radial-gradient(circle at 0 0,
     rgba(139,233,253, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
 }
-.tx-heat-tile.heat-other::before {
+.tx-heat-tile.heat-other::before{
   background: radial-gradient(circle at 0 0,
     rgba(255,121,198, calc(var(--heat, 0.5) * 0.7)),
     transparent 70%);
@@ -717,84 +685,84 @@
    Dashboard Responsive
    ========================================= */
 
-@media (max-width: 1200px) {
-  .dashboard-columns {
+@media (max-width: 1200px){
+  .dashboard-columns{
     grid-template-columns: 1fr;
     gap: 15px;
   }
 
-  .dashboard-col-side {
+  .dashboard-col-side{
     width: 100%;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 15px;
   }
 
-  .ledger-card {
+  .ledger-card{
     width: 380px;
     min-width: 380px;
   }
 }
 
-@media (max-width: 768px) {
-  .dashboard-page {
+@media (max-width: 768px){
+  .dashboard-page{
     padding: 0 15px;
   }
 
-  .dashboard-header {
+  .dashboard-header{
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
   }
 
-  .network-selector {
+  .network-selector{
     justify-content: center;
   }
 
-  .connection-box {
+  .connection-box{
     justify-content: center;
   }
 
-  .ledger-orb-layout {
+  .ledger-orb-layout{
     flex-direction: column;
     text-align: center;
   }
 
-  .ledger-orb-stats {
+  .ledger-orb-stats{
     width: 100%;
   }
 
-  .dashboard-metric-grid {
+  .dashboard-metric-grid{
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .ledger-card {
+  .ledger-card{
     width: 320px;
     min-width: 320px;
   }
 
-  .ledger-main-row {
+  .ledger-main-row{
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
-@media (max-width: 480px) {
-  .dashboard-metric-grid {
+@media (max-width: 480px){
+  .dashboard-metric-grid{
     grid-template-columns: 1fr;
   }
 
-  .tx-heatmap-grid {
+  .tx-heatmap-grid{
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .ledger-card {
+  .ledger-card{
     width: 280px;
     min-width: 280px;
   }
 }
 
 /* Extra animations (kept small; shared ones are in components/animations.css) */
-@keyframes fadeSlideIn {
+@keyframes fadeSlideIn{
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
