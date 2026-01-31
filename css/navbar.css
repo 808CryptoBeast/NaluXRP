@@ -1,60 +1,65 @@
 /* =========================================
    NaluXrp 🌊 — Navbar Styles (FULL)
-   FIXES:
-   - Mobile menu not applying because of selector mismatch (#navLinks vs .nav-links)
-   - Mobile dropdown panel not tall enough (adds max-height + scroll)
-   - Buttons/items looking white on mobile (resets appearance + dark backgrounds)
+   Mobile dropdown panel + better contrast
+   Hamburger replaced with NLF shield logo
    ========================================= */
 
+/* ---------- Variables ---------- */
 :root{
-  --nav-h: 75px; /* keep aligned with body padding-top + nav height */
+  --nav-h: 75px; /* keep in sync with your navbar height */
+  --nav-panel-bg: rgba(0,0,0,0.88);
+  --nav-btn-bg: rgba(0,0,0,0.28);
+  --nav-btn-border: rgba(255,255,255,0.14);
+  --nav-btn-hover: rgba(255,255,255,0.07);
 }
 
-/* -----------------------------------------
-   Navbar Shell
------------------------------------------ */
+/* =========================================
+   Shell
+   ========================================= */
 .navbar,
 #navbar{
-  position: fixed !important; /* override any injected "position:relative" safety styles */
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
+
+  min-height: var(--nav-h);
   z-index: 10000;
 
-  background: rgba(0,0,0,0.62);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 
-  border-bottom: 1px solid rgba(255,255,255,0.10);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  border-bottom: 2px solid var(--accent-primary);
+  box-shadow: 0 5px 30px var(--glow-color);
 
   transform: translateY(0);
-  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
 }
 
-.navbar.hide,
-#navbar.hide{
-  transform: translateY(-100%);
+.navbar.hide{
+  transform: translateY(-110%);
 }
 
-/* -----------------------------------------
-   Inner Layout
------------------------------------------ */
+/* =========================================
+   Inner layout
+   ========================================= */
 .nav-content{
   max-width: 1800px;
   margin: 0 auto;
   padding: 0 20px;
+
   min-height: var(--nav-h);
 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
 }
 
-/* -----------------------------------------
-   Logo
------------------------------------------ */
+/* =========================================
+   Logo / Brand
+   ========================================= */
 .nav-logo{
   display: flex;
   flex-direction: column;
@@ -66,23 +71,21 @@
 .logo-text{
   font-size: 1.5em;
   font-weight: 800;
-  letter-spacing: 2px;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  letter-spacing: 2px;
 }
 
 .logo-slogan{
-  font-size: 0.72em;
+  font-size: 0.7em;
   color: var(--text-secondary);
 }
 
-/* -----------------------------------------
-   Links Row (Desktop)
-   IMPORTANT: target BOTH .nav-links and #navLinks
------------------------------------------ */
-.nav-links,
-#navLinks{
+/* =========================================
+   Links row (desktop base)
+   ========================================= */
+.nav-links{
   display: flex;
   gap: 8px;
   align-items: center;
@@ -90,21 +93,20 @@
   flex: 1;
 }
 
-/* -----------------------------------------
-   Buttons / Toggles (prevents "white" defaults)
------------------------------------------ */
+/* =========================================
+   Buttons (force non-white defaults)
+   ========================================= */
 .nav-btn,
 .dropdown-toggle,
 .dropdown-item{
   appearance: none;
   -webkit-appearance: none;
 
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.14);
-
-  background: rgba(0,0,0,0.28);   /* ✅ never white */
+  border: 1px solid var(--nav-btn-border);
+  background: var(--nav-btn-bg);
   color: var(--text-primary);
 
+  border-radius: 12px;
   cursor: pointer;
   font-weight: 700;
   font-size: 0.92rem;
@@ -113,56 +115,47 @@
   align-items: center;
   gap: 8px;
 
-  text-decoration: none;
-  white-space: nowrap;
-
-  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.nav-btn,
-.dropdown-toggle{
   padding: 10px 12px;
+
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover{
-  background: rgba(255,255,255,0.06);
+  background: var(--nav-btn-hover);
   border-color: rgba(0, 212, 255, 0.35);
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(0,0,0,0.35);
+  box-shadow: 0 10px 25px rgba(0,0,0,0.35);
 }
 
 .nav-btn:active,
-.dropdown-toggle:active{
+.dropdown-toggle:active,
+.dropdown-item:active{
   transform: translateY(0);
-}
-
-.nav-btn:focus-visible,
-.dropdown-toggle:focus-visible,
-.dropdown-item:focus-visible{
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.28);
 }
 
 .nav-icon{
   font-size: 1.1rem;
-  opacity: 0.95;
+  line-height: 1;
 }
 
 .nav-label{
   display: inline-block;
+  white-space: nowrap;
 }
 
-/* -----------------------------------------
-   Dropdowns (Desktop Hover)
------------------------------------------ */
+/* =========================================
+   Dropdowns (desktop hover)
+   ========================================= */
 .nav-dropdown{
   position: relative;
   display: inline-block;
 }
 
-/* hover gap safety */
+/* little safe hover-gap so menu doesn't vanish */
 .nav-dropdown::after{
   content: "";
   position: absolute;
@@ -178,6 +171,10 @@
   top: calc(100% + 14px);
   right: 0;
 
+  background: var(--bg-tertiary);
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+
   min-width: 220px;
   padding: 10px;
 
@@ -185,16 +182,9 @@
   flex-direction: column;
   gap: 8px;
 
-  background: rgba(0,0,0,0.86);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px;
-
-  box-shadow: 0 16px 40px rgba(0,0,0,0.60);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-
+  box-shadow: 0 12px 35px rgba(0,0,0,0.65);
+  animation: slideDown 0.2s ease;
   z-index: 10002;
-  animation: slideDown 0.18s ease;
 }
 
 .nav-dropdown:hover .dropdown-menu{
@@ -203,11 +193,14 @@
 
 .dropdown-item{
   width: 100%;
+  justify-content: flex-start;
   text-align: left;
+
   padding: 10px 12px;
 
-  background: rgba(0,0,0,0.32); /* ✅ never white */
-  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.22);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-primary);
 }
 
 .dropdown-item:hover{
@@ -216,90 +209,104 @@
   transform: translateX(2px);
 }
 
-/* -----------------------------------------
-   Status badge (layout only)
------------------------------------------ */
+/* =========================================
+   Status badge (placement only)
+   ========================================= */
 .status-badge{
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  font-size: 0.82rem;
+  padding: 5px 10px;
+  font-size: 0.8rem;
 }
 
-/* -----------------------------------------
-   Desktop Theme Toggle (if you use it)
------------------------------------------ */
+/* =========================================
+   Desktop navbar toggle (if you use it)
+   ========================================= */
 .navbar-toggle{
   margin-left: 6px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: rgba(0,0,0,0.32);
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.35);
   color: var(--text-primary);
   cursor: pointer;
 }
 
-/* Floating toggle button (if used) */
+/* Floating toggle button (if you use it) */
 .navbar-toggle-btn{
   position: fixed;
   right: 16px;
   bottom: 16px;
   border-radius: 999px;
-  padding: 9px 11px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.65);
-  color: var(--text-primary);
+  padding: 8px 10px;
+  border: 1px solid var(--accent-secondary);
+  background: rgba(0,0,0,0.6);
+  color: var(--accent-secondary);
   cursor: pointer;
-  z-index: 9999;
+  z-index: 999;
 }
 
 .toggle-icon{
   display: inline-block;
 }
 
-/* -----------------------------------------
-   Hamburger (your JS toggles #hamburger.active) ✅:contentReference[oaicite:2]{index=2}
------------------------------------------ */
-.hamburger,
-#hamburger{
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px;
+/* =========================================
+   Hamburger (NOW the NLF Shield logo)
+   ========================================= */
+.hamburger{
+  display: none; /* shown on mobile */
+  width: 46px;
+  height: 46px;
+
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.25);
+
+  align-items: center;
+  justify-content: center;
+
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
-.hamburger span,
-#hamburger span{
-  width: 24px;
-  height: 3px;
-  background: rgba(255,255,255,0.85);
-  border-radius: 2px;
-  transition: transform 0.22s ease, opacity 0.22s ease;
+/* Hide the old bar spans (keep HTML unchanged) */
+.hamburger span{
+  display: none;
 }
 
-.hamburger.active span:nth-child(1),
-#hamburger.active span:nth-child(1){
-  transform: translateY(7px) rotate(45deg);
+/* Logo icon inside the button */
+.hamburger::before{
+  content: "";
+  width: 30px;
+  height: 30px;
+
+  background-image: url("../images/NLF-Shield-blue.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
 }
 
-.hamburger.active span:nth-child(2),
-#hamburger.active span:nth-child(2){
-  opacity: 0;
+.hamburger:active{
+  transform: scale(0.98);
 }
 
-.hamburger.active span:nth-child(3),
-#hamburger.active span:nth-child(3){
-  transform: translateY(-7px) rotate(-45deg);
+/* Active/open state ring */
+.hamburger.active{
+  border-color: rgba(0, 212, 255, 0.35);
+  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.18), 0 10px 30px rgba(0,0,0,0.45);
 }
 
-/* -----------------------------------------
-   Mobile / Small Screens
-   Turn nav-links into a DROPDOWN panel (not left-slide)
------------------------------------------ */
+/* =========================================
+   Mobile / small screens
+   Turn the menu into a DROPDOWN panel
+   ========================================= */
 @media (max-width: 992px){
   .nav-content{
     padding: 0 12px;
@@ -313,123 +320,121 @@
     display: none;
   }
 
-  .hamburger,
-  #hamburger{
-    display: flex;
+  .hamburger{
+    display: inline-flex;
   }
 
-  /* ✅ Mobile dropdown panel
-     IMPORTANT: target BOTH .nav-links and #navLinks
-     CLOSED by default
-  */
-  .nav-links,
-  #navLinks{
+  /* ✅ DROPDOWN PANEL (closed by default) */
+  .nav-links{
     position: fixed;
     top: var(--nav-h);
     left: 0;
     right: 0;
 
+    width: 100%;
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
 
-    background: rgba(0,0,0,0.90);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    background: var(--nav-panel-bg);
 
     border-top: 1px solid rgba(255,255,255,0.10);
     border-bottom: 1px solid rgba(255,255,255,0.10);
 
-    /* closed state */
-    max-height: 0;
-    padding: 0 14px;
-    overflow: hidden;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 
+    /* CLOSED */
+    max-height: 0;
+    overflow: hidden;
     opacity: 0;
     transform: translateY(-10px);
     pointer-events: none;
 
     transition:
       max-height 0.28s ease,
-      padding 0.22s ease,
       opacity 0.18s ease,
       transform 0.28s ease;
 
-    z-index: 9999;
+    z-index: 10001;
   }
 
-  /* OPEN state: your JS adds .show ✅:contentReference[oaicite:3]{index=3} */
-  .nav-links.show,
-  #navLinks.show{
+  /* ✅ OPEN (navbar.js adds .show on #navLinks) */
+  .nav-links.show{
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
 
-    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
-
-    /* ✅ "drops down far enough" */
+    /* ✅ Drops far enough */
     max-height: calc(100vh - var(--nav-h));
+
+    /* ✅ Scroll if lots of items */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
 
-  /* Better viewport units on modern mobile browsers */
+  /* Better unit on mobile browsers */
   @supports (height: 100dvh){
-    .nav-links.show,
-    #navLinks.show{
+    .nav-links.show{
       max-height: calc(100dvh - var(--nav-h));
     }
   }
 
-  /* Make buttons full-width + readable */
+  /* Buttons full width and readable */
   .nav-btn,
   .dropdown-toggle{
     width: 100%;
     justify-content: flex-start;
-    padding: 12px 12px;
-
-    background: rgba(0,0,0,0.34);   /* ✅ never white */
+    padding: 12px 14px;
+    font-size: 0.98rem;
+    background: rgba(0,0,0,0.30);
     border-color: rgba(255,255,255,0.14);
   }
 
-  /* Dropdown becomes accordion on mobile */
-  .nav-dropdown{
-    width: 100%;
+  /* dropdowns become accordion style (navbar.js toggles .nav-dropdown.active) */
+  .nav-dropdown::after{
+    display: none; /* remove hover gap on touch */
   }
 
-  /* stop hover-open on touch */
   .nav-dropdown:hover .dropdown-menu{
-    display: none;
+    display: none; /* prevent sticky hover on mobile */
   }
 
-  .dropdown-menu{
+  .nav-dropdown .dropdown-menu{
     position: static;
+    top: auto;
+    right: auto;
+
     min-width: 0;
-    width: 100%;
-
     margin-top: 6px;
-    padding: 10px;
 
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.10);
+    padding: 10px;
     border-radius: 14px;
+
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.10);
 
     box-shadow: none;
     display: none;
-    gap: 8px;
   }
 
   .nav-dropdown.active .dropdown-menu{
     display: flex;
-    flex-direction: column;
   }
 
   .dropdown-item{
-    background: rgba(0,0,0,0.34);   /* ✅ never white */
+    width: 100%;
+    background: rgba(0,0,0,0.30);
     border-color: rgba(255,255,255,0.12);
     font-size: 0.95rem;
+  }
+
+  .dropdown-item:hover{
+    background: rgba(255,255,255,0.08);
+    transform: none;
   }
 }
 
@@ -440,13 +445,7 @@
   }
 }
 
-/* Optional: stop body scroll when menu open (navbar.js toggles this) */
+/* navbar.js toggles this to prevent background scroll */
 body.mobile-menu-open{
   overflow: hidden;
-}
-
-/* Keyframe referenced by dropdown menu */
-@keyframes slideDown{
-  from { opacity: 0; transform: translateY(-8px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
