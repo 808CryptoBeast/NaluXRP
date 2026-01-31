@@ -1,15 +1,15 @@
 /* =========================================
-   NaluXrp 🌊 — Navbar Styles (FULL)
-   - Shield logo hamburger (images/NLF-Shield-blue.jpg)
-   - Mobile dropdown panel (not always open)
-   - Small-phone bottom navbar (horizontal scroll)
-   - Bottom-sheet dropdown popups for nested sections
-   - Better contrast (no white buttons)
+   NaluXrp 🌊 — Navbar Styles (FULL / UPDATED)
+   - Modern mobile bottom dock (<=520px)
+   - Horizontal scroll with snap + fade edges
+   - Bottom-sheet dropdown menus with header + handle
+   - Shield logo hamburger button (images/NLF-Shield-blue.jpg)
+   - No white default buttons (mobile-safe)
    ========================================= */
 
 :root{
   --nav-h: 75px;            /* top navbar height */
-  --bottom-nav-h: 72px;     /* small-phone bottom bar height */
+  --bottom-nav-h: 74px;     /* small-phone dock height */
 }
 
 /* ---------- NAVBAR SHELL ---------- */
@@ -29,7 +29,6 @@
   transform: translateY(-100%);
   transition: transform 0.25s ease;
 }
-
 #navbar.navbar:not(.hide){
   transition: transform 0.25s ease;
 }
@@ -58,45 +57,39 @@
 }
 
 .logo-text{
-  font-size: 1.18rem;      /* ✅ bigger */
+  font-size: 1.18rem;
   line-height: 1.05;
   color: var(--accent-secondary);
   white-space: nowrap;
 }
-
-.logo-text strong{
-  font-weight: 900;
-}
+.logo-text strong{ font-weight: 900; }
 
 .logo-slogan{
   font-size: 0.80rem;
-  opacity: 0.80;
+  opacity: 0.82;
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
 /* ---------- HAMBURGER (Shield Logo Button) ---------- */
 #hamburger{
-  display: none; /* shown on <= 992px (tablet/mobile) */
-  width: 48px;   /* ✅ bigger */
-  height: 48px;  /* ✅ bigger */
+  display: none; /* shown <= 992px except <=520px where bottom dock is used */
+  width: 48px;
+  height: 48px;
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.14);
   background-color: rgba(0,0,0,0.22);
   background-image: url("../images/NLF-Shield-blue.jpg");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: cover; /* ✅ makes it visible */
+  background-size: cover;
   cursor: pointer;
   box-shadow:
     0 0 0 1px rgba(0,0,0,0.45),
     0 10px 22px rgba(0,0,0,0.35);
   -webkit-tap-highlight-color: transparent;
 }
-
-#hamburger:active{
-  transform: scale(0.98);
-}
+#hamburger:active{ transform: scale(0.98); }
 
 #navbar.open #hamburger{
   border-color: rgba(0, 212, 255, 0.45);
@@ -105,7 +98,7 @@
     0 12px 26px rgba(0,0,0,0.45);
 }
 
-/* ---------- CONNECTION STATUS (if present) ---------- */
+/* ---------- CONNECTION STATUS ---------- */
 .status-badge{
   display: flex;
   align-items: center;
@@ -125,7 +118,6 @@
   border-radius: 999px;
   background: #ffb86c;
 }
-
 .status-dot.active{
   background: #50fa7b;
   box-shadow: 0 0 12px rgba(80,250,123,0.55);
@@ -138,13 +130,13 @@
   gap: 10px;
 }
 
-/* Base button styling (prevents white default buttons) */
+/* Prevent white default button styles */
 .nav-btn,
 .dropdown-toggle,
 .dropdown-item{
   appearance: none;
   -webkit-appearance: none;
-  background: rgba(0,0,0,0.20);          /* ✅ not white */
+  background: rgba(0,0,0,0.20);
   color: var(--text-primary);
   border: 1px solid rgba(255,255,255,0.14);
   border-radius: 14px;
@@ -155,21 +147,23 @@
   outline: none;
 }
 
-/* Main nav buttons */
 .nav-btn{
   display: inline-flex;
   align-items: center;
-  justify-content: center;              /* ✅ centers icon+label */
+  justify-content: center;
   gap: 10px;
   padding: 10px 12px;
   font-size: 0.92rem;
   line-height: 1;
+  transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 
 .nav-btn:hover{
   background: rgba(255,255,255,0.06);
   border-color: rgba(0, 212, 255, 0.35);
 }
+
+.nav-btn:active{ transform: scale(0.985); }
 
 .nav-btn:focus-visible{
   border-color: rgba(0, 212, 255, 0.75);
@@ -186,20 +180,27 @@
 
 .nav-label{
   display: inline-block;
-  text-align: center;                   /* ✅ fixes “not centered” */
+  text-align: center;
   white-space: nowrap;
 }
 
-/* Theme button */
-.theme-btn{
-  font-size: 1rem;
-  padding: 10px 12px;
+/* Active page marker (desktop/tablet too) */
+.nav-btn.is-current,
+.dropdown-toggle.is-current{
+  border-color: rgba(0, 212, 255, 0.55);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(0, 212, 255, 0.18), transparent 50%),
+    rgba(0,0,0,0.26);
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.10),
+    0 10px 22px rgba(0,0,0,0.35);
 }
 
+/* Theme button */
+.theme-btn{ font-size: 1rem; padding: 10px 12px; }
+
 /* ---------- DROPDOWNS (DESKTOP) ---------- */
-.nav-dropdown{
-  position: relative;
-}
+.nav-dropdown{ position: relative; }
 
 .dropdown-toggle{
   display: inline-flex;
@@ -236,8 +237,10 @@
   text-align: left;
   padding: 10px 10px;
   font-size: 0.92rem;
-  background: rgba(0,0,0,0.22);         /* ✅ not white */
+  background: rgba(0,0,0,0.22);
   border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  transition: background 0.16s ease, border-color 0.16s ease;
 }
 
 .dropdown-item:hover{
@@ -245,17 +248,13 @@
   border-color: rgba(255,255,255,0.18);
 }
 
-/* ---------- MOBILE MODE (<= 992px) : TOP DROPDOWN PANEL ---------- */
+/* ---------- TABLET / MOBILE PANEL MODE (<=992px and >520px) ---------- */
 @media (max-width: 992px){
-  #hamburger{
-    display: inline-block;
-  }
+  #hamburger{ display: inline-block; }
 
-  /* tighten logo */
   .logo-text{ font-size: 1.10rem; }
   .logo-slogan{ font-size: 0.78rem; }
 
-  /* mobile panel (closed by default) */
   .nav-links{
     position: fixed;
     top: var(--nav-h);
@@ -266,7 +265,7 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 10px;
 
     padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
     background: rgba(0,0,0,0.90);
@@ -274,7 +273,7 @@
     border-bottom: 1px solid rgba(255,255,255,0.10);
     backdrop-filter: blur(12px);
 
-    max-height: 0;               /* ✅ closed by default */
+    max-height: 0;
     overflow: hidden;
     opacity: 0;
     transform: translateY(-10px);
@@ -286,14 +285,13 @@
       transform 0.30s ease;
   }
 
-  /* open */
   #navbar.open .nav-links,
   .nav-links.show{
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
 
-    max-height: calc(100vh - var(--nav-h)); /* ✅ drops far enough */
+    max-height: calc(100vh - var(--nav-h));
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
@@ -306,17 +304,15 @@
     }
   }
 
-  /* Make buttons full width and centered */
   .nav-btn,
   .dropdown-toggle{
     width: 100%;
-    justify-content: center;        /* ✅ centered labels */
+    justify-content: center;
     padding: 12px 12px;
     font-size: 0.98rem;
-    background: rgba(0,0,0,0.26);   /* ✅ not white */
+    background: rgba(0,0,0,0.26);
   }
 
-  /* Dropdown menu becomes accordion content */
   .dropdown-menu{
     position: static;
     display: none;
@@ -331,124 +327,195 @@
     box-shadow: none;
   }
 
-  /* prevent hover-sticky behavior on touch */
-  .nav-dropdown:hover .dropdown-menu{
-    display: none;
-  }
-
+  .nav-dropdown:hover .dropdown-menu{ display: none; }
   .nav-dropdown.active .dropdown-menu{
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
 
   .dropdown-item{
-    background: rgba(0,0,0,0.26);   /* ✅ not white */
+    background: rgba(0,0,0,0.26);
     border-color: rgba(255,255,255,0.12);
     font-size: 0.96rem;
+    padding: 12px 12px;
   }
 }
 
-/* ---------- SMALL PHONE MODE (<= 520px): BOTTOM NAVBAR + SHEETS ---------- */
+/* ---------- SMALL PHONE MODE (<=520px): MODERN FLOATING DOCK + SHEETS ---------- */
 @media (max-width: 520px){
-  /* Hide slogan to save space */
+  /* Slogan off for space */
   .logo-slogan{ display: none; }
 
-  /* hide hamburger in bottom-bar mode */
+  /* Hamburger not used in dock mode */
   #hamburger{ display: none !important; }
 
-  /* optional: tighten status badge */
+  /* Compact status badge */
   .status-badge{
     padding: 7px 9px;
-    font-size: 0.82rem;
+    font-size: 0.80rem;
   }
+  .status-badge #connectionStatus{ display: none; }
 
-  /* Add safe space so content isn't hidden behind bottom bar */
+  /* Add safe space for bottom dock */
   body{
-    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(var(--bottom-nav-h) + 14px + env(safe-area-inset-bottom, 0px));
   }
 
-  /* nav-links becomes ALWAYS VISIBLE bottom bar */
+  /* Bottom Dock container */
   .nav-links{
     position: fixed !important;
     top: auto !important;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    left: 10px !important;
+    right: 10px !important;
+    bottom: 10px;
 
     display: flex !important;
     flex-direction: row !important;
-    align-items: stretch;
+    align-items: center;
     justify-content: flex-start;
-    gap: 8px;
 
-    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
-    background: rgba(0,0,0,0.92);
-    border-top: 1px solid rgba(255,255,255,0.10);
-    backdrop-filter: blur(14px);
+    gap: 10px;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+    height: var(--bottom-nav-h);
+
+    border-radius: 22px;
+    background: rgba(0,0,0,0.78);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow:
+      0 20px 60px rgba(0,0,0,0.60),
+      0 0 0 1px rgba(0,0,0,0.35);
+    backdrop-filter: blur(16px);
+
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
 
     max-height: none !important;
-    overflow-x: auto !important;     /* ✅ horizontal scroll */
-    overflow-y: hidden !important;
-
     opacity: 1 !important;
     transform: none !important;
     pointer-events: auto !important;
-
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-x: contain;
   }
 
-  /* Bottom bar button style: icon top, label under */
+  /* Hide scrollbar */
+  .nav-links::-webkit-scrollbar{ height: 0; }
+  .nav-links{ scrollbar-width: none; }
+
+  /* Fade edges hint (modern scroll hint) */
+  .nav-links{
+    mask-image: linear-gradient(90deg,
+      transparent 0%,
+      #000 8%,
+      #000 92%,
+      transparent 100%);
+  }
+
+  /* Scroll snap for “native” feel */
+  .nav-links{
+    scroll-snap-type: x mandatory;
+  }
+
+  /* Bottom Dock buttons (modern icon bubble) */
   .nav-btn,
   .dropdown-toggle{
+    scroll-snap-align: start;
+
     flex: 0 0 auto;
-    min-width: 86px;
+    min-width: 78px;
+    height: 56px;
+
+    padding: 8px 10px;
+    border-radius: 18px;
 
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 6px;
 
-    gap: 5px;
-    padding: 10px 12px;
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.12);
 
-    border-radius: 16px;
-    background: rgba(0,0,0,0.28);
+    transition:
+      transform 0.16s ease,
+      background 0.16s ease,
+      border-color 0.16s ease,
+      box-shadow 0.16s ease;
   }
 
+  .nav-btn:active,
+  .dropdown-toggle:active{
+    transform: scale(0.98);
+  }
+
+  /* Icon bubble */
   .nav-icon{
-    width: auto;
-    min-width: 0;
-    font-size: 1.25rem;
+    width: 32px;
+    height: 32px;
+    border-radius: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.18rem;
+
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 10px 18px rgba(0,0,0,0.30);
   }
 
   .nav-label{
-    font-size: 0.72rem;
+    font-size: 0.70rem;
+    letter-spacing: 0.2px;
     opacity: 0.95;
   }
 
-  /* Dropdown menus become bottom sheets (always visible) */
+  /* Active page styling */
+  .nav-btn.is-current,
+  .dropdown-toggle.is-current{
+    background:
+      radial-gradient(circle at 20% 10%, rgba(0, 212, 255, 0.22), transparent 55%),
+      rgba(255,255,255,0.05);
+    border-color: rgba(0, 212, 255, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(0, 212, 255, 0.10),
+      0 16px 28px rgba(0,0,0,0.42);
+  }
+
+  .nav-btn.is-current .nav-icon,
+  .dropdown-toggle.is-current .nav-icon{
+    background:
+      radial-gradient(circle at 30% 20%, rgba(0, 212, 255, 0.35), transparent 55%),
+      rgba(0,0,0,0.35);
+    border-color: rgba(0, 212, 255, 0.35);
+    box-shadow:
+      0 0 0 3px rgba(0, 212, 255, 0.12),
+      0 14px 24px rgba(0,0,0,0.42);
+  }
+
+  /* ---------- Bottom sheet dropdown menus ---------- */
   .dropdown-menu{
     position: fixed !important;
     left: 10px !important;
     right: 10px !important;
-    bottom: calc(var(--bottom-nav-h) + 12px);
+    bottom: calc(var(--bottom-nav-h) + 22px) !important;
     top: auto !important;
 
     display: none !important;
     width: auto !important;
     min-width: 0 !important;
 
-    max-height: 60vh;
+    max-height: 62vh;
     overflow: auto;
 
     padding: 12px;
-    border-radius: 18px;
+    border-radius: 22px;
+
     background: rgba(0,0,0,0.92);
-    border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 18px 50px rgba(0,0,0,0.68);
-    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: 0 22px 70px rgba(0,0,0,0.72);
+    backdrop-filter: blur(18px);
+
     z-index: 10060;
   }
 
@@ -458,31 +525,73 @@
     gap: 10px;
   }
 
+  /* Sheet header injected by JS */
+  .sheet-header{
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 8px 6px 10px;
+    margin: -4px -2px 2px;
+    background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+    border-radius: 16px;
+  }
+
+  .sheet-handle{
+    width: 46px;
+    height: 5px;
+    border-radius: 999px;
+    margin: 2px auto 10px;
+    background: rgba(255,255,255,0.18);
+  }
+
+  .sheet-head-row{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 8px 4px;
+  }
+
+  .sheet-title{
+    font-weight: 900;
+    font-size: 0.95rem;
+    color: var(--accent-secondary);
+  }
+
+  .sheet-close{
+    width: 38px;
+    height: 38px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .sheet-close:active{ transform: scale(0.98); }
+
   .dropdown-item{
     text-align: left;
     padding: 12px 12px;
-    border-radius: 14px;
-    background: rgba(0,0,0,0.28);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.05);
     border-color: rgba(255,255,255,0.12);
-    font-size: 0.96rem;
+    font-size: 0.98rem;
   }
 
-  /* Backdrop for bottom sheets (created by JS) */
+  /* Backdrop for sheets */
   #navSheetBackdrop{
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.45);
+    background: rgba(0,0,0,0.48);
     backdrop-filter: blur(2px);
     z-index: 10055;
   }
-
-  #navSheetBackdrop.show{
-    display: block;
-  }
+  #navSheetBackdrop.show{ display: block; }
 }
 
-/* ---------- Optional: stop body scroll when mobile panel open ---------- */
-body.mobile-menu-open{
-  overflow: hidden;
-}
+/* Optional scroll lock */
+body.mobile-menu-open{ overflow: hidden; }
