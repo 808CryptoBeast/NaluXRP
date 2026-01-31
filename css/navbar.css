@@ -1,45 +1,23 @@
 /* =========================================
-   NaluXrp 🌊 – Improved Futuristic Navbar Design
-   - Address small screen navigation
-   - Darker dropdown buttons for contrast
-   - Fully responsive, scalable, and highly interactive
+   NaluXrp 🌊 – Navbar (navbar.css)
+   Mobile Drawer + Overlay (fixed)
    ========================================= */
 
-:root {
-  --nav-height: 80px;
-  --nav-offset: 80px;
-  --gradient-bg: linear-gradient(145deg, #181818, #121212);
-  --text-primary: #f0f0f0;
-  --text-secondary: #9e9e9e;
-  --accent-primary: #ff007f; /* Pink futuristic accent */
-  --accent-secondary: #00d1ff; /* Light blue futuristic accent */
-  --bg-secondary: rgba(20, 20, 20, 0.96);
-  --dropdown-bg: rgba(10, 10, 10, 0.95);
-  --dropdown-hover: rgba(30, 30, 30, 1);
-  --hover-shadow: 0 12px 24px rgba(255, 0, 127, 0.2);
-  --focus-ring: 0 0 10px var(--accent-secondary);
+:root{
+  --nav-height: 75px;
 }
 
-/* Push content below navbar */
-.container {
-  padding-top: var(--nav-offset);
-}
-
-/* Fixed Navigation Bar */
+/* Navbar shell */
 .navbar {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--nav-height);
-  z-index: 9999;
-  background: var(--gradient-bg);
+  top: 0; left: 0; right: 0;
+  background: var(--bg-secondary);
+  backdrop-filter: blur(20px);
   border-bottom: 2px solid var(--accent-primary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
-  transition: transform 0.5s ease, background 0.3s ease;
+  box-shadow: 0 5px 30px var(--glow-color);
+  z-index: 1000;
+  transform: translateY(0);
+  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
 }
 
 .navbar.hide {
@@ -47,197 +25,273 @@
 }
 
 .nav-content {
-  max-width: 1400px;
+  max-width: 1800px;
   margin: 0 auto;
-  width: 100%;
   padding: 0 20px;
+  min-height: var(--nav-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
 /* Logo */
 .nav-logo {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 2px;
   cursor: pointer;
-  color: var(--text-primary);
-  font-size: 1.4rem;
-  font-weight: bold;
-  background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+}
+
+.logo-text {
+  font-size: 1.5em;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  transition: transform 0.3s ease;
-}
-.nav-logo:hover {
-  transform: scale(1.1);
+  letter-spacing: 2px;
 }
 
 .logo-slogan {
-  font-size: 0.75rem;
+  font-size: 0.7em;
   color: var(--text-secondary);
 }
 
-/* Navigation Links - Desktop Layout */
+/* Links row */
 .nav-links {
   display: flex;
+  gap: 8px;
   align-items: center;
-  gap: 16px;
+  justify-content: flex-end;
+  flex: 1;
 }
 
-/* Navigation Buttons */
+/* Buttons */
 .nav-btn,
 .dropdown-toggle {
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: var(--dropdown-bg);
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  font-weight: 600;
+  padding: 9px 14px;
+  background: linear-gradient(135deg, rgba(0,0,0,0.4), rgba(0,0,0,0.6));
+  border-radius: 10px;
+  border: 2px solid var(--accent-tertiary);
+  color: var(--accent-tertiary);
   cursor: pointer;
-  transition: background 0.3s ease, transform 0.2s;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.25s ease;
 }
 
 .nav-btn:hover,
 .dropdown-toggle:hover {
-  background: var(--dropdown-hover);  /* DARKER on hover */
-  transform: translateY(-3px);
-  box-shadow: var(--hover-shadow);
+  border-color: var(--accent-primary);
+  background: linear-gradient(135deg, var(--glow-color), var(--glow-color-light));
+  color: var(--accent-secondary);
+  box-shadow: 0 5px 15px var(--glow-color);
+  transform: translateY(-2px);
 }
 
-.nav-icon {
-  font-size: 1.2rem;
-}
+.nav-icon { font-size: 1.1rem; }
+.nav-label { display: inline-block; }
 
-.nav-label {
+/* Dropdowns */
+.nav-dropdown {
+  position: relative;
   display: inline-block;
 }
 
-/* Dropdown Menus */
-.nav-dropdown {
-  position: relative;
+.nav-dropdown::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 18px;
+  background: transparent;
 }
 
 .dropdown-menu {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 18px);
   right: 0;
-  background: var(--dropdown-bg);
+  background: var(--bg-tertiary);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 2px solid var(--accent-primary);
+  min-width: 200px;
   padding: 8px;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.9);
   display: none;
   flex-direction: column;
-  gap: 6px;
-  z-index: 1000;
-  transition: all 0.3s ease-in-out;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+  animation: slideDown 0.2s ease;
+  z-index: 1002;
 }
 
-.nav-dropdown.open .dropdown-menu {
-  display: flex;
+/* IMPORTANT:
+   Only enable hover-open dropdown on real mouse devices.
+   Prevents "sticky hover" on touch screens (which makes menus feel always open). */
+@media (hover: hover) and (pointer: fine) {
+  .nav-dropdown:hover .dropdown-menu { display: flex; }
 }
 
 .dropdown-item {
-  padding: 12px 14px;
-  color: var(--text-primary);
+  padding: 10px 14px;
+  border-radius: 8px;
   font-size: 0.9rem;
-  background: var(--dropdown-hover);  /* DARKER BACKGROUND */
-  border-radius: 10px;
-  transition: background 0.3s ease, transform 0.2s;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: 0.2s ease;
+  text-align: left;
+  font-weight: 600;
 }
 
 .dropdown-item:hover {
-  background: var(--accent-primary);
+  background: var(--glow-color);
   transform: translateX(4px);
 }
 
-/* Connection Status Badge */
+/* Connection status placement */
 .status-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 0.85rem;
-  border-radius: 50px;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
 }
 
-.status-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #ffb86c;
-  box-shadow: 0 0 10px rgba(255, 184, 108, 0.6);
+/* Desktop navbar toggle */
+.navbar-toggle {
+  margin-left: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-tertiary);
+  background: rgba(0,0,0,0.4);
+  color: var(--text-primary);
+  cursor: pointer;
 }
 
-.status-dot.active {
-  background: #50fa7b;
-  box-shadow: 0 0 12px rgba(80, 250, 123, 0.7);
+/* Floating toggle button */
+.navbar-toggle-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  border-radius: 999px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-secondary);
+  background: rgba(0,0,0,0.6);
+  color: var(--accent-secondary);
+  cursor: pointer;
+  z-index: 999;
 }
 
-/* Responsive Optimizations */
+.toggle-icon { display: inline-block; }
 
-/* Tablet View */
-@media (max-width: 1024px) {
+/* Hamburger */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  cursor: pointer;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.22);
+}
+
+.hamburger span {
+  width: 24px;
+  height: 3px;
+  background: var(--accent-secondary);
+  border-radius: 2px;
+  transition: all 0.25s ease;
+}
+
+.hamburger.active span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.active span:nth-child(2) { opacity: 0; }
+.hamburger.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* Overlay (mobile) */
+.nav-overlay{
+  position: fixed;
+  inset: var(--nav-height) 0 0 0;
+  background: rgba(0,0,0,0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 998;
+}
+
+/* When menu open */
+body.nav-open .nav-overlay{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* =========================================
+   Mobile / small screens
+   ========================================= */
+@media (max-width: 992px) {
+  .nav-content { padding: 0 12px; }
+
+  .nav-logo .logo-slogan { display: none; }
+  .navbar-toggle { display: none; }
+  .hamburger { display: flex; }
+
+  /* Hide status badge on the top row if you want more room (optional) */
+  /* .status-badge { display:none; } */
+
+  /* Drawer */
   .nav-links {
+    position: fixed;
+    top: var(--nav-height);
+    left: 0;
+    right: 0;
+    bottom: 0;
+
+    background: var(--bg-secondary);
+    flex-direction: column;
+    align-items: stretch;
+
+    padding: 16px;
     gap: 10px;
+
+    transform: translateY(-10px);
+    opacity: 0;
+    pointer-events: none;
+
+    transition: transform 0.22s ease, opacity 0.22s ease;
+    overflow-y: auto;
+    z-index: 999;
   }
 
-  .nav-btn {
-    padding: 8px 12px;
-    font-size: 0.85rem;
+  .nav-links.show {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .nav-btn,
+  .dropdown-toggle {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+
+  /* dropdowns become accordion style */
+  .nav-dropdown .dropdown-menu {
+    position: static;
+    margin-top: 6px;
+    border-width: 1px;
+    display: none;
+  }
+
+  .nav-dropdown.active .dropdown-menu {
+    display: flex;
   }
 }
 
-/* Mobile View */
-@media (max-width: 768px) {
-  .nav-links {
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .nav-content {
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .nav-btn {
-    font-size: 0.8rem;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-  }
-
-  .dropdown-menu {
-    position: relative;
-    top: 0;
-    border: none;
-    background: transparent;
-    padding: 0;
-  }
-}
-
-/* Small Phones */
+/* Very small screens */
 @media (max-width: 480px) {
-  .logo-text {
-    font-size: 1.2rem;
-  }
-
-  .nav-btn {
-    font-size: 0.75rem;
-    width: 50px;
-    height: 50px;
-  }
-
-  .status-badge {
-    font-size: 0.75rem;
-    padding: 6px;
-  }
+  .nav-label { font-size: 0.9rem; }
 }
