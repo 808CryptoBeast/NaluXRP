@@ -1,120 +1,144 @@
 /* =========================================
    NaluXrp 🌊 — Navbar Styles (FULL)
-   ✅ Center button labels (desktop + mobile)
-   ✅ Smallest screens: menu panel is visible + scrollable
-   ✅ Dropdowns readable (no white button defaults)
-   ✅ Mobile toggle uses your shield logo
+   ✅ Desktop top navbar
+   ✅ Mobile overlay menu (<= 992px) that is CLOSED by default
+   ✅ Small-phone bottom navbar (<= 520px):
+      - icons scroll horizontally
+      - dropdowns open as a “popup sheet”
+   ✅ No “white buttons” (forces appearance/background)
+   ✅ Bigger logo + bigger shield toggle icon
    ========================================= */
 
-/* ---------- Variables ---------- */
+/* ---------- Vars ---------- */
 :root{
-  --nav-h: 75px; /* keep synced with body padding-top */
+  --nav-h: 75px;          /* desktop/tablet navbar height */
+  --nav-h-bottom: 70px;   /* small phone bottom bar height */
+  --nav-max: 1400px;
 }
 
 /* ---------- Navbar Shell ---------- */
-#navbar.navbar{
+#navbar.navbar,
+#navbar{
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   height: var(--nav-h);
-  z-index: 9998;
+  z-index: 10000;
 
-  background: rgba(0,0,0,0.60);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 
   border-bottom: 1px solid rgba(255,255,255,0.10);
-  transition: transform 0.25s ease, background 0.25s ease;
+  transform: translateY(0);
+  transition: transform 0.22s ease, background 0.22s ease;
 }
 
-/* Hide-on-scroll support */
-#navbar.navbar.hide{
-  transform: translateY(-100%);
+/* UI.js may add .hide */
+#navbar.hide{
+  transform: translateY(calc(-1 * var(--nav-h)));
 }
 
 /* ---------- Inner Layout ---------- */
-#navbar .nav-content{
+.nav-content{
   height: 100%;
   width: 100%;
-  max-width: 1400px;
+  max-width: var(--nav-max);
   margin: 0 auto;
-  padding: 0 18px;
+  padding: 0 16px;
 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
 }
 
-/* ---------- Logo ---------- */
-#navbar .nav-logo{
+/* ---------- Logo / Brand ---------- */
+.nav-logo{
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
+
   cursor: pointer;
   user-select: none;
-  min-width: 180px;
-}
-
-#navbar .nav-logo .logo-text{
-  font-size: 1.25rem; /* bigger */
-  line-height: 1.1;
-  color: var(--accent-secondary);
-  font-weight: 900;
-  letter-spacing: 0.2px;
-}
-
-#navbar .nav-logo .logo-slogan{
-  font-size: 0.86rem;
-  color: var(--text-secondary);
-  opacity: 0.95;
-}
-
-/* ---------- Mobile Toggle (shield image) ---------- */
-#navbar .navbar-toggle{
-  display: none; /* shown on mobile */
-  width: 46px;
-  height: 46px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(0,0,0,0.22);
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   -webkit-tap-highlight-color: transparent;
 }
 
-#navbar .navbar-toggle:active{
+.logo-text{
+  font-size: 1.14rem;      /* ✅ a bit bigger */
+  line-height: 1.05;
+  color: var(--accent-secondary);
+  font-weight: 900;
+  letter-spacing: 0.2px;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-slogan{
+  font-size: 0.74rem;
+  opacity: 0.8;
+  color: var(--text-secondary);
+}
+
+/* ---------- Mobile Toggle (Shield Icon) ----------
+   IMPORTANT:
+   Your JS expects: #hamburger
+   Put this inside your HTML button:
+     <button id="hamburger" class="nav-toggle" type="button">
+       <img src="images/NLF-Shield-blue.jpg" alt="Menu">
+     </button>
+*/
+#hamburger,
+.nav-toggle{
+  display: none; /* shown on <= 992px */
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+  color: var(--text-primary);
+  cursor: pointer;
+
+  align-items: center;
+  justify-content: center;
+
+  -webkit-tap-highlight-color: transparent;
+}
+
+#hamburger:active,
+.nav-toggle:active{
   transform: scale(0.98);
 }
 
-#navbar .navbar-toggle .toggle-logo{
-  width: 30px;
-  height: 30px;
+/* ✅ Make the shield visible (was “super small”) */
+#hamburger img,
+.nav-toggle img{
+  width: 34px;
+  height: 34px;
   border-radius: 10px;
   object-fit: cover;
-  border: 1px solid rgba(255,255,255,0.14);
+  display: block;
+
+  border: 1px solid rgba(255,255,255,0.10);
   box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
 }
 
-#navbar.open .navbar-toggle{
-  border-color: rgba(0,212,255,0.45);
-  box-shadow: 0 0 0 3px rgba(0,212,255,0.14);
-}
-
-/* ---------- Nav Links (Desktop default) ---------- */
-#navbar .nav-links{
+/* ---------- Nav Links (Desktop) ---------- */
+.nav-links{
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-/* ✅ Prevent “white default buttons” */
-#navbar button.nav-btn,
-#navbar button.dropdown-toggle,
-#navbar button.dropdown-item{
+/* ---------- Button Base (prevents white defaults) ---------- */
+.nav-btn,
+.dropdown-toggle,
+.dropdown-item{
   appearance: none;
   -webkit-appearance: none;
 
@@ -122,7 +146,7 @@
   color: var(--text-primary);
 
   border: 1px solid rgba(255,255,255,0.14);
-  border-radius: 12px;
+  border-radius: 14px;
 
   font-weight: 800;
   cursor: pointer;
@@ -131,183 +155,181 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ✅ CENTER CONTENT inside buttons (icon + label group) */
-#navbar .nav-btn,
-#navbar .dropdown-toggle{
-  display: flex;
+.nav-btn{
+  display: inline-flex;
   align-items: center;
-  justify-content: center;  /* ✅ centers the group */
+  justify-content: center;  /* ✅ centers label better */
   gap: 10px;
 
   padding: 10px 12px;
   font-size: 0.92rem;
-  text-align: center;
-}
-
-/* Make icon occupy a consistent width so label is visually centered */
-#navbar .nav-icon{
-  display: inline-flex;
-  width: 24px;
-  justify-content: center;
-  align-items: center;
-  font-size: 1.05rem;
   line-height: 1;
 }
 
-/* Label keeps tight and centered */
-#navbar .nav-label{
-  display: inline-block;
-  text-align: center;
-  white-space: nowrap;
-  line-height: 1.05;
-}
-
-#navbar .nav-btn:hover,
-#navbar .dropdown-toggle:hover{
+.nav-btn:hover{
   background: rgba(255,255,255,0.06);
-  border-color: rgba(0, 212, 255, 0.35);
+  border-color: rgba(0, 212, 255, 0.32);
 }
 
-#navbar .nav-btn.theme-btn{
-  padding: 10px 12px;
-  font-size: 1rem;
+.nav-btn:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.18);
 }
 
-/* ---------- Dropdowns (Desktop) ---------- */
-#navbar .nav-dropdown{
+.nav-icon{
+  font-size: 1.05rem;
+  line-height: 1;
+  opacity: 0.95;
+}
+
+.nav-label{
+  white-space: nowrap;
+  text-align: center;       /* ✅ */
+}
+
+/* Theme button */
+.theme-btn{
+  width: 44px;
+  justify-content: center;
+  padding: 10px 0;
+}
+
+/* ---------- Dropdown (Desktop) ---------- */
+.nav-dropdown{
   position: relative;
 }
 
-#navbar .dropdown-menu{
+.dropdown-toggle{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  padding: 10px 12px;
+  font-size: 0.92rem;
+}
+
+/* Desktop dropdown panel */
+.dropdown-menu{
   display: none;
   position: absolute;
   top: calc(100% + 10px);
   left: 0;
-  min-width: 230px;
 
+  min-width: 240px;
   padding: 10px;
-  border-radius: 14px;
 
-  background: rgba(0,0,0,0.88); /* a bit more opaque */
+  background: rgba(0,0,0,0.86);
   border: 1px solid rgba(255,255,255,0.12);
-  box-shadow: 0 12px 30px rgba(0,0,0,0.55);
+  border-radius: 16px;
 
+  box-shadow: 0 16px 36px rgba(0,0,0,0.55);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 
-  z-index: 10000;
+  z-index: 10001;
 }
 
-#navbar .nav-dropdown:hover .dropdown-menu{
+/* Show on hover for mouse devices, and also when JS toggles .active */
+@media (hover: hover) and (pointer: fine){
+  .nav-dropdown:hover .dropdown-menu{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+.nav-dropdown.active .dropdown-menu{
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-/* click-open support too */
-#navbar .nav-dropdown.active .dropdown-menu{
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-#navbar .dropdown-item{
+.dropdown-item{
   width: 100%;
-  text-align: center;              /* ✅ center dropdown item labels too */
+  text-align: left;
   padding: 10px 10px;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
 
   background: rgba(0,0,0,0.22);
   border: 1px solid rgba(255,255,255,0.12);
 }
 
-#navbar .dropdown-item:hover{
+.dropdown-item:hover{
   background: rgba(255,255,255,0.08);
-  border-color: rgba(255,255,255,0.18);
+  border-color: rgba(255,255,255,0.20);
 }
 
-/* ---------- Connection Status ---------- */
-#navbar .status-badge{
+/* ---------- Status Badge ---------- */
+.status-badge{
   display: inline-flex;
   align-items: center;
   gap: 10px;
 
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: 14px;
 
-  background: rgba(0,0,0,0.22);
+  background: rgba(0,0,0,0.18);
   border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-primary);
+
+  white-space: nowrap;
+  font-weight: 800;
 }
 
-#navbar .status-dot{
+.status-dot{
   width: 10px;
   height: 10px;
   border-radius: 50%;
   background: #ffb86c;
-  box-shadow: 0 0 12px rgba(255,184,108,0.30);
+  box-shadow: 0 0 10px rgba(255,184,108,0.25);
 }
 
-#navbar .status-dot.live{
+/* If your JS adds a “live” class to the dot elsewhere */
+.status-dot.live{
   background: #50fa7b;
-  box-shadow: 0 0 14px rgba(80,250,123,0.55);
+  box-shadow: 0 0 14px rgba(80,250,123,0.60);
 }
 
-#navbar #connectionStatus{
-  font-weight: 800;
-  font-size: 0.9rem;
-  color: var(--text-primary);
-}
-
-/* =========================================
-   ✅ Mobile Mode
-   ========================================= */
+/* =========================================================
+   TABLET / MOBILE OVERLAY (<= 992px)
+   ✅ Menu CLOSED by default
+   ✅ Dropdowns expand inline (accordion)
+   ✅ Buttons centered + readable
+   ========================================================= */
 @media (max-width: 992px){
-  #navbar .nav-content{
-    padding: 0 12px;
-    gap: 10px;
-  }
-
-  /* Shrink logo area on mobile so toggle + status fit */
-  #navbar .nav-logo{
-    min-width: 0;
-  }
-
-  #navbar .nav-logo .logo-slogan{
-    display: none;
-  }
-
-  /* Show toggle on mobile */
-  #navbar .navbar-toggle{
+  /* Show shield toggle */
+  #hamburger,
+  .nav-toggle{
     display: inline-flex;
   }
 
-  /* ✅ Mobile dropdown panel */
-  #navbar .nav-links{
+  /* Keep logo + status visible on tablet */
+  .logo-text{ font-size: 1.10rem; }
+  .status-badge{ padding: 8px 10px; }
+
+  /* Overlay panel */
+  .nav-links{
     position: fixed;
     top: var(--nav-h);
     left: 0;
     right: 0;
 
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-
-    padding: 12px 12px calc(16px + env(safe-area-inset-bottom, 0px));
-    background: rgba(0,0,0,0.90);
-    border-top: 1px solid rgba(255,255,255,0.10);
-
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-
-    /* closed */
-    max-height: 0;
+    max-height: 0;               /* ✅ closed by default */
     overflow: hidden;
     opacity: 0;
     transform: translateY(-10px);
     pointer-events: none;
 
-    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    background: rgba(0,0,0,0.90);
+    border-top: 1px solid rgba(255,255,255,0.10);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 
     transition:
       max-height 0.28s ease,
@@ -315,93 +337,256 @@
       transform 0.28s ease;
   }
 
-  /* OPEN state: give it REAL room + scrolling */
+  /* Open state:
+     - JS may toggle: #navLinks.active
+     - Or: #navbar.open
+  */
   #navbar.open .nav-links,
-  #navbar .nav-links.show{
+  #navLinks.active{
+    max-height: calc(100vh - var(--nav-h));
+    overflow-y: auto;
+
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
 
-    max-height: calc(100vh - var(--nav-h));
-    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
 
-  /* ✅ Best mobile viewport units (prevents “menu not visible” on tiny screens / iOS) */
-  @supports (height: 100svh){
-    #navbar.open .nav-links,
-    #navbar .nav-links.show{
-      max-height: calc(100svh - var(--nav-h));
-    }
-  }
-
   @supports (height: 100dvh){
     #navbar.open .nav-links,
-    #navbar .nav-links.show{
+    #navLinks.active{
       max-height: calc(100dvh - var(--nav-h));
     }
   }
 
-  /* ✅ Mobile buttons: centered text (not left) */
-  #navbar .nav-btn,
-  #navbar .dropdown-toggle{
+  /* Full-width centered buttons (fix “names not centered”) */
+  .nav-btn,
+  .dropdown-toggle{
     width: 100%;
-    justify-content: center;   /* ✅ centers icon+label group */
-    padding: 12px 12px;
+    justify-content: center;   /* ✅ */
+    text-align: center;
+    padding: 13px 12px;
     font-size: 0.98rem;
+
     background: rgba(0,0,0,0.28);
     border-color: rgba(255,255,255,0.14);
   }
 
-  /* Mobile dropdown menus become accordion blocks */
-  #navbar .dropdown-menu{
+  .theme-btn{
+    width: 100%;
+    padding: 13px 12px;
+  }
+
+  .nav-label{
+    text-align: center;        /* ✅ */
+    width: 100%;
+  }
+
+  /* Dropdown becomes inline accordion (so it can always be seen) */
+  .dropdown-menu{
     position: static;
     display: none;
-    width: 100%;
     min-width: 0;
-    margin-top: 6px;
+    width: 100%;
 
     padding: 10px;
-    border-radius: 14px;
+    margin-top: 8px;
 
-    background: rgba(0,0,0,0.36);
+    background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 16px;
+
     box-shadow: none;
   }
 
-  /* disable hover sticky behavior */
-  #navbar .nav-dropdown:hover .dropdown-menu{
-    display: none;
-  }
-
-  /* click-open */
-  #navbar .nav-dropdown.active .dropdown-menu{
+  .nav-dropdown.active .dropdown-menu{
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
 
-  #navbar .dropdown-item{
-    background: rgba(0,0,0,0.28);
-    font-size: 0.95rem;
-    text-align: center; /* ✅ centered */
-  }
-
-  /* Reduce status badge footprint on small screens */
-  #navbar .status-badge{
-    padding: 8px 10px;
+  .dropdown-item{
+    text-align: center;        /* ✅ looks better in overlay */
+    background: rgba(0,0,0,0.26);
+    border-color: rgba(255,255,255,0.12);
+    padding: 12px 10px;
+    font-size: 0.96rem;
   }
 }
 
-/* Ultra-small screens: hide status text so menu toggle + logo fit cleanly */
-@media (max-width: 420px){
-  #navbar #connectionStatus{
+/* =========================================================
+   SMALL PHONE BOTTOM NAVBAR (<= 520px)
+   ✅ Bottom bar
+   ✅ Horizontal scroll icons
+   ✅ Dropdowns as popup sheets (fixed)
+   ========================================================= */
+@media (max-width: 520px){
+  /* Bottom navbar */
+  #navbar.navbar,
+  #navbar{
+    top: auto;
+    bottom: 0;
+    height: var(--nav-h-bottom);
+
+    border-bottom: none;
+    border-top: 1px solid rgba(255,255,255,0.10);
+    background: rgba(0,0,0,0.72);
+  }
+
+  /* Don't hide upwards when scrolling (optional) */
+  #navbar.hide{
+    transform: translateY(calc(1 * (var(--nav-h-bottom) + env(safe-area-inset-bottom, 0px))));
+  }
+
+  /* Content should not sit under the bottom bar */
+  body{
+    padding-top: 0 !important;
+    padding-bottom: calc(var(--nav-h-bottom) + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  /* Make the bar purely navigation-focused */
+  .nav-logo{
+    display: none; /* frees space */
+  }
+  .status-badge{
+    display: none; /* frees space */
+  }
+  #hamburger,
+  .nav-toggle{
+    display: none !important; /* no overlay menu; bottom bar is always visible */
+  }
+
+  .nav-content{
+    padding: 0 10px;
+  }
+
+  /* Override overlay styles: keep nav-links ALWAYS visible */
+  .nav-links{
+    position: static !important;
+    top: auto !important;
+
+    max-height: none !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+
+    width: 100%;
+    height: 100%;
+
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 10px;
+
+    padding: 0;
+    background: transparent;
+    border: none;
+    backdrop-filter: none;
+
+    /* Side-to-side scroll */
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav-links::-webkit-scrollbar{
     display: none;
   }
+
+  /* Icon-first compact buttons */
+  .nav-btn,
+  .dropdown-toggle{
+    flex: 0 0 auto;
+    height: calc(var(--nav-h-bottom) - 14px);
+    min-width: 74px;
+
+    padding: 8px 10px;
+    border-radius: 16px;
+
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    gap: 4px;
+
+    background: rgba(0,0,0,0.22);
+    border-color: rgba(255,255,255,0.12);
+  }
+
+  .nav-icon{
+    font-size: 1.18rem;
+  }
+
+  .nav-label{
+    font-size: 0.70rem;
+    line-height: 1;
+    opacity: 0.90;
+    text-align: center;
+  }
+
+  .theme-btn{
+    min-width: 56px;
+  }
+
+  /* Dropdown popup sheet (so it's NEVER off-screen) */
+  .dropdown-menu{
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    bottom: calc(var(--nav-h-bottom) + env(safe-area-inset-bottom, 0px) + 10px) !important;
+
+    display: none;
+    max-height: calc(75vh);
+    overflow-y: auto;
+
+    padding: 12px;
+    border-radius: 18px;
+
+    background: rgba(0,0,0,0.92);
+    border: 1px solid rgba(255,255,255,0.14);
+
+    box-shadow: 0 18px 40px rgba(0,0,0,0.65);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  @supports (height: 100dvh){
+    .dropdown-menu{
+      max-height: calc(80dvh - var(--nav-h-bottom));
+    }
+  }
+
+  .nav-dropdown.active .dropdown-menu{
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .dropdown-item{
+    text-align: center;
+    padding: 12px 10px;
+    background: rgba(0,0,0,0.28);
+    border-color: rgba(255,255,255,0.14);
+    font-size: 0.96rem;
+  }
 }
 
-/* Optional: prevent body scroll when menu open */
+/* ---------- Scroll lock (navbar.js toggles) ---------- */
 body.no-scroll{
   overflow: hidden;
+}
+
+/* ---------- Reduced Motion ---------- */
+@media (prefers-reduced-motion: reduce){
+  #navbar.navbar,
+  #navbar,
+  .nav-links,
+  .nav-btn,
+  .dropdown-menu{
+    transition: none !important;
+  }
 }
