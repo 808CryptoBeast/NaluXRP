@@ -1,64 +1,88 @@
 /* =========================================
-   NaluXrp 🌊 – Navbar (navbar.css)
-   Mobile Drawer + Overlay (fixed)
+   NaluXrp 🌊 — Navbar Styles (FULL)
+   FIXES:
+   - Mobile menu not applying because of selector mismatch (#navLinks vs .nav-links)
+   - Mobile dropdown panel not tall enough (adds max-height + scroll)
+   - Buttons/items looking white on mobile (resets appearance + dark backgrounds)
    ========================================= */
 
 :root{
-  --nav-height: 75px;
+  --nav-h: 75px; /* keep aligned with body padding-top + nav height */
 }
 
-/* Navbar shell */
-.navbar {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  background: var(--bg-secondary);
-  backdrop-filter: blur(20px);
-  border-bottom: 2px solid var(--accent-primary);
-  box-shadow: 0 5px 30px var(--glow-color);
-  z-index: 1000;
+/* -----------------------------------------
+   Navbar Shell
+----------------------------------------- */
+.navbar,
+#navbar{
+  position: fixed !important; /* override any injected "position:relative" safety styles */
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+
   transform: translateY(0);
-  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+  transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
-.navbar.hide {
+.navbar.hide,
+#navbar.hide{
   transform: translateY(-100%);
 }
 
-.nav-content {
+/* -----------------------------------------
+   Inner Layout
+----------------------------------------- */
+.nav-content{
   max-width: 1800px;
   margin: 0 auto;
   padding: 0 20px;
-  min-height: var(--nav-height);
+  min-height: var(--nav-h);
+
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
 }
 
-/* Logo */
-.nav-logo {
+/* -----------------------------------------
+   Logo
+----------------------------------------- */
+.nav-logo{
   display: flex;
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
+  user-select: none;
 }
 
-.logo-text {
+.logo-text{
   font-size: 1.5em;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 2px;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  letter-spacing: 2px;
 }
 
-.logo-slogan {
-  font-size: 0.7em;
+.logo-slogan{
+  font-size: 0.72em;
   color: var(--text-secondary);
 }
 
-/* Links row */
-.nav-links {
+/* -----------------------------------------
+   Links Row (Desktop)
+   IMPORTANT: target BOTH .nav-links and #navLinks
+----------------------------------------- */
+.nav-links,
+#navLinks{
   display: flex;
   gap: 8px;
   align-items: center;
@@ -66,232 +90,363 @@
   flex: 1;
 }
 
-/* Buttons */
+/* -----------------------------------------
+   Buttons / Toggles (prevents "white" defaults)
+----------------------------------------- */
 .nav-btn,
-.dropdown-toggle {
-  padding: 9px 14px;
-  background: linear-gradient(135deg, rgba(0,0,0,0.4), rgba(0,0,0,0.6));
-  border-radius: 10px;
-  border: 2px solid var(--accent-tertiary);
-  color: var(--accent-tertiary);
+.dropdown-toggle,
+.dropdown-item{
+  appearance: none;
+  -webkit-appearance: none;
+
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+
+  background: rgba(0,0,0,0.28);   /* ✅ never white */
+  color: var(--text-primary);
+
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.9rem;
-  white-space: nowrap;
+  font-weight: 700;
+  font-size: 0.92rem;
+
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  transition: all 0.25s ease;
+  gap: 8px;
+
+  text-decoration: none;
+  white-space: nowrap;
+
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nav-btn,
+.dropdown-toggle{
+  padding: 10px 12px;
 }
 
 .nav-btn:hover,
-.dropdown-toggle:hover {
-  border-color: var(--accent-primary);
-  background: linear-gradient(135deg, var(--glow-color), var(--glow-color-light));
-  color: var(--accent-secondary);
-  box-shadow: 0 5px 15px var(--glow-color);
-  transform: translateY(-2px);
+.dropdown-toggle:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(0, 212, 255, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.35);
 }
 
-.nav-icon { font-size: 1.1rem; }
-.nav-label { display: inline-block; }
+.nav-btn:active,
+.dropdown-toggle:active{
+  transform: translateY(0);
+}
 
-/* Dropdowns */
-.nav-dropdown {
+.nav-btn:focus-visible,
+.dropdown-toggle:focus-visible,
+.dropdown-item:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.28);
+}
+
+.nav-icon{
+  font-size: 1.1rem;
+  opacity: 0.95;
+}
+
+.nav-label{
+  display: inline-block;
+}
+
+/* -----------------------------------------
+   Dropdowns (Desktop Hover)
+----------------------------------------- */
+.nav-dropdown{
   position: relative;
   display: inline-block;
 }
 
-.nav-dropdown::after {
+/* hover gap safety */
+.nav-dropdown::after{
   content: "";
   position: absolute;
   top: 100%;
   left: 0;
   width: 100%;
-  height: 18px;
+  height: 14px;
   background: transparent;
 }
 
-.dropdown-menu {
+.dropdown-menu{
   position: absolute;
-  top: calc(100% + 18px);
+  top: calc(100% + 14px);
   right: 0;
-  background: var(--bg-tertiary);
-  border-radius: 12px;
-  border: 2px solid var(--accent-primary);
-  min-width: 200px;
-  padding: 8px;
+
+  min-width: 220px;
+  padding: 10px;
+
   display: none;
   flex-direction: column;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
-  animation: slideDown 0.2s ease;
-  z-index: 1002;
+  gap: 8px;
+
+  background: rgba(0,0,0,0.86);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+
+  box-shadow: 0 16px 40px rgba(0,0,0,0.60);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  z-index: 10002;
+  animation: slideDown 0.18s ease;
 }
 
-/* IMPORTANT:
-   Only enable hover-open dropdown on real mouse devices.
-   Prevents "sticky hover" on touch screens (which makes menus feel always open). */
-@media (hover: hover) and (pointer: fine) {
-  .nav-dropdown:hover .dropdown-menu { display: flex; }
+.nav-dropdown:hover .dropdown-menu{
+  display: flex;
 }
 
-.dropdown-item {
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: 0.2s ease;
+.dropdown-item{
+  width: 100%;
   text-align: left;
-  font-weight: 600;
+  padding: 10px 12px;
+
+  background: rgba(0,0,0,0.32); /* ✅ never white */
+  border: 1px solid rgba(255,255,255,0.10);
 }
 
-.dropdown-item:hover {
-  background: var(--glow-color);
-  transform: translateX(4px);
+.dropdown-item:hover{
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.18);
+  transform: translateX(2px);
 }
 
-/* Connection status placement */
-.status-badge {
+/* -----------------------------------------
+   Status badge (layout only)
+----------------------------------------- */
+.status-badge{
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  padding: 6px 10px;
+  font-size: 0.82rem;
 }
 
-/* Desktop navbar toggle */
-.navbar-toggle {
+/* -----------------------------------------
+   Desktop Theme Toggle (if you use it)
+----------------------------------------- */
+.navbar-toggle{
   margin-left: 6px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--accent-tertiary);
-  background: rgba(0,0,0,0.4);
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.32);
   color: var(--text-primary);
   cursor: pointer;
 }
 
-/* Floating toggle button */
-.navbar-toggle-btn {
+/* Floating toggle button (if used) */
+.navbar-toggle-btn{
   position: fixed;
   right: 16px;
   bottom: 16px;
   border-radius: 999px;
-  padding: 8px 10px;
-  border: 1px solid var(--accent-secondary);
-  background: rgba(0,0,0,0.6);
-  color: var(--accent-secondary);
+  padding: 9px 11px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.65);
+  color: var(--text-primary);
   cursor: pointer;
-  z-index: 999;
+  z-index: 9999;
 }
 
-.toggle-icon { display: inline-block; }
+.toggle-icon{
+  display: inline-block;
+}
 
-/* Hamburger */
-.hamburger {
+/* -----------------------------------------
+   Hamburger (your JS toggles #hamburger.active) ✅:contentReference[oaicite:2]{index=2}
+----------------------------------------- */
+.hamburger,
+#hamburger{
   display: none;
   flex-direction: column;
   gap: 4px;
   padding: 10px;
   cursor: pointer;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(0,0,0,0.22);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.hamburger span {
+.hamburger span,
+#hamburger span{
   width: 24px;
   height: 3px;
-  background: var(--accent-secondary);
+  background: rgba(255,255,255,0.85);
   border-radius: 2px;
-  transition: all 0.25s ease;
+  transition: transform 0.22s ease, opacity 0.22s ease;
 }
 
-.hamburger.active span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-.hamburger.active span:nth-child(2) { opacity: 0; }
-.hamburger.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.hamburger.active span:nth-child(1),
+#hamburger.active span:nth-child(1){
+  transform: translateY(7px) rotate(45deg);
+}
 
-/* Overlay (mobile) */
-.nav-overlay{
-  position: fixed;
-  inset: var(--nav-height) 0 0 0;
-  background: rgba(0,0,0,0.55);
+.hamburger.active span:nth-child(2),
+#hamburger.active span:nth-child(2){
   opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-  z-index: 998;
 }
 
-/* When menu open */
-body.nav-open .nav-overlay{
-  opacity: 1;
-  pointer-events: auto;
+.hamburger.active span:nth-child(3),
+#hamburger.active span:nth-child(3){
+  transform: translateY(-7px) rotate(-45deg);
 }
 
-/* =========================================
-   Mobile / small screens
-   ========================================= */
-@media (max-width: 992px) {
-  .nav-content { padding: 0 12px; }
-
-  .nav-logo .logo-slogan { display: none; }
-  .navbar-toggle { display: none; }
-  .hamburger { display: flex; }
-
-  /* Hide status badge on the top row if you want more room (optional) */
-  /* .status-badge { display:none; } */
-
-  /* Drawer */
-  .nav-links {
-    position: fixed;
-    top: var(--nav-height);
-    left: 0;
-    right: 0;
-    bottom: 0;
-
-    background: var(--bg-secondary);
-    flex-direction: column;
-    align-items: stretch;
-
-    padding: 16px;
-    gap: 10px;
-
-    transform: translateY(-10px);
-    opacity: 0;
-    pointer-events: none;
-
-    transition: transform 0.22s ease, opacity 0.22s ease;
-    overflow-y: auto;
-    z-index: 999;
+/* -----------------------------------------
+   Mobile / Small Screens
+   Turn nav-links into a DROPDOWN panel (not left-slide)
+----------------------------------------- */
+@media (max-width: 992px){
+  .nav-content{
+    padding: 0 12px;
   }
 
-  .nav-links.show {
-    transform: translateY(0);
-    opacity: 1;
-    pointer-events: all;
-  }
-
-  .nav-btn,
-  .dropdown-toggle {
-    width: 100%;
-    justify-content: flex-start;
-    padding: 12px 14px;
-  }
-
-  /* dropdowns become accordion style */
-  .nav-dropdown .dropdown-menu {
-    position: static;
-    margin-top: 6px;
-    border-width: 1px;
+  .nav-logo .logo-slogan{
     display: none;
   }
 
-  .nav-dropdown.active .dropdown-menu {
+  .navbar-toggle{
+    display: none;
+  }
+
+  .hamburger,
+  #hamburger{
     display: flex;
+  }
+
+  /* ✅ Mobile dropdown panel
+     IMPORTANT: target BOTH .nav-links and #navLinks
+     CLOSED by default
+  */
+  .nav-links,
+  #navLinks{
+    position: fixed;
+    top: var(--nav-h);
+    left: 0;
+    right: 0;
+
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+
+    background: rgba(0,0,0,0.90);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+
+    border-top: 1px solid rgba(255,255,255,0.10);
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+
+    /* closed state */
+    max-height: 0;
+    padding: 0 14px;
+    overflow: hidden;
+
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+
+    transition:
+      max-height 0.28s ease,
+      padding 0.22s ease,
+      opacity 0.18s ease,
+      transform 0.28s ease;
+
+    z-index: 9999;
+  }
+
+  /* OPEN state: your JS adds .show ✅:contentReference[oaicite:3]{index=3} */
+  .nav-links.show,
+  #navLinks.show{
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+
+    /* ✅ "drops down far enough" */
+    max-height: calc(100vh - var(--nav-h));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Better viewport units on modern mobile browsers */
+  @supports (height: 100dvh){
+    .nav-links.show,
+    #navLinks.show{
+      max-height: calc(100dvh - var(--nav-h));
+    }
+  }
+
+  /* Make buttons full-width + readable */
+  .nav-btn,
+  .dropdown-toggle{
+    width: 100%;
+    justify-content: flex-start;
+    padding: 12px 12px;
+
+    background: rgba(0,0,0,0.34);   /* ✅ never white */
+    border-color: rgba(255,255,255,0.14);
+  }
+
+  /* Dropdown becomes accordion on mobile */
+  .nav-dropdown{
+    width: 100%;
+  }
+
+  /* stop hover-open on touch */
+  .nav-dropdown:hover .dropdown-menu{
+    display: none;
+  }
+
+  .dropdown-menu{
+    position: static;
+    min-width: 0;
+    width: 100%;
+
+    margin-top: 6px;
+    padding: 10px;
+
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+
+    box-shadow: none;
+    display: none;
+    gap: 8px;
+  }
+
+  .nav-dropdown.active .dropdown-menu{
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dropdown-item{
+    background: rgba(0,0,0,0.34);   /* ✅ never white */
+    border-color: rgba(255,255,255,0.12);
+    font-size: 0.95rem;
   }
 }
 
 /* Very small screens */
-@media (max-width: 480px) {
-  .nav-label { font-size: 0.9rem; }
+@media (max-width: 480px){
+  .nav-label{
+    font-size: 0.9rem;
+  }
+}
+
+/* Optional: stop body scroll when menu open (navbar.js toggles this) */
+body.mobile-menu-open{
+  overflow: hidden;
+}
+
+/* Keyframe referenced by dropdown menu */
+@keyframes slideDown{
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
