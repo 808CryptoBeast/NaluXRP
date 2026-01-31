@@ -1,352 +1,294 @@
 /* =========================================
    NaluXrp 🌊 — Navbar Styles (FULL)
-   Mobile dropdown panel + better contrast
-   Hamburger replaced with NLF shield logo
+   FIXES:
+   - Mobile menu closed by default (not always open)
+   - Drops down far enough + scrollable
+   - Buttons / dropdown items not white (force appearance)
+   - Uses images/NLF-Shield-blue.jpg as toggle icon
    ========================================= */
 
-/* ---------- Variables ---------- */
 :root{
-  --nav-h: 75px; /* keep in sync with your navbar height */
-  --nav-panel-bg: rgba(0,0,0,0.88);
-  --nav-btn-bg: rgba(0,0,0,0.28);
-  --nav-btn-border: rgba(255,255,255,0.14);
-  --nav-btn-hover: rgba(255,255,255,0.07);
+  --nav-h: 75px; /* keep aligned with body padding-top */
 }
 
-/* =========================================
-   Shell
-   ========================================= */
+/* ---------- Navbar Shell ---------- */
 .navbar,
 #navbar{
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-
-  min-height: var(--nav-h);
-  z-index: 10000;
-
-  background: var(--bg-secondary);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-
-  border-bottom: 2px solid var(--accent-primary);
-  box-shadow: 0 5px 30px var(--glow-color);
-
+  top: 0; left: 0; right: 0;
+  height: var(--nav-h);
+  z-index: 9998;
+  background: rgba(0,0,0,0.60);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
   transform: translateY(0);
-  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+  transition: transform 0.25s ease;
 }
 
-.navbar.hide{
-  transform: translateY(-110%);
+/* Hide on scroll (desktop only via JS adding .hide) */
+.navbar.hide,
+#navbar.hide{
+  transform: translateY(-105%);
 }
 
-/* =========================================
-   Inner layout
-   ========================================= */
+/* ---------- Inner Layout ---------- */
 .nav-content{
-  max-width: 1800px;
+  height: 100%;
+  width: 100%;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 0 20px;
-
-  min-height: var(--nav-h);
-
+  padding: 0 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
 }
 
-/* =========================================
-   Logo / Brand
-   ========================================= */
+/* ---------- Logo ---------- */
 .nav-logo{
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
   cursor: pointer;
   user-select: none;
 }
 
 .logo-text{
-  font-size: 1.5em;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  letter-spacing: 2px;
+  font-size: 1.05rem;
+  line-height: 1.1;
+  color: var(--accent-secondary);
+  letter-spacing: 0.2px;
 }
 
 .logo-slogan{
-  font-size: 0.7em;
+  font-size: 0.72rem;
   color: var(--text-secondary);
+  opacity: 0.95;
 }
 
-/* =========================================
-   Links row (desktop base)
-   ========================================= */
+/* ---------- Mobile Toggle Button (uses your shield image) ---------- */
+#hamburger{
+  display: none; /* shown on mobile via media query */
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(0,212,255,0.18), transparent 55%),
+    rgba(0,0,0,0.25);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.35),
+    0 10px 20px rgba(0,0,0,0.45);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+#hamburger::before{
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 10px;
+  background-image: url("../images/NLF-Shield-blue.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: saturate(1.05) contrast(1.05);
+  opacity: 0.98;
+}
+
+#hamburger:active{
+  transform: scale(0.98);
+}
+
+#hamburger.active{
+  border-color: rgba(0,212,255,0.55);
+  box-shadow:
+    0 0 0 3px rgba(0,212,255,0.18),
+    0 10px 20px rgba(0,0,0,0.55);
+}
+
+/* ---------- Nav Links (Desktop) ---------- */
 .nav-links{
   display: flex;
-  gap: 8px;
   align-items: center;
-  justify-content: flex-end;
-  flex: 1;
+  gap: 10px;
 }
 
-/* =========================================
-   Buttons (force non-white defaults)
-   ========================================= */
+/* Force buttons NOT to use browser default white styling */
 .nav-btn,
 .dropdown-toggle,
 .dropdown-item{
   appearance: none;
   -webkit-appearance: none;
-
-  border: 1px solid var(--nav-btn-border);
-  background: var(--nav-btn-bg);
+  background: rgba(0,0,0,0.22);
   color: var(--text-primary);
-
+  border: 1px solid rgba(255,255,255,0.14);
   border-radius: 12px;
-  cursor: pointer;
   font-weight: 700;
-  font-size: 0.92rem;
+  cursor: pointer;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.02);
+}
 
+/* Buttons */
+.nav-btn{
   display: inline-flex;
   align-items: center;
   gap: 8px;
-
   padding: 10px 12px;
-
-  text-decoration: none;
-  -webkit-tap-highlight-color: transparent;
-
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  font-size: 0.92rem;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, filter 0.18s ease;
 }
 
-.nav-btn:hover,
-.dropdown-toggle:hover{
-  background: var(--nav-btn-hover);
-  border-color: rgba(0, 212, 255, 0.35);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+.nav-btn:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(0,212,255,0.35);
+  filter: saturate(1.05);
 }
 
-.nav-btn:active,
-.dropdown-toggle:active,
-.dropdown-item:active{
-  transform: translateY(0);
+.nav-btn:active{
+  transform: translateY(0) scale(0.99);
 }
 
 .nav-icon{
-  font-size: 1.1rem;
-  line-height: 1;
+  width: 18px;
+  height: 18px;
+  opacity: 0.95;
+  flex: 0 0 auto;
 }
 
 .nav-label{
-  display: inline-block;
   white-space: nowrap;
 }
 
-/* =========================================
-   Dropdowns (desktop hover)
-   ========================================= */
-.nav-dropdown{
-  position: relative;
-  display: inline-block;
+/* Theme button */
+.theme-btn{
+  padding: 10px 12px;
+  font-size: 1rem;
 }
 
-/* little safe hover-gap so menu doesn't vanish */
-.nav-dropdown::after{
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 0;
-  width: 100%;
-  height: 14px;
-  background: transparent;
+/* ---------- Status Badge ---------- */
+.status-badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.25);
+  color: var(--text-primary);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ffb86c;
+  box-shadow: 0 0 10px rgba(255,184,108,0.25);
+}
+
+.status-dot.connected{
+  background: #50fa7b;
+  box-shadow: 0 0 12px rgba(80,250,123,0.55);
+}
+
+/* ---------- Dropdowns (Desktop hover) ---------- */
+.nav-dropdown{
+  position: relative;
+}
+
+.dropdown-toggle{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 0.92rem;
 }
 
 .dropdown-menu{
+  display: none;
   position: absolute;
-  top: calc(100% + 14px);
-  right: 0;
-
-  background: var(--bg-tertiary);
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.12);
-
+  top: 110%;
+  left: 0;
   min-width: 220px;
   padding: 10px;
-
-  display: none;
-  flex-direction: column;
-  gap: 8px;
-
-  box-shadow: 0 12px 35px rgba(0,0,0,0.65);
-  animation: slideDown 0.2s ease;
-  z-index: 10002;
+  background: rgba(0,0,0,0.86);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 10000;
 }
 
 .nav-dropdown:hover .dropdown-menu{
   display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .dropdown-item{
   width: 100%;
-  justify-content: flex-start;
   text-align: left;
-
-  padding: 10px 12px;
-
-  background: rgba(0,0,0,0.22);
+  padding: 10px 10px;
+  font-size: 0.92rem;
+  background: rgba(0,0,0,0.28);
   border: 1px solid rgba(255,255,255,0.12);
-  color: var(--text-primary);
+  transition: background 0.18s ease, border-color 0.18s ease;
 }
 
 .dropdown-item:hover{
   background: rgba(255,255,255,0.08);
   border-color: rgba(255,255,255,0.18);
-  transform: translateX(2px);
 }
 
-/* =========================================
-   Status badge (placement only)
-   ========================================= */
-.status-badge{
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  font-size: 0.8rem;
-}
-
-/* =========================================
-   Desktop navbar toggle (if you use it)
-   ========================================= */
-.navbar-toggle{
-  margin-left: 6px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--accent-tertiary);
-  background: rgba(0,0,0,0.35);
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-/* Floating toggle button (if you use it) */
-.navbar-toggle-btn{
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  border-radius: 999px;
-  padding: 8px 10px;
-  border: 1px solid var(--accent-secondary);
-  background: rgba(0,0,0,0.6);
-  color: var(--accent-secondary);
-  cursor: pointer;
-  z-index: 999;
-}
-
-.toggle-icon{
-  display: inline-block;
-}
-
-/* =========================================
-   Hamburger (NOW the NLF Shield logo)
-   ========================================= */
-.hamburger{
-  display: none; /* shown on mobile */
-  width: 46px;
-  height: 46px;
-
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(0,0,0,0.25);
-
-  align-items: center;
-  justify-content: center;
-
-  cursor: pointer;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-}
-
-/* Hide the old bar spans (keep HTML unchanged) */
-.hamburger span{
-  display: none;
-}
-
-/* Logo icon inside the button */
-.hamburger::before{
-  content: "";
-  width: 30px;
-  height: 30px;
-
-  background-image: url("../images/NLF-Shield-blue.jpg");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-
-  border-radius: 10px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
-}
-
-.hamburger:active{
-  transform: scale(0.98);
-}
-
-/* Active/open state ring */
-.hamburger.active{
-  border-color: rgba(0, 212, 255, 0.35);
-  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.18), 0 10px 30px rgba(0,0,0,0.45);
-}
-
-/* =========================================
-   Mobile / small screens
-   Turn the menu into a DROPDOWN panel
-   ========================================= */
+/* =========================================================
+   MOBILE MODE
+   - Dropdown panel under navbar
+   - Closed by default
+   - Open with .show (from JS)
+   ========================================================= */
 @media (max-width: 992px){
-  .nav-content{
-    padding: 0 12px;
-  }
-
-  .nav-logo .logo-slogan{
-    display: none;
-  }
-
-  .navbar-toggle{
-    display: none;
-  }
-
-  .hamburger{
+  #hamburger{
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  /* ✅ DROPDOWN PANEL (closed by default) */
+  /* Optional: hide status text on very small screens */
+  @media (max-width: 420px){
+    .status-badge span{
+      display: none;
+    }
+  }
+
   .nav-links{
     position: fixed;
     top: var(--nav-h);
     left: 0;
     right: 0;
-
     width: 100%;
+
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 10px;
+    gap: 8px;
 
-    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
-    background: var(--nav-panel-bg);
-
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: rgba(0,0,0,0.90);
     border-top: 1px solid rgba(255,255,255,0.10);
-    border-bottom: 1px solid rgba(255,255,255,0.10);
-
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
 
-    /* CLOSED */
+    /* ✅ CLOSED BY DEFAULT */
     max-height: 0;
     overflow: hidden;
     opacity: 0;
@@ -357,76 +299,72 @@
       max-height 0.28s ease,
       opacity 0.18s ease,
       transform 0.28s ease;
-
-    z-index: 10001;
+    z-index: 9997;
   }
 
-  /* ✅ OPEN (navbar.js adds .show on #navLinks) */
+  /* ✅ OPEN state (JS toggles .show) */
   .nav-links.show{
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
 
-    /* ✅ Drops far enough */
+    /* ✅ “drops down far enough” + scrollable */
     max-height: calc(100vh - var(--nav-h));
-
-    /* ✅ Scroll if lots of items */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
 
-  /* Better unit on mobile browsers */
+  /* Better viewport units on modern mobile browsers */
   @supports (height: 100dvh){
     .nav-links.show{
       max-height: calc(100dvh - var(--nav-h));
     }
   }
 
-  /* Buttons full width and readable */
+  /* Mobile button layout */
   .nav-btn,
   .dropdown-toggle{
     width: 100%;
     justify-content: flex-start;
-    padding: 12px 14px;
+    padding: 12px 12px;
     font-size: 0.98rem;
     background: rgba(0,0,0,0.30);
     border-color: rgba(255,255,255,0.14);
   }
 
-  /* dropdowns become accordion style (navbar.js toggles .nav-dropdown.active) */
-  .nav-dropdown::after{
-    display: none; /* remove hover gap on touch */
+  .theme-btn{
+    justify-content: center;
   }
 
-  .nav-dropdown:hover .dropdown-menu{
-    display: none; /* prevent sticky hover on mobile */
-  }
-
-  .nav-dropdown .dropdown-menu{
+  /* Mobile dropdown menus become accordions */
+  .dropdown-menu{
     position: static;
-    top: auto;
-    right: auto;
-
+    display: none;
+    width: 100%;
     min-width: 0;
+    padding: 10px;
     margin-top: 6px;
 
-    padding: 10px;
-    border-radius: 14px;
-
-    background: rgba(0,0,0,0.35);
+    background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.10);
-
+    border-radius: 14px;
     box-shadow: none;
+  }
+
+  /* Prevent hover “sticking” on touch devices */
+  .nav-dropdown:hover .dropdown-menu{
     display: none;
   }
 
+  /* navbar.js toggles .active */
   .nav-dropdown.active .dropdown-menu{
     display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .dropdown-item{
-    width: 100%;
     background: rgba(0,0,0,0.30);
     border-color: rgba(255,255,255,0.12);
     font-size: 0.95rem;
@@ -434,18 +372,10 @@
 
   .dropdown-item:hover{
     background: rgba(255,255,255,0.08);
-    transform: none;
   }
-}
 
-/* Very small screens */
-@media (max-width: 480px){
-  .nav-label{
-    font-size: 0.9rem;
+  /* Optional: stop body scroll while menu is open (JS can toggle this if you want) */
+  body.mobile-menu-open{
+    overflow: hidden;
   }
-}
-
-/* navbar.js toggles this to prevent background scroll */
-body.mobile-menu-open{
-  overflow: hidden;
 }
