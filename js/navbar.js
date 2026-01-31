@@ -1,202 +1,198 @@
-/* =========================================
-   NaluXrp 🌊 – Navbar (navbar.js)
-   Mobile menu FIX:
-   - Closed by default
-   - Overlay close
-   - Click item closes menu
-   - Touch devices use click-to-open dropdowns (no sticky hover)
-   - Prevent double-toggling conflicts (ui.js also assigns onclick)
-   ========================================= */
+// =======================================================
+// navbar.js – STABLE + MOBILE FRIENDLY + OVERLAY SAFE (FULL)
+// Fixes:
+// - Mobile menu toggles reliably (even if other scripts bind clicks)
+// - Dropdown accordion works on mobile
+// - Outside-tap closes mobile menu
+// - Does NOT rely on data-page; works with your onclick="switchPage(...)"
+// =======================================================
 
-(function () {
-  const BREAKPOINT = 992;
+document.addEventListener("DOMContentLoaded", () => {
+  initNavbar();
+  injectNavbarSafetyStyles();
+});
 
-  function isMobileNow() {
-    return window.matchMedia(`(max-width: ${BREAKPOINT}px)`).matches;
-  }
+function initNavbar() {
+  setupHamburger();
+  setupMobileCloseOnNavClick();
+  setupDropdowns();
+  setupScrollHideDesktop();
+}
 
-  function $(id) {
-    return document.getElementById(id);
-  }
+/* ------------------------------------------------------
+   MOBILE MENU (Hamburger)
+------------------------------------------------------ */
+function setupHamburger() {
+  const hamburger = document.getElementById("hamburger");
+  const navLinks = document.getElementById("navLinks");
+  if (!hamburger || !navLinks) return;
 
-  function ensureHamburger(navbar) {
-    let hamburger = $("hamburger");
-    if (hamburger) return hamburger;
+  // CAPTURE phase + stopImmediatePropagation prevents other handlers from also toggling
+  hamburger.addEventListener(
+    "click",
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
 
-    // Create one if missing (so you don't have to edit HTML)
-    hamburger = document.createElement("button");
-    hamburger.id = "hamburger";
-    hamburger.className = "hamburger";
-    hamburger.type = "button";
-    hamburger.setAttribute("aria-label", "Open menu");
-    hamburger.setAttribute("aria-expanded", "false");
-    hamburger.innerHTML = `<span></span><span></span><span></span>`;
+      const isOpen = navLinks.classList.toggle("show");
+      hamburger.classList.toggle("active", isOpen);
+      document.body.classList.toggle("mobile-menu-open", isOpen);
 
-    const content = navbar.querySelector(".nav-content") || navbar;
-    // Put it near the right side (before status badge if present)
-    const status = content.querySelector(".status-badge");
-    if (status) content.insertBefore(hamburger, status);
-    else content.appendChild(hamburger);
+      hamburger.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      hamburger.setAttribute("aria-label", isOpen ? "Close menu" : "Open menu");
+    },
+    true
+  );
 
-    return hamburger;
-  }
+  // Tap outside closes menu (mobile only)
+  document.addEventListener("click", (e) => {
+    if (window.innerWidth > 992) return;
+    if (!navLinks.classList.contains("show")) return;
 
-  function ensureOverlay() {
-    let overlay = document.querySelector(".nav-overlay");
-    if (overlay) return overlay;
+    // if click isn't inside navbar / navLinks, close
+    const inNav = e.target.closest(".navbar") || e.target.closest("#navbar") || e.target.closest("#navLinks");
+    if (!inNav) closeMobileMenu();
+  });
+}
 
-    overlay = document.createElement("div");
-    overlay.className = "nav-overlay";
-    document.body.appendChild(overlay);
-    return overlay;
-  }
+function closeMobileMenu() {
+  const hamburger = document.getElementById("hamburger");
+  const navLinks = document.getElementById("navLinks");
 
-  function closeAllDropdowns() {
-    document.querySelectorAll(".nav-dropdown.active").forEach((d) => d.classList.remove("active"));
-    document.querySelectorAll(".dropdown-toggle[aria-expanded='true']").forEach((t) => t.setAttribute("aria-expanded", "false"));
-  }
-
-  function closeMenu(hamburger, navLinks) {
-    if (!hamburger || !navLinks) return;
-    navLinks.classList.remove("show");
+  if (navLinks) navLinks.classList.remove("show");
+  if (hamburger) {
     hamburger.classList.remove("active");
     hamburger.setAttribute("aria-expanded", "false");
-    document.body.classList.remove("nav-open");
-    closeAllDropdowns();
+    hamburger.setAttribute("aria-label", "Open menu");
   }
+  document.body.classList.remove("mobile-menu-open");
+}
 
-  function openMenu(hamburger, navLinks) {
-    if (!hamburger || !navLinks) return;
-    navLinks.classList.add("show");
-    hamburger.classList.add("active");
-    hamburger.setAttribute("aria-expanded", "true");
-    document.body.classList.add("nav-open");
-  }
+/* ------------------------------------------------------
+   Close menu after tapping a normal nav button (mobile)
+   Works with your onclick="switchPage(...)"
+------------------------------------------------------ */
+function setupMobileCloseOnNavClick() {
+  const navLinks = document.getElementById("navLinks");
+  if (!navLinks) return;
 
-  function toggleMenu(hamburger, navLinks) {
-    if (!hamburger || !navLinks) return;
-    const open = navLinks.classList.contains("show");
-    if (open) closeMenu(hamburger, navLinks);
-    else openMenu(hamburger, navLinks);
-  }
+  navLinks.addEventListener("click", (e) => {
+    if (window.innerWidth > 992) return;
 
-  function setupDropdowns(navLinks) {
-    const toggles = navLinks.querySelectorAll(".dropdown-toggle");
-    toggles.forEach((toggle) => {
-      toggle.setAttribute("aria-expanded", "false");
+    const btn = e.target.closest("button");
+    if (!btn) return;
 
-      toggle.addEventListener("click", (e) => {
-        // Only accordion behavior on mobile/touch
-        if (!isMobileNow()) return;
+    // Don't close when toggling an accordion dropdown
+    if (btn.classList.contains("dropdown-toggle")) return;
 
-        e.preventDefault();
-        e.stopPropagation();
+    // Let the onclick navigation run, then close
+    setTimeout(() => closeMobileMenu(), 0);
+  });
+}
 
-        const parent = toggle.closest(".nav-dropdown");
-        if (!parent) return;
+/* ------------------------------------------------------
+   MOBILE DROPDOWNS (Accordion)
+------------------------------------------------------ */
+function setupDropdowns() {
+  const dropdownToggles = document.querySelectorAll(".dropdown-toggle");
 
-        const already = parent.classList.contains("active");
-        closeAllDropdowns();
+  dropdownToggles.forEach((toggle) => {
+    toggle.addEventListener("click", (e) => {
+      // Desktop: allow CSS hover dropdown
+      if (window.innerWidth > 992) return;
 
-        if (!already) {
-          parent.classList.add("active");
-          toggle.setAttribute("aria-expanded", "true");
-        }
+      e.preventDefault();
+      e.stopPropagation();
+
+      const parent = toggle.closest(".nav-dropdown");
+      if (!parent) return;
+
+      // Close other dropdowns
+      document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
+        if (d !== parent) d.classList.remove("active");
       });
+
+      parent.classList.toggle("active");
     });
-  }
+  });
 
-  function initNavbar() {
-    const navbar = $("navbar");
-    const navLinks = $("navLinks");
-    if (!navbar || !navLinks) return;
+  // If you resize up to desktop, reset mobile accordion states
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 992) {
+      document.querySelectorAll(".nav-dropdown.active").forEach((d) => d.classList.remove("active"));
+      closeMobileMenu();
+    }
+  });
+}
 
-    const hamburger = ensureHamburger(navbar);
-    const overlay = ensureOverlay();
+/* ------------------------------------------------------
+   DESKTOP: Scroll-hide Navbar
+------------------------------------------------------ */
+function setupScrollHideDesktop() {
+  const navbar = document.getElementById("navbar");
+  if (!navbar) return;
 
-    // Always start closed on mobile (fixes “always open”)
-    closeMenu(hamburger, navLinks);
+  let lastScrollY = window.scrollY;
 
-    // Expose API so other scripts (ui.js) can call without double toggles
-    window.NavbarMobile = {
-      open: () => openMenu(hamburger, navLinks),
-      close: () => closeMenu(hamburger, navLinks),
-      toggle: () => toggleMenu(hamburger, navLinks),
-      isOpen: () => navLinks.classList.contains("show")
-    };
+  window.addEventListener("scroll", () => {
+    if (window.innerWidth <= 992) return;
 
-    // Click hamburger: use capturing to reduce conflicts
-    hamburger.addEventListener(
-      "click",
-      (e) => {
-        e.preventDefault();
-        // If ui.js also sets onclick, this makes our behavior win.
-        toggleMenu(hamburger, navLinks);
-      },
-      true
-    );
+    const currentY = window.scrollY;
 
-    // Click overlay closes menu
-    overlay.addEventListener("click", () => closeMenu(hamburger, navLinks));
+    if (currentY > lastScrollY && currentY > 80) {
+      navbar.classList.add("hide");
+    } else {
+      navbar.classList.remove("hide");
+    }
 
-    // Click outside navbar closes menu (mobile)
-    document.addEventListener("click", (e) => {
-      if (!isMobileNow()) return;
-      if (!navLinks.classList.contains("show")) return;
+    lastScrollY = currentY;
+  });
+}
 
-      const insideNav = navbar.contains(e.target) || navLinks.contains(e.target);
-      if (!insideNav) closeMenu(hamburger, navLinks);
-    });
+/* ------------------------------------------------------
+   🔥 OVERLAY / NOTIFICATION SAFETY
+------------------------------------------------------ */
+function injectNavbarSafetyStyles() {
+  if (document.getElementById("navbar-safety-styles")) return;
 
-    // Click any nav item closes (mobile)
-    navLinks.addEventListener("click", (e) => {
-      if (!isMobileNow()) return;
+  const style = document.createElement("style");
+  style.id = "navbar-safety-styles";
+  style.textContent = `
+    /* Ensure navbar always remains clickable */
+    .navbar,
+    #navbar {
+      z-index: 10000;
+      pointer-events: auto;
+    }
 
-      const el = e.target;
-      if (!el) return;
+    /* Notifications must NEVER block nav interactions */
+    .notification-container,
+    .notifications,
+    .toast-container,
+    .toast-wrapper,
+    .toasts,
+    #notifications,
+    .Toastify__toast-container,
+    .notyf,
+    .iziToast-wrapper,
+    .swal2-container {
+      pointer-events: none !important;
+      z-index: 9000 !important;
+    }
 
-      // Don't close when tapping dropdown toggles (accordion)
-      if (el.closest(".dropdown-toggle")) return;
+    /* Allow clicks INSIDE notification cards only */
+    .notification,
+    .toast,
+    .Toastify__toast,
+    .notyf__toast,
+    .iziToast {
+      pointer-events: auto !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
 
-      // Close when selecting a real destination
-      if (el.closest(".nav-btn") || el.closest(".dropdown-item")) {
-        closeMenu(hamburger, navLinks);
-      }
-    });
-
-    // ESC closes
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeMenu(hamburger, navLinks);
-    });
-
-    // Resize: if switching to desktop, ensure mobile classes cleared
-    window.addEventListener("resize", () => {
-      if (!isMobileNow()) {
-        document.body.classList.remove("nav-open");
-        navLinks.classList.remove("show");
-        hamburger.classList.remove("active");
-        closeAllDropdowns();
-      } else {
-        // On re-enter mobile, ensure not stuck open
-        closeMenu(hamburger, navLinks);
-      }
-    });
-
-    // Dropdown accordion setup
-    setupDropdowns(navLinks);
-
-    // Auto hide navbar on scroll (kept)
-    let lastScrollY = window.scrollY;
-    window.addEventListener("scroll", () => {
-      const y = window.scrollY;
-      if (y > lastScrollY && y > 120) navbar.classList.add("hide");
-      else navbar.classList.remove("hide");
-      lastScrollY = y;
-    });
-
-    console.log("✅ Navbar initialized (mobile drawer fixed)");
-  }
-
-  document.addEventListener("DOMContentLoaded", initNavbar);
-})();
+window.closeMobileMenu = closeMobileMenu;
+console.log("✅ Navbar module loaded (mobile dropdown fixed + shield toggle)");
 
