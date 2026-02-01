@@ -1,6 +1,12 @@
 /* =========================================
    NaluXrp 🌊 – UI Module (FULL)
    Navigation, Landing, Themes, Navbar, Analytics wiring
+
+   FIXES (IMPORTANT):
+   ✅ Hard-hide/show page sections using inline !important
+      (prevents landing/dashboard content leaking into inspector)
+   ✅ Preserve theme-* classes while using body.dashboard / body.inspector
+   ✅ Landing background handled inline (as you designed)
    ========================================= */
 
 (function () {
@@ -19,9 +25,7 @@
   };
 
   /* -----------------------------
-     ✅ BODY CLASS / BACKGROUND HELPERS (NEW)
-     - Preserve theme-* while allowing body.dashboard / body.inspector backgrounds
-     - Landing background applied inline to avoid conflicting with .landing-page container styles
+     ✅ BODY CLASS / BACKGROUND HELPERS
   ----------------------------- */
   function applyThemeClass(theme) {
     const body = document.body;
@@ -53,16 +57,14 @@
     const body = document.body;
     if (!body) return;
 
-    // Mark so we only clear what we set
     body.dataset.landingBg = "1";
 
-    // ✅ Uses correct path from index.html
+    // ✅ Path relative to index.html
     body.style.backgroundImage = 'url("images/LandingPage-background.jpg")';
     body.style.backgroundSize = "cover";
     body.style.backgroundPosition = "center";
     body.style.backgroundRepeat = "no-repeat";
 
-    // Match your mobile performance intent
     const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
     body.style.backgroundAttachment = isMobile ? "scroll" : "fixed";
   }
@@ -82,9 +84,29 @@
   }
 
   /* -----------------------------
+     ✅ HARD SHOW/HIDE HELPERS (NEW)
+     This prevents CSS !important rules from overriding page switching.
+  ----------------------------- */
+  function hardHideSection(el) {
+    if (!el) return;
+    el.style.setProperty("display", "none", "important");
+    el.classList.remove("active");
+    el.setAttribute("aria-hidden", "true");
+  }
+
+  function hardShowSection(el) {
+    if (!el) return;
+    el.style.setProperty("display", "block", "important");
+    el.classList.add("active");
+    el.setAttribute("aria-hidden", "false");
+  }
+
+  function hardHideAllSections() {
+    document.querySelectorAll(".page-section").forEach(hardHideSection);
+  }
+
+  /* -----------------------------
      PAGE INIT MAP
-     (Single source of truth)
-     NOTE: 'inspector' handler added — loads/initializes the full-page inspector
   ----------------------------- */
   const PAGE_INIT_MAP = {
     dashboard: () => {
@@ -137,14 +159,12 @@
 
     // Inspector page: full-page account inspector
     inspector: () => {
-      // Nudge XRPL connection so inspector can behave like dashboard (ledger-first)
       try {
         if (typeof window.connectXRPL === "function" && !(window.XRPL && window.XRPL.connected)) {
           window.connectXRPL();
         }
       } catch (_) {}
 
-      // If inspector module already loaded, initialize it
       if (typeof window.initInspector === "function") {
         try {
           window.initInspector();
@@ -156,46 +176,33 @@
         }
       }
 
-      // Ensure an inspector container exists in the DOM
       let el = document.getElementById("inspector");
       if (!el) {
         el = document.createElement("section");
         el.id = "inspector";
         el.className = "page-section";
-        // insert into main container if present, else append to body
         const main = document.getElementById("main") || document.getElementById("dashboard")?.parentElement || document.body;
         main.appendChild(el);
       }
 
-      // Show a loading placeholder while we fetch the module
       el.innerHTML = `<div class="chart-section"><h2>Account Inspector</h2><p>Loading module…</p></div>`;
 
-      // Base path helper (GitHub Pages safe, e.g. /NaluXRP/)
       const basePath = (function () {
         const p = window.location.pathname || "/";
-        // if ends with /, use as-is; else strip file name
         return p.endsWith("/") ? p : p.replace(/\/[^\/]*$/, "/");
       })();
 
-      // IMPORTANT:
-      // - DO NOT use raw.githubusercontent.com as <script> fallback (blocked by nosniff/mime)
-      // - Use jsDelivr as CDN fallback instead
       const scriptSrcCandidates = [
-        // relative (works in most deploys)
         "js/account-inspector.js",
-        // GitHub Pages safe absolute (origin + basePath)
         `${window.location.origin}${basePath}js/account-inspector.js`,
-        // jsDelivr fallback (works as executable JS)
         "https://cdn.jsdelivr.net/gh/808CryptoBeast/NaluXRP@main/js/account-inspector.js",
       ];
 
-      // attempt to load candidates in order until one succeeds
       (async function tryLoadInspector() {
         for (const src of scriptSrcCandidates) {
           try {
             await loadScriptOnce(src);
 
-            // give the module a moment to register its init function
             if (typeof window.initInspector === "function") {
               try {
                 window.initInspector();
@@ -231,6 +238,21 @@
   /* -----------------------------
      NAVIGATION
   ----------------------------- */
+  function closeMobileNavIfOpen() {
+    try {
+      const hamburger = document.getElementById("hamburger");
+      const navLinks = document.getElementById("navLinks");
+      const navbar = document.getElementById("navbar");
+
+      if (hamburger) hamburger.classList.remove("active");
+      if (navLinks) navLinks.classList.remove("show");
+      if (navbar) navbar.classList.remove("open");
+
+      if (hamburger) hamburger.setAttribute("aria-expanded", "false");
+      document.body.classList.remove("no-scroll");
+    } catch (_) {}
+  }
+
   function switchPage(pageId) {
     // ✅ Apply background class for page (dashboard vs inspector)
     applyPageClass(pageId);
@@ -244,10 +266,8 @@
       main.appendChild(stub);
     }
 
-    document.querySelectorAll(".page-section").forEach((sec) => {
-      sec.style.display = "none";
-      sec.classList.remove("active");
-    });
+    // ✅ HARD HIDE EVERYTHING (prevents landing leakage)
+    hardHideAllSections();
 
     const target = document.getElementById(pageId);
     if (!target) {
@@ -255,20 +275,23 @@
       return;
     }
 
-    target.style.display = "block";
-    target.classList.add("active");
+    // ✅ HARD SHOW TARGET
+    hardShowSection(target);
+
     window.UI.currentPage = pageId;
 
     PAGE_INIT_MAP[pageId]?.();
     requestAnimationFrame(refreshRevealObserver);
+
+    // Close mobile nav after selection
+    closeMobileNavIfOpen();
   }
 
   /* -----------------------------
      LANDING PAGE
   ----------------------------- */
   function showLandingPage() {
-    // ✅ Landing background (inline so we don't put "landing-page" on <body>)
-    // Keep body.dashboard class (it won't block inline background)
+    // landing uses dashboard base class + inline bg image
     applyPageClass("dashboard");
     setLandingBackground();
 
@@ -277,8 +300,6 @@
 
     container.innerHTML = `
       <div class="landing-page">
-
-        <!-- HERO -->
         <section class="landing-hero">
           <div class="landing-orb"></div>
 
@@ -307,7 +328,6 @@
           </div>
         </section>
 
-        <!-- EXPLANATION -->
         <section class="landing-split reveal" id="landingExplain">
           <div class="landing-panel">
             <h2>What NaluXrp Shows</h2>
@@ -331,7 +351,6 @@
           </div>
         </section>
 
-        <!-- FEATURE CARDS -->
         <section class="landing-features reveal">
           <article class="feature-card">
             <h3>📊 Ledger Rhythm</h3>
@@ -366,7 +385,6 @@
           </article>
         </section>
 
-        <!-- FOOTER -->
         <footer class="landing-footer reveal">
           <div class="footer-grid">
             <div>
@@ -397,7 +415,6 @@
             </div>
           </div>
         </footer>
-
       </div>
     `;
 
@@ -494,14 +511,11 @@
 
   function setTheme(theme) {
     window.UI.currentTheme = theme;
-
-    // ✅ FIX: do NOT overwrite body.className (it kills dashboard/inspector classes)
     applyThemeClass(theme);
   }
 
   /* -----------------------------
      SCRIPT LOADER
-     Loads a script once, safely across relative/absolute URLs.
   ----------------------------- */
   function canonicalUrl(src) {
     try {
@@ -515,13 +529,10 @@
     return new Promise((resolve, reject) => {
       const canon = canonicalUrl(src);
 
-      // already present?
       const already = Array.from(document.scripts).find((s) => s.src && canonicalUrl(s.src) === canon);
       if (already) {
-        // if it already loaded, resolve immediately
         if (already.getAttribute("data-loaded") === "true") return resolve();
 
-        // otherwise wait for it
         const onLoad = () => {
           already.setAttribute("data-loaded", "true");
           cleanup();
@@ -560,25 +571,21 @@
      INIT
   ----------------------------- */
   document.addEventListener("DOMContentLoaded", () => {
-    // Default page background class (dashboard)
     applyPageClass("dashboard");
-
-    // Apply theme without wiping page classes
     setTheme(window.UI.currentTheme);
-
     initNavbar();
 
-    document.querySelectorAll(".page-section").forEach((s) => {
-      s.style.display = "none";
-    });
+    // ✅ Hard hide everything first
+    hardHideAllSections();
 
+    // Show dashboard section to host landing page
     const dash = document.getElementById("dashboard");
     if (dash) {
-      dash.style.display = "block";
+      hardShowSection(dash);
       showLandingPage();
     }
 
-    // Keep landing bg attachment responsive if user rotates/resizes
+    // Keep landing bg attachment responsive on resize/rotate
     window.addEventListener("resize", () => {
       if (document.body && document.body.dataset.landingBg === "1") {
         const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
