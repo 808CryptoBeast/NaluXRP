@@ -1,271 +1,800 @@
 // =======================================================
-// navbar.js – FULL (Mobile panel + Small-phone bottom bar)
-// - Uses #hamburger as shield-logo button (CSS background)
-// - <=992px: hamburger opens/closes dropdown panel
-// - <=520px: bottom navbar always visible, dropdowns open as bottom sheets
-// - Fixes “dropdown not visible on smallest screens”
+// navbar.js – COMPLETE REDESIGN
+// "Riding The Ledger Waves"
+// 
+// Features:
+// - Animated particle system
+// - Wave physics simulation
+// - Liquid morphing interactions
+// - Advanced gesture controls
+// - Immersive sound feedback (optional)
 // =======================================================
 
-document.addEventListener("DOMContentLoaded", () => {
-  initNavbar();
-  injectNavbarSafetyStyles();
-});
+(function () {
+  if (window.__NALU_NAVBAR_REDESIGN__) return;
+  window.__NALU_NAVBAR_REDESIGN__ = true;
 
-const NAV_MOBILE_BP = 992;
-const NAV_BOTTOM_BP = 520;
+  const ICON_BP = 1150;
+  const BOTTOM_BP = 520;
+  const PARTICLE_COUNT = 15;
 
-function initNavbar(){
-  const navbar = document.getElementById("navbar");
-  const hamburger = document.getElementById("hamburger");
-  const navLinks = document.getElementById("navLinks");
+  const PRIMARY_BOTTOM = [
+    { id: "dashboard", label: "Dashboard", icon: "📊" },
+    { id: "inspector", label: "Inspector", icon: "🔎" },
+    { id: "analytics", label: "Analytics", icon: "📈" },
+    { id: "explorer", label: "Explorer", icon: "🔍" },
+  ];
 
-  if (!navbar || !navLinks) return;
+  const SHEET_GROUPS = [
+    {
+      title: "Network",
+      items: [
+        { id: "validators", label: "Validators", icon: "🛡️" },
+        { id: "analytics", label: "Analytics", icon: "📈" },
+        { id: "explorer", label: "Explorer", icon: "🔍" },
+      ],
+    },
+    {
+      title: "DeFi",
+      items: [
+        { id: "tokens", label: "Tokens", icon: "🪙" },
+        { id: "amm", label: "AMM Pools", icon: "💧" },
+        { id: "nfts", label: "NFTs", icon: "🎨" },
+      ],
+    },
+    {
+      title: "Resources",
+      items: [
+        { id: "news", label: "News", icon: "📰" },
+        { id: "history", label: "History", icon: "📜" },
+        { id: "about", label: "About", icon: "ℹ️" },
+      ],
+    },
+    {
+      title: "Account",
+      items: [
+        { id: "profile", label: "Profile", icon: "👤" },
+        { id: "settings", label: "Settings", icon: "⚙️" },
+      ],
+    },
+  ];
 
-  // Prevent double-toggling if other scripts set hamburger.onclick (UI.js)
-  if (hamburger) hamburger.onclick = null;
+  let lastActivePage = "dashboard";
+  let particles = [];
+  let animationFrame = null;
 
-  // Setup hamburger (tablet/mobile panel)
-  setupHamburger(navbar, hamburger, navLinks);
+  function mode() {
+    if (window.innerWidth <= BOTTOM_BP) return "bottom";
+    if (window.innerWidth <= ICON_BP) return "icons";
+    return "desktop";
+  }
 
-  // Setup dropdown toggles
-  setupDropdowns(navbar);
+  // Debounce utility
+  function debounce(func, wait) {
+    let timeout;
+    return function (...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), wait);
+    };
+  }
 
-  // Close menu/sheets on outside tap
-  setupOutsideClose(navbar);
+  document.addEventListener("DOMContentLoaded", () => {
+    const navbar = document.getElementById("navbar");
+    if (!navbar) return;
 
-  // Desktop scroll-hide
-  setupScrollHideDesktop(navbar);
+    initParticleSystem(navbar);
+    ensureBottomNav();
+    ensureBottomSheet();
+    setupHamburgerInteraction();
+    setupNavbarVisibility();
+    setupKeyboardShortcuts();
+    setupConnectionMonitoring();
 
-  // On resize, normalize state
-  window.addEventListener("resize", () => normalizeNavState(navbar));
+    window.addEventListener("resize", debounce(normalizeState, 150));
+    normalizeState();
 
-  // First normalize
-  normalizeNavState(navbar);
-}
+    window.addEventListener("naluxrp:pagechange", (ev) => {
+      const pageId = ev?.detail?.pageId;
+      if (!pageId) return;
+      lastActivePage = pageId;
+      setActiveNav(pageId);
+      syncBottomActive(pageId);
+    });
 
-function isMobilePanelMode(){
-  return window.innerWidth <= NAV_MOBILE_BP && window.innerWidth > NAV_BOTTOM_BP;
-}
+    window.addEventListener("naluxrp:savedchange", renderSavedInSheet);
 
-function isBottomMode(){
-  return window.innerWidth <= NAV_BOTTOM_BP;
-}
-
-function setupHamburger(navbar, hamburger, navLinks){
-  if (!hamburger) return;
-
-  hamburger.addEventListener("click", (e) => {
-    // Bottom mode doesn't use hamburger
-    if (isBottomMode()) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const open = !navbar.classList.contains("open");
-    setMobilePanelOpen(navbar, open);
-
-    hamburger.setAttribute("aria-expanded", open ? "true" : "false");
+    injectSafetyStyles();
+    
+    console.log("🌊 Wave navbar initialized");
   });
-}
 
-function setMobilePanelOpen(navbar, open){
-  const navLinks = document.getElementById("navLinks");
-  const hamburger = document.getElementById("hamburger");
-
-  if (!navLinks) return;
-
-  if (open){
-    navbar.classList.add("open");
-    navLinks.classList.add("show");
-    document.body.classList.add("mobile-menu-open");
-  } else {
-    navbar.classList.remove("open");
-    navLinks.classList.remove("show");
-    document.body.classList.remove("mobile-menu-open");
-    closeAllDropdowns();
-    hideSheetBackdrop();
+  function normalizeState() {
+    const m = mode();
+    if (m === "bottom") {
+      showBottomNav(true);
+      closeBottomSheet();
+    } else {
+      showBottomNav(false);
+      closeBottomSheet();
+    }
   }
 
-  if (hamburger){
-    hamburger.setAttribute("aria-expanded", open ? "true" : "false");
+  // ========================================= 
+  // PARTICLE SYSTEM
+  // ========================================= 
+  function initParticleSystem(navbar) {
+    const container = document.createElement("div");
+    container.className = "nav-particles";
+    navbar.appendChild(container);
+
+    // Create particles
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const particle = document.createElement("div");
+      particle.className = "nav-particle";
+      
+      // Random positioning
+      const x = Math.random() * 100;
+      const delay = Math.random() * 8;
+      const duration = 8 + Math.random() * 4;
+      
+      particle.style.left = `${x}%`;
+      particle.style.animationDelay = `${delay}s`;
+      particle.style.animationDuration = `${duration}s`;
+      
+      container.appendChild(particle);
+      particles.push(particle);
+    }
+
+    // Mouse interaction with particles
+    navbar.addEventListener("mousemove", (e) => {
+      const rect = navbar.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      
+      particles.forEach((p, i) => {
+        const particleX = parseFloat(p.style.left);
+        const distance = Math.abs(particleX - x);
+        
+        if (distance < 20) {
+          p.style.transform = `translateX(${(particleX - x) * 2}px) scale(1.5)`;
+          p.style.opacity = '1';
+        } else {
+          p.style.transform = '';
+          p.style.opacity = '';
+        }
+      });
+    });
+
+    navbar.addEventListener("mouseleave", () => {
+      particles.forEach(p => {
+        p.style.transform = '';
+        p.style.opacity = '';
+      });
+    });
   }
-}
 
-function setupDropdowns(navbar){
-  const toggles = document.querySelectorAll(".dropdown-toggle");
+  // ========================================= 
+  // HAMBURGER - Holographic Effect
+  // ========================================= 
+  function setupHamburgerInteraction() {
+    const hamburger = document.getElementById("hamburger");
+    if (!hamburger) return;
 
-  toggles.forEach((toggle) => {
-    toggle.addEventListener("click", (e) => {
-      const parent = toggle.closest(".nav-dropdown");
-      if (!parent) return;
-
-      // Desktop: allow hover dropdown
-      if (window.innerWidth > NAV_MOBILE_BP) return;
-
+    hamburger.addEventListener("click", (e) => {
+      if (mode() !== "icons") return;
       e.preventDefault();
       e.stopPropagation();
 
-      const isActive = parent.classList.contains("active");
+      // Create liquid ripple
+      createLiquidRipple(e, hamburger);
+      
+      // Haptic feedback
+      if (navigator.vibrate) {
+        navigator.vibrate([10, 5, 10]);
+      }
 
-      // Close others
-      document.querySelectorAll(".nav-dropdown.active").forEach((d) => {
-        if (d !== parent) d.classList.remove("active");
-      });
+      openBottomSheet();
+    });
 
-      // Toggle this one
-      parent.classList.toggle("active", !isActive);
+    // 3D tilt effect
+    hamburger.addEventListener("mousemove", (e) => {
+      const rect = hamburger.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      const percentX = (x - centerX) / centerX;
+      const percentY = (y - centerY) / centerY;
 
-      // Bottom mode: show backdrop for sheet
-      if (isBottomMode()){
-        if (!isActive) showSheetBackdrop();
-        else hideSheetBackdrop();
+      hamburger.style.transform = `
+        perspective(1000px)
+        rotateY(${percentX * 10}deg)
+        rotateX(${-percentY * 10}deg)
+        translateY(-4px)
+        scale(1.05)
+      `;
+    });
+
+    hamburger.addEventListener("mouseleave", () => {
+      hamburger.style.transform = "";
+    });
+  }
+
+  // Create liquid ripple effect
+  function createLiquidRipple(event, element) {
+    const ripple = document.createElement("span");
+    const rect = element.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height) * 2;
+    const x = event.clientX - rect.left - size / 2;
+    const y = event.clientY - rect.top - size / 2;
+
+    ripple.style.cssText = `
+      position: absolute;
+      width: ${size}px;
+      height: ${size}px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0, 255, 240, 0.6), transparent 60%);
+      left: ${x}px;
+      top: ${y}px;
+      pointer-events: none;
+      animation: liquidRipple 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      z-index: 10;
+    `;
+
+    const style = document.createElement("style");
+    style.textContent = `
+      @keyframes liquidRipple {
+        0% {
+          transform: scale(0);
+          opacity: 0.8;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 0;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+
+    element.style.position = "relative";
+    element.appendChild(ripple);
+
+    setTimeout(() => {
+      ripple.remove();
+      style.remove();
+    }, 800);
+  }
+
+  // ========================================= 
+  // NAVBAR VISIBILITY
+  // ========================================= 
+  function setupNavbarVisibility() {
+    const navbar = document.getElementById("navbar");
+    let lastScrollY = 0;
+    let ticking = false;
+
+    function updateNavbar() {
+      const currentScrollY = window.scrollY;
+      
+      // Only hide on desktop
+      if (mode() === "desktop") {
+        if (currentScrollY > lastScrollY && currentScrollY > 100) {
+          navbar.style.transform = "translateY(-100%)";
+        } else {
+          navbar.style.transform = "";
+        }
+      } else {
+        navbar.style.transform = "";
+      }
+
+      lastScrollY = currentScrollY;
+      ticking = false;
+    }
+
+    window.addEventListener("scroll", () => {
+      if (!ticking) {
+        window.requestAnimationFrame(updateNavbar);
+        ticking = true;
       }
     });
-  });
+  }
 
-  // If user taps a dropdown item, close menus
-  document.querySelectorAll(".dropdown-item").forEach((item) => {
-    item.addEventListener("click", () => {
-      // In bottom mode, close sheet; in mobile-panel mode, close panel too
-      if (isBottomMode()){
-        closeAllDropdowns();
-        hideSheetBackdrop();
-      } else if (window.innerWidth <= NAV_MOBILE_BP){
-        setMobilePanelOpen(navbar, false);
-      }
-    });
-  });
-
-  // If user taps a normal nav button, close panel on mobile
-  document.querySelectorAll(".nav-links .nav-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (isBottomMode()){
-        // bottom bar stays; just close any open sheets
-        closeAllDropdowns();
-        hideSheetBackdrop();
-        return;
-      }
-      if (window.innerWidth <= NAV_MOBILE_BP){
-        setMobilePanelOpen(navbar, false);
-      }
-    });
-  });
-}
-
-function setupOutsideClose(navbar){
-  document.addEventListener("click", (e) => {
-    if (window.innerWidth > NAV_MOBILE_BP) return;
-
-    // If click is inside navbar or inside a dropdown menu, ignore
-    if (e.target.closest("#navbar")) return;
-
-    // Bottom mode: close sheets only
-    if (isBottomMode()){
-      closeAllDropdowns();
-      hideSheetBackdrop();
+  // ========================================= 
+  // CONNECTION STATUS MONITORING
+  // ========================================= 
+  function setupConnectionMonitoring() {
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("connectionStatus");
+    
+    if (!statusDot || !statusText) {
+      console.warn("Connection status elements not found");
       return;
     }
 
-    // Mobile panel mode: close panel
-    setMobilePanelOpen(navbar, false);
-  });
-}
+    // Check for XRPL client in global scope
+    function checkConnection() {
+      // Check if xrpl client exists and is connected
+      if (typeof window.xrplClient !== 'undefined') {
+        const isConnected = window.xrplClient?.isConnected?.() || false;
+        updateStatus(isConnected);
+      } else if (typeof window.client !== 'undefined') {
+        const isConnected = window.client?.isConnected?.() || false;
+        updateStatus(isConnected);
+      } else {
+        // Check for connection state in other possible locations
+        const connState = window.connectionState || window.xrplConnectionState;
+        if (connState) {
+          updateStatus(connState === 'connected');
+        }
+      }
+    }
 
-function closeAllDropdowns(){
-  document.querySelectorAll(".nav-dropdown.active").forEach((d) => d.classList.remove("active"));
-}
+    function updateStatus(isConnected) {
+      if (isConnected) {
+        statusDot.classList.add("connected");
+        statusText.textContent = "Connected";
+        statusDot.style.background = "#50fa7b";
+        statusDot.style.boxShadow = "0 0 10px #50fa7b, 0 0 20px #50fa7b";
+      } else {
+        statusDot.classList.remove("connected");
+        statusText.textContent = "Connecting...";
+        statusDot.style.background = "rgba(255, 255, 255, 0.35)";
+        statusDot.style.boxShadow = "";
+      }
+    }
 
-function normalizeNavState(navbar){
-  // Bottom mode: bottom bar always visible; ensure mobile panel is closed
-  if (isBottomMode()){
-    setMobilePanelOpen(navbar, false);
-    return;
+    // Listen for custom connection events
+    window.addEventListener("xrpl:connected", () => {
+      updateStatus(true);
+    });
+
+    window.addEventListener("xrpl:disconnected", () => {
+      updateStatus(false);
+    });
+
+    // Also listen for generic connection events
+    window.addEventListener("naluxrp:connected", () => {
+      updateStatus(true);
+    });
+
+    window.addEventListener("naluxrp:disconnected", () => {
+      updateStatus(false);
+    });
+
+    // Poll connection status every 2 seconds
+    setInterval(checkConnection, 2000);
+    
+    // Check immediately
+    setTimeout(checkConnection, 500);
   }
 
-  // Desktop: ensure mobile panel closed and backdrop removed
-  if (window.innerWidth > NAV_MOBILE_BP){
-    setMobilePanelOpen(navbar, false);
-    return;
+  // ========================================= 
+  // KEYBOARD SHORTCUTS
+  // ========================================= 
+  function setupKeyboardShortcuts() {
+    document.addEventListener("keydown", (e) => {
+      // ESC to close bottom sheet
+      if (e.key === "Escape") {
+        const sheet = document.getElementById("navBottomSheet");
+        if (sheet && sheet.classList.contains("show")) {
+          closeBottomSheet();
+        }
+      }
+
+      // Ctrl/Cmd + K for search
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        const m = mode();
+        if (m === "icons" || m === "bottom") {
+          openBottomSheet();
+          setTimeout(() => {
+            document.getElementById("sheetSearchInput")?.focus();
+          }, 400);
+        }
+      }
+    });
   }
 
-  // Tablet/mobile panel: keep closed by default (don’t force open)
-  hideSheetBackdrop();
-}
+  // ========================================= 
+  // ACTIVE STATE MANAGEMENT
+  // ========================================= 
+  function setActiveNav(pageId) {
+    const all = document.querySelectorAll("#navLinks .nav-btn, #navLinks .dropdown-item");
+    all.forEach((el) => {
+      el.classList.remove("is-active");
+      el.removeAttribute("aria-current");
+    });
 
-function setupScrollHideDesktop(navbar){
-  let lastY = window.scrollY;
+    const candidates = [...document.querySelectorAll(`#navLinks .nav-btn[onclick], #navLinks .dropdown-item[onclick]`)];
+    const match = candidates.find((el) => {
+      const oc = el.getAttribute("onclick") || "";
+      return oc.includes(`switchPage('${pageId}')`) || oc.includes(`switchPage("${pageId}")`);
+    });
 
-  window.addEventListener("scroll", () => {
-    if (window.innerWidth <= NAV_MOBILE_BP) return;
-
-    const y = window.scrollY;
-    if (y > lastY && y > 90){
-      navbar.classList.add("hide");
-    } else {
-      navbar.classList.remove("hide");
+    if (match) {
+      match.classList.add("is-active");
+      match.setAttribute("aria-current", "page");
     }
-    lastY = y;
-  });
-}
+  }
 
-/* ---------- Bottom-sheet backdrop (small phones) ---------- */
-function ensureSheetBackdrop(){
-  let el = document.getElementById("navSheetBackdrop");
-  if (el) return el;
+  // ========================================= 
+  // BOTTOM NAVIGATION
+  // ========================================= 
+  function ensureBottomNav() {
+    if (document.getElementById("bottomNav")) return;
 
-  el = document.createElement("div");
-  el.id = "navSheetBackdrop";
-  document.body.appendChild(el);
+    const bar = document.createElement("div");
+    bar.id = "bottomNav";
+    bar.className = "bottom-nav";
+    bar.setAttribute("role", "navigation");
+    bar.setAttribute("aria-label", "Mobile navigation");
 
-  el.addEventListener("click", () => {
-    closeAllDropdowns();
-    hideSheetBackdrop();
-  });
+    bar.innerHTML = `
+      <div class="bottom-nav-track">
+        ${PRIMARY_BOTTOM.map(
+          (x) => `
+            <button class="bottom-item" type="button" data-page="${x.id}" aria-label="${x.label}">
+              <div class="bottom-ico">${x.icon}</div>
+              <div class="bottom-lbl">${x.label}</div>
+            </button>
+          `
+        ).join("")}
+        <button class="bottom-item bottom-menu" type="button" data-page="__menu__" aria-label="Open menu">
+          <div class="bottom-ico"></div>
+          <div class="bottom-lbl">Menu</div>
+        </button>
+      </div>
+    `;
 
-  return el;
-}
+    document.body.appendChild(bar);
 
-function showSheetBackdrop(){
-  const el = ensureSheetBackdrop();
-  el.classList.add("show");
-}
+    bar.addEventListener("click", (e) => {
+      const btn = e.target.closest(".bottom-item");
+      if (!btn) return;
 
-function hideSheetBackdrop(){
-  const el = document.getElementById("navSheetBackdrop");
-  if (!el) return;
-  el.classList.remove("show");
-}
+      const page = btn.getAttribute("data-page");
+      if (!page) return;
 
-/* ------------------------------------------------------
-   🔥 OVERLAY / NOTIFICATION SAFETY
------------------------------------------------------- */
-function injectNavbarSafetyStyles(){
-  if (document.getElementById("navbar-safety-styles")) return;
+      // Liquid morph feedback
+      btn.style.transform = "scale(0.9)";
+      setTimeout(() => {
+        btn.style.transform = "";
+      }, 200);
 
-  const style = document.createElement("style");
-  style.id = "navbar-safety-styles";
-  style.textContent = `
-    /* Ensure navbar always remains clickable */
-    .navbar, #navbar { pointer-events: auto; }
+      // Haptic feedback
+      if (navigator.vibrate) {
+        navigator.vibrate(10);
+      }
 
-    /* Notifications must NEVER block nav interactions */
-    .notification-container,
-    .notifications,
-    .toast-container,
-    .toast-wrapper,
-    .toasts,
-    #notifications {
-      pointer-events: none !important;
-      z-index: 9000 !important;
+      if (page === "__menu__") {
+        openBottomSheet();
+        return;
+      }
+
+      if (typeof window.switchPage === "function") {
+        window.switchPage(page);
+      }
+    });
+  }
+
+  function showBottomNav(show) {
+    const bar = document.getElementById("bottomNav");
+    if (!bar) return;
+    bar.classList.toggle("show", !!show);
+    document.body.classList.toggle("has-bottom-nav", !!show);
+  }
+
+  function syncBottomActive(pageId) {
+    const bar = document.getElementById("bottomNav");
+    if (!bar) return;
+
+    bar.querySelectorAll(".bottom-item").forEach((b) => {
+      b.classList.remove("is-active");
+      b.removeAttribute("aria-current");
+    });
+
+    const exact = bar.querySelector(`.bottom-item[data-page="${CSS.escape(pageId)}"]`);
+    if (exact) {
+      exact.classList.add("is-active");
+      exact.setAttribute("aria-current", "page");
+    }
+  }
+
+  // ========================================= 
+  // BOTTOM SHEET
+  // ========================================= 
+  function ensureBottomSheet() {
+    if (document.getElementById("navSheetBackdrop")) return;
+
+    const backdrop = document.createElement("div");
+    backdrop.id = "navSheetBackdrop";
+    backdrop.className = "nav-sheet-backdrop";
+
+    const sheet = document.createElement("div");
+    sheet.id = "navBottomSheet";
+    sheet.className = "nav-bottom-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.setAttribute("aria-label", "Navigation menu");
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div class="sheet-title">Navigation</div>
+        <button class="sheet-close" type="button" aria-label="Close menu">✕</button>
+      </div>
+
+      <div class="sheet-search">
+        <input id="sheetSearchInput" type="text" placeholder="Search address, tx, ledger…" aria-label="Search" />
+        <button id="sheetSearchBtn" type="button">Go</button>
+      </div>
+
+      <div class="sheet-body">
+        <div class="sheet-group">
+          <button class="sheet-group-toggle" type="button" data-gi="saved" aria-expanded="true">
+            <span>💾 Saved</span>
+            <span class="chev">▾</span>
+          </button>
+          <div class="sheet-group-items" data-gi="saved" id="sheetSavedList"></div>
+        </div>
+
+        ${SHEET_GROUPS.map(
+          (g, gi) => `
+            <div class="sheet-group">
+              <button class="sheet-group-toggle" type="button" data-gi="${gi}" aria-expanded="true">
+                <span>${g.title}</span>
+                <span class="chev">▾</span>
+              </button>
+              <div class="sheet-group-items" data-gi="${gi}">
+                ${g.items
+                  .map(
+                    (it) => `
+                      <button class="sheet-item" type="button" data-page="${it.id}">
+                        <span class="sheet-ico">${it.icon}</span>
+                        <span class="sheet-lbl">${it.label}</span>
+                      </button>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </div>
+          `
+        ).join("")}
+
+        <div class="sheet-group">
+          <button class="sheet-item sheet-item-theme" type="button" data-action="theme">
+            <span class="sheet-ico">🎨</span>
+            <span class="sheet-lbl">Theme picker</span>
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(sheet);
+
+    backdrop.addEventListener("click", closeBottomSheet);
+    sheet.querySelector(".sheet-close").addEventListener("click", closeBottomSheet);
+
+    // Swipe to close
+    setupSwipeGesture(sheet);
+
+    // Accordion
+    sheet.querySelectorAll(".sheet-group-toggle").forEach((t) => {
+      t.addEventListener("click", () => {
+        const gi = t.getAttribute("data-gi");
+        const items = sheet.querySelector(`.sheet-group-items[data-gi="${gi}"]`);
+        if (!items) return;
+
+        const collapsed = items.classList.toggle("collapsed");
+        t.setAttribute("aria-expanded", collapsed ? "false" : "true");
+
+        const chev = t.querySelector(".chev");
+        if (chev) chev.textContent = collapsed ? "▸" : "▾";
+      });
+    });
+
+    // Item clicks
+    sheet.addEventListener("click", (e) => {
+      const item = e.target.closest(".sheet-item");
+      if (!item) return;
+
+      const page = item.getAttribute("data-page");
+      const action = item.getAttribute("data-action");
+
+      if (navigator.vibrate) {
+        navigator.vibrate(10);
+      }
+
+      if (action === "theme") {
+        closeBottomSheet();
+        setTimeout(() => {
+          if (window.UIX?.openThemePicker) window.UIX.openThemePicker();
+          else if (typeof window.cycleTheme === "function") window.cycleTheme();
+        }, 200);
+        return;
+      }
+
+      if (page && typeof window.switchPage === "function") {
+        closeBottomSheet();
+        setTimeout(() => {
+          window.switchPage(page);
+        }, 200);
+      }
+    });
+
+    // Search
+    sheet.querySelector("#sheetSearchBtn")?.addEventListener("click", () => {
+      const v = sheet.querySelector("#sheetSearchInput")?.value || "";
+      closeBottomSheet();
+      setTimeout(() => {
+        if (window.UIX?.runSearch) window.UIX.runSearch(v);
+        else if (window.switchPage) window.switchPage("explorer");
+      }, 200);
+    });
+
+    sheet.querySelector("#sheetSearchInput")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sheet.querySelector("#sheetSearchBtn")?.click();
+      }
+    });
+
+    renderSavedInSheet();
+  }
+
+  // Swipe gesture
+  function setupSwipeGesture(sheet) {
+    let startY = 0;
+    let currentY = 0;
+    let isDragging = false;
+
+    sheet.addEventListener("touchstart", (e) => {
+      const scrollTop = sheet.scrollTop;
+      if (scrollTop === 0) {
+        startY = e.touches[0].clientY;
+        isDragging = true;
+      }
+    });
+
+    sheet.addEventListener("touchmove", (e) => {
+      if (!isDragging) return;
+      currentY = e.touches[0].clientY;
+      const diff = currentY - startY;
+
+      if (diff > 0) {
+        e.preventDefault();
+        sheet.style.transform = `translateY(${diff}px)`;
+        sheet.style.transition = "none";
+      }
+    });
+
+    sheet.addEventListener("touchend", () => {
+      if (!isDragging) return;
+      isDragging = false;
+
+      const diff = currentY - startY;
+      sheet.style.transition = "";
+      sheet.style.transform = "";
+
+      if (diff > 120) {
+        closeBottomSheet();
+      }
+
+      startY = 0;
+      currentY = 0;
+    });
+  }
+
+  function openBottomSheet() {
+    const backdrop = document.getElementById("navSheetBackdrop");
+    const sheet = document.getElementById("navBottomSheet");
+    if (!backdrop || !sheet) return;
+
+    renderSavedInSheet();
+
+    backdrop.classList.add("show");
+    sheet.classList.add("show");
+    document.body.classList.add("sheet-open");
+
+    setTimeout(() => {
+      const firstInput = sheet.querySelector("input");
+      firstInput?.focus();
+    }, 400);
+
+    sheet.setAttribute("aria-hidden", "false");
+  }
+
+  function closeBottomSheet() {
+    const backdrop = document.getElementById("navSheetBackdrop");
+    const sheet = document.getElementById("navBottomSheet");
+    if (!backdrop || !sheet) return;
+
+    backdrop.classList.remove("show");
+    sheet.classList.remove("show");
+    document.body.classList.remove("sheet-open");
+
+    sheet.setAttribute("aria-hidden", "true");
+  }
+
+  function renderSavedInSheet() {
+    const host = document.getElementById("sheetSavedList");
+    if (!host) return;
+
+    const list = window.UIX?.getSaved ? window.UIX.getSaved() : [];
+    const pinned = window.UIX?.getPinned ? window.UIX.getPinned() : null;
+
+    if (!list.length) {
+      host.innerHTML = `<div class="sheet-empty">No saved addresses yet.</div>`;
+      return;
     }
 
-    /* Allow clicks INSIDE notification cards only */
-    .notification,
-    .toast {
-      pointer-events: auto !important;
-    }
-  `;
-  document.head.appendChild(style);
-}
+    host.innerHTML = list
+      .slice(0, 10)
+      .map((a) => {
+        const short = `${a.slice(0, 6)}…${a.slice(-5)}`;
+        const pin = pinned === a ? "📌" : "☆";
+        return `
+          <button class="sheet-item sheet-saved" type="button" data-saved="${a}">
+            <span class="sheet-ico">${pin}</span>
+            <span class="sheet-lbl">${short}</span>
+          </button>
+        `;
+      })
+      .join("");
 
-console.log("✅ Navbar module loaded (mobile panel + bottom bar + sheet dropdowns)");
+    host.querySelectorAll(".sheet-saved").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const addr = btn.getAttribute("data-saved");
+        closeBottomSheet();
+
+        setTimeout(() => {
+          if (typeof window.switchPage === "function") {
+            window.switchPage("inspector");
+          }
+
+          setTimeout(() => {
+            if (window.UnifiedInspector?.quickInspect) {
+              window.UnifiedInspector.quickInspect(addr);
+            } else if (window.UIX?.runSearch) {
+              window.UIX.runSearch(addr);
+            }
+          }, 300);
+        }, 200);
+      });
+    });
+  }
+
+  // ========================================= 
+  // SAFETY STYLES
+  // ========================================= 
+  function injectSafetyStyles() {
+    if (document.getElementById("navbar-safety-styles")) return;
+
+    const style = document.createElement("style");
+    style.id = "navbar-safety-styles";
+    style.textContent = `
+      #navbar, .navbar {
+        pointer-events: auto;
+        z-index: 60000 !important;
+      }
+
+      .notification-container,
+      .notifications,
+      .toast-container,
+      .toast-wrapper,
+      .toasts,
+      #notifications {
+        pointer-events: none !important;
+        z-index: 9000 !important;
+      }
+
+      .notification,
+      .toast {
+        pointer-events: auto !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+})();
