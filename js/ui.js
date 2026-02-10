@@ -4,7 +4,7 @@
    + Command palette (Ctrl+K / Cmd+K / /)
    + Saved addresses + Pin-to-Inspector
    + Theme preview picker
-   + Dispatches nalulf:pagechange so navbar can highlight
+   + Dispatches naluxrp:pagechange so navbar can highlight
    + Connection status monitoring for navbar
 
    ✅ FIX: Disable injected "page header" (Home / Welcome / Search / ★ 🎨 ⌘)
@@ -12,13 +12,9 @@
 
    ✅ FIX: switchPage now scrolls to top so Inspector doesn't open at the bottom
    
-   ✅ FIX: Branding updated from NaluXrp to NaluLF (Old English Style)
+   ✅ FIX: Branding updated from NaluXrp to NaluLF
    
    ✅ FIX: XRPL connection monitoring with event dispatches for navbar status
-   
-   ✅ FIX: Proper page switching with individual page sections
-   ✅ FIX: Landing page with Old English main title
-   ✅ FIX: Added footer to all pages
    ========================================= */
 
 (function () {
@@ -36,23 +32,23 @@
     landing: { active: false, onScroll: null },
   };
 
-  const LS_SAVED = "nalulf_saved_addresses";
-  const LS_PINNED = "nalulf_pinned_address";
+  const LS_SAVED = "naluxrp_saved_addresses";
+  const LS_PINNED = "naluxrp_pinned_address";
 
   const PAGE_META = {
-    dashboard: { crumb: "Dashboard", sub: "Ledger Overview", title: "🌊 NaluLF Dashboard" },
-    inspector: { crumb: "Inspector", sub: "Tree • Trace • Quick Inspect", title: "Account Inspector" },
-    analytics: { crumb: "Analytics", sub: "Patterns & Metrics", title: "Network Analytics" },
-    explorer: { crumb: "Explorer", sub: "Search the XRPL", title: "Ledger Explorer" },
-    validators: { crumb: "Validators", sub: "Health & Performance", title: "Validator Network" },
-    tokens: { crumb: "Tokens", sub: "Distribution & Markets", title: "Token Analysis" },
-    amm: { crumb: "AMM Pools", sub: "Liquidity & Swaps", title: "AMM Pool Analysis" },
-    nfts: { crumb: "NFTs", sub: "Collections & Activity", title: "NFT Marketplace" },
-    profile: { crumb: "Profile", sub: "Account & Preferences", title: "User Profile" },
-    news: { crumb: "News", sub: "Ledger Updates", title: "XRPL News" },
-    history: { crumb: "History", sub: "Snapshots & Events", title: "Transaction History" },
-    settings: { crumb: "Settings", sub: "System Configuration", title: "Settings" },
-    about: { crumb: "About", sub: "NaluLF 🌊 Riding The Ledger Waves", title: "About NaluLF" },
+    dashboard: { crumb: "Dashboard", sub: "Ledger Overview" },
+    inspector: { crumb: "Inspector", sub: "Tree • Trace • Quick Inspect" },
+    analytics: { crumb: "Analytics", sub: "Patterns & Metrics" },
+    explorer: { crumb: "Explorer", sub: "Search the XRPL" },
+    validators: { crumb: "Validators", sub: "Health & Performance" },
+    tokens: { crumb: "Tokens", sub: "Distribution & Markets" },
+    amm: { crumb: "AMM Pools", sub: "Liquidity & Swaps" },
+    nfts: { crumb: "NFTs", sub: "Collections & Activity" },
+    profile: { crumb: "Profile", sub: "Account & Preferences" },
+    news: { crumb: "News", sub: "Ledger Updates" },
+    history: { crumb: "History", sub: "Snapshots & Events" },
+    settings: { crumb: "Settings", sub: "System Configuration" },
+    about: { crumb: "About", sub: "NaluLF Info" },
   };
 
   // -----------------------------
@@ -97,7 +93,7 @@
   }
 
   function dispatchSavedChange() {
-    window.dispatchEvent(new CustomEvent("nalulf:savedchange"));
+    window.dispatchEvent(new CustomEvent("naluxrp:savedchange"));
   }
 
   // -----------------------------
@@ -163,11 +159,13 @@
   // XRPL Connection Monitoring
   // -----------------------------
   function setupConnectionMonitoring() {
+    // Monitor XRPL connection and dispatch events for navbar
     let wasConnected = false;
 
     function checkAndDispatch() {
       let isConnected = false;
 
+      // Check various connection sources
       if (typeof window.xrplClient !== 'undefined' && window.xrplClient?.isConnected) {
         isConnected = window.xrplClient.isConnected();
       } else if (typeof window.client !== 'undefined' && window.client?.isConnected) {
@@ -178,22 +176,27 @@
         isConnected = true;
       }
 
+      // Dispatch events on state change
       if (isConnected && !wasConnected) {
         console.log("🌊 NaluLF: XRPL Connected");
         window.dispatchEvent(new Event("xrpl:connected"));
-        window.dispatchEvent(new Event("nalulf:connected"));
+        window.dispatchEvent(new Event("naluxrp:connected"));
         wasConnected = true;
       } else if (!isConnected && wasConnected) {
         console.log("🌊 NaluLF: XRPL Disconnected");
         window.dispatchEvent(new Event("xrpl:disconnected"));
-        window.dispatchEvent(new Event("nalulf:disconnected"));
+        window.dispatchEvent(new Event("naluxrp:disconnected"));
         wasConnected = false;
       }
     }
 
+    // Check immediately
     setTimeout(checkAndDispatch, 500);
+
+    // Poll every 2 seconds as backup
     setInterval(checkAndDispatch, 2000);
 
+    // Also listen for manual connection events from xrpl-connection.js
     window.addEventListener("xrpl:manual-connect", () => {
       wasConnected = false;
       checkAndDispatch();
@@ -224,14 +227,16 @@
 
     body.classList.remove("dashboard", "inspector");
     if (pageId === "inspector") body.classList.add("inspector");
-    else if (pageId === "dashboard") body.classList.add("dashboard");
+    else body.classList.add("dashboard");
   }
 
   // -----------------------------
   // Header (breadcrumb + search + buttons)
   // -----------------------------
   function ensurePageHeader() {
+    // ✅ FIX: header injection disabled
     if (!ENABLE_PAGE_HEADER) {
+      // If it exists from older cached JS, remove it
       const existing = document.getElementById("pageHeader");
       if (existing) existing.remove();
       return;
@@ -273,6 +278,7 @@
     if (navbar && navbar.parentNode) navbar.parentNode.insertBefore(header, navbar.nextSibling);
     else document.body.insertBefore(header, document.body.firstChild);
 
+    // Bind header search
     const input = document.getElementById("globalSearchInput");
     const btn = document.getElementById("globalSearchBtn");
 
@@ -283,9 +289,11 @@
       });
     }
 
+    // Buttons
     document.getElementById("savedBtn")?.addEventListener("click", openSavedDialog);
     document.getElementById("themePickerBtn")?.addEventListener("click", openThemePicker);
     document.getElementById("cmdkBtn")?.addEventListener("click", openCommandPalette);
+
     document.getElementById("unpinBtn")?.addEventListener("click", () => {
       unpinAddress();
       toast("Unpinned");
@@ -295,6 +303,7 @@
   }
 
   function updatePageHeader(pageId, { landing = false } = {}) {
+    // ✅ FIX: no header
     if (!ENABLE_PAGE_HEADER) return;
 
     ensurePageHeader();
@@ -315,6 +324,7 @@
   }
 
   function updatePinnedPill() {
+    // If header is disabled, this pill doesn't exist (safe no-op)
     const pill = document.getElementById("pinnedPill");
     const txt = document.getElementById("pinnedText");
     if (!pill || !txt) return;
@@ -383,157 +393,139 @@
   }
 
   // -----------------------------
-  // Page init map - UPDATED FOR SEPARATE PAGES
+  // Page init map - Clears innerHTML in each function (working approach)
   // -----------------------------
   const PAGE_INIT_MAP = {
     dashboard: () => {
       const el = document.getElementById("dashboard");
       if (!el) return;
-      el.innerHTML = "";
+      el.innerHTML = ""; // Clear before rendering
       if (typeof window.renderDashboard === "function") {
         window.renderDashboard();
       } else {
-        showDashboardPage();
+        showDefaultPage("dashboard");
       }
-      showFooter();
     },
 
     analytics: () => {
       const el = document.getElementById("analytics");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">📈 Analytics</h2><p>Network patterns and metrics will appear here.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initAnalytics) window.initAnalytics();
-      showFooter();
+      else showDefaultPage("analytics");
     },
-
+    
     validators: () => {
       const el = document.getElementById("validators");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">🛡️ Validators</h2><p>Validator network health and performance.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initValidators) window.initValidators();
-      showFooter();
+      else showDefaultPage("validators");
     },
-
+    
     tokens: () => {
       const el = document.getElementById("tokens");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">🪙 Tokens</h2><p>Token distribution and market analysis.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initTokens) window.initTokens();
-      showFooter();
+      else showDefaultPage("tokens");
     },
-
+    
     amm: () => {
       const el = document.getElementById("amm");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">💧 AMM Pools</h2><p>Liquidity pools and swap analysis.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.AMM?.init) window.AMM.init();
-      else if (window.initAMM) window.initAMM();
-      showFooter();
+      else showDefaultPage("amm");
     },
-
+    
     explorer: () => {
       const el = document.getElementById("explorer");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">🔍 Explorer</h2><p>Search the XRP Ledger.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initExplorer) window.initExplorer();
-      showFooter();
+      else showDefaultPage("explorer");
     },
-
+    
     nfts: () => {
       const el = document.getElementById("nfts");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">🎨 NFTs</h2><p>NFT collections and activity analysis.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initNFTs) window.initNFTs();
-      showFooter();
+      else showDefaultPage("nfts");
     },
-
+    
     profile: () => {
       const el = document.getElementById("profile");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">👤 Profile</h2><p>Account settings and preferences.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initProfile) window.initProfile();
-      showFooter();
+      else showDefaultPage("profile");
     },
-
+    
     news: () => {
       const el = document.getElementById("news");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">📰 News</h2><p>Latest XRPL updates and announcements.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initNews) window.initNews();
-      showFooter();
+      else showDefaultPage("news");
     },
-
+    
     history: () => {
       const el = document.getElementById("history");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">📜 History</h2><p>Transaction history and snapshots.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initHistory) window.initHistory();
-      showFooter();
+      else showDefaultPage("history");
     },
-
+    
     settings: () => {
       const el = document.getElementById("settings");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">⚙️ Settings</h2><p>System configuration and preferences.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initSettings) window.initSettings();
-      showFooter();
+      else showDefaultPage("settings");
     },
-
+    
     about: () => {
       const el = document.getElementById("about");
       if (!el) return;
-      el.innerHTML = '<h2 class="page-title">ℹ️ About NaluLF</h2><p>Information about the NaluLF platform.</p>';
+      el.innerHTML = ""; // Clear first
       if (window.initAbout) window.initAbout();
-      showFooter();
+      else showDefaultPage("about");
     },
 
     inspector: () => {
+      const el = document.getElementById("inspector");
+      if (!el) return;
+      
+      // Try to connect to XRPL if not already connected
       try {
         if (typeof window.connectXRPL === "function" && !(window.XRPL && window.XRPL.connected)) {
           window.connectXRPL();
         }
       } catch (_) {}
 
-      const el = document.getElementById("inspector");
-      if (!el) return;
-
+      // Initialize inspector
       if (typeof window.initInspector === "function") {
         try {
           window.initInspector();
         } catch (e) {
           console.error("Inspector init failed:", e);
-          el.innerHTML = '<h2 class="page-title">🔎 Inspector</h2><p>Account and transaction inspector.</p>';
+          showDefaultPage("inspector");
         }
       } else {
-        el.innerHTML = '<h2 class="page-title">🔎 Inspector</h2><p>Account and transaction inspector.</p>';
+        showDefaultPage("inspector");
       }
 
+      // If pinned exists, auto-inspect it
       const pinned = getPinned();
       if (pinned) tryInspectorQuickInspect(pinned);
-      showFooter();
     },
   };
 
   // -----------------------------
-  // Page Creation and Management
-  // -----------------------------
-  function createPageContainer() {
-    const container = document.querySelector('.container') || document.body;
-    
-    // Create all page sections if they don't exist
-    Object.keys(PAGE_META).forEach(pageId => {
-      if (!document.getElementById(pageId)) {
-        const pageSection = document.createElement('section');
-        pageSection.id = pageId;
-        pageSection.className = 'page-section';
-        pageSection.style.display = 'none';
-        container.appendChild(pageSection);
-      }
-    });
-  }
-
-  // -----------------------------
-  // Navigation - UPDATED FOR PROPER PAGE SWITCHING
+  // Navigation - WORKING VERSION (doesn't stack pages)
   // -----------------------------
   function switchPage(pageId) {
     console.log(`🌊 NaluLF: Switching to page: ${pageId}`);
@@ -560,7 +552,7 @@
 
     targetPage.style.display = 'block';
 
-    // ✅ FIX: Force scroll to top BEFORE page initialization
+    // ✅ Force scroll to top BEFORE page initialization
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     
     setTimeout(() => {
@@ -571,7 +563,10 @@
     window.UI.currentPage = pageId;
     
     // Update page title
-    document.title = `${PAGE_META[pageId].title} | NaluLF`;
+    document.title = `${PAGE_META[pageId].title || PAGE_META[pageId].crumb} | NaluLF`;
+
+    // Update page header
+    updatePageHeader(pageId);
 
     // Initialize page content
     if (PAGE_INIT_MAP[pageId]) {
@@ -581,62 +576,17 @@
       console.warn(`🌊 NaluLF: No initialization function for page: ${pageId}`);
     }
 
+    // Refresh reveal animations
+    requestAnimationFrame(refreshRevealObserver);
+
     // Notify navbar and other listeners
-    window.dispatchEvent(new CustomEvent("nalulf:pagechange", { detail: { pageId } }));
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId } }));
     
     console.log(`✅ NaluLF: Page switched to: ${pageId}`);
   }
 
   // -----------------------------
-  // Dashboard Page (Separate from Landing)
-  // -----------------------------
-  function showDashboardPage() {
-    const dashboard = document.getElementById("dashboard");
-    if (!dashboard) return;
-
-    dashboard.innerHTML = `
-      <div class="dashboard-page">
-        <h1 class="page-title">🌊 NaluLF Dashboard</h1>
-        <p class="page-subtitle">Real-time XRPL analytics and monitoring</p>
-        
-        <div class="dashboard-grid">
-          <div class="dashboard-card">
-            <h3>📊 Network Health</h3>
-            <p>Monitor ledger close times, validator participation, and network stability.</p>
-            <button class="card-btn" onclick="switchPage('analytics')">View Analytics</button>
-          </div>
-          
-          <div class="dashboard-card">
-            <h3>🔎 Quick Inspector</h3>
-            <p>Inspect any XRPL account, transaction, or ledger in detail.</p>
-            <button class="card-btn" onclick="switchPage('inspector')">Open Inspector</button>
-          </div>
-          
-          <div class="dashboard-card">
-            <h3>🛡️ Validators</h3>
-            <p>Track validator performance, voting patterns, and consensus.</p>
-            <button class="card-btn" onclick="switchPage('validators')">View Validators</button>
-          </div>
-          
-          <div class="dashboard-card">
-            <h3>💰 DeFi Overview</h3>
-            <p>Monitor AMM pools, token distribution, and liquidity trends.</p>
-            <button class="card-btn" onclick="switchPage('tokens')">View DeFi</button>
-          </div>
-        </div>
-        
-        <div class="dashboard-recent">
-          <h3>Recent Activity</h3>
-          <p>Dashboard content will be loaded here...</p>
-        </div>
-      </div>
-    `;
-    
-    showFooter();
-  }
-
-  // -----------------------------
-  // Landing Page with Old English Style
+  // Landing Page Function
   // -----------------------------
   function showLandingPage() {
     applyPageClass("dashboard");
@@ -651,294 +601,141 @@
       <div class="landing-page">
         <section class="landing-hero">
           <div class="landing-orb"></div>
-          <div class="landing-kicker">XRPL • Real-time • Pattern Intelligence</div>
           
-          <!-- Old English Styled NaluLF -->
+          <!-- Enhanced Kicker Badge -->
+          <div class="landing-kicker">
+            <span class="kicker-dot"></span>
+            XRPL • Real-time • Pattern Intelligence
+            <span class="kicker-dot"></span>
+          </div>
+          
+          <!-- Enhanced NaluLF Logo - NO WAVE EMOJI, THICKER LETTERS -->
           <div class="nalulf-logo-container">
-            <h1 class="nalulf-logo">🌊 <span class="nalulf-text">NaluLF</span></h1>
-            <div class="nalulf-subtitle">Riding The Ledger Waves</div>
+            <h1 class="nalulf-logo">NaluLF</h1>
+            <div class="nalulf-accent-line"></div>
+          </div>
+          
+          <div class="landing-tagline">
+            <span class="tagline-wave">~</span>
+            Riding The Ledger Waves
+            <span class="tagline-wave">~</span>
           </div>
 
           <p class="landing-description">
-            NaluLF is a deep-inspection platform for the XRP Ledger.
+            NaluLF is a <strong>deep-inspection platform</strong> for the XRP Ledger.
             It goes beyond surface metrics to expose <strong>patterns, dominance,
-            stress signals, and anomalous behavior</strong>.
+            stress signals, and anomalous behavior</strong> in real-time.
           </p>
 
           <div class="landing-actions">
-            <button class="landing-btn primary" onclick="switchPage('dashboard')">🚀 Launch Dashboard</button>
-            <button class="landing-btn secondary" onclick="switchPage('analytics')">📈 Analytics</button>
-            <button class="landing-btn ghost" onclick="document.getElementById('landingExplain').scrollIntoView({behavior:'smooth'})">🔍 Learn More</button>
+            <button class="landing-btn primary" onclick="switchPage('dashboard')">
+              <span class="btn-icon">🚀</span>
+              <span class="btn-text">Launch Dashboard</span>
+              <span class="btn-shimmer"></span>
+            </button>
+            <button class="landing-btn secondary" onclick="switchPage('analytics')">
+              <span class="btn-icon">📈</span>
+              <span class="btn-text">Analytics</span>
+            </button>
+            <button class="landing-btn ghost" onclick="document.getElementById('landingExplain').scrollIntoView({behavior:'smooth'})">
+              <span class="btn-icon">🔍</span>
+              <span class="btn-text">Learn More</span>
+            </button>
+          </div>
+          
+          <!-- Scroll Indicator -->
+          <div class="scroll-indicator">
+            <div class="scroll-arrow">↓</div>
+            <span>Explore Features</span>
           </div>
         </section>
 
         <section class="landing-split reveal" id="landingExplain">
           <div class="landing-panel">
+            <div class="panel-icon">📊</div>
             <h2>What NaluLF Shows</h2>
             <ul>
-              <li>Ledger rhythm & close-time deviations</li>
-              <li>Transaction dominance by type</li>
-              <li>Validator health & latency</li>
-              <li>Liquidity, AMMs & escrow pressure</li>
-              <li>Whale movement & capital concentration</li>
+              <li><span class="bullet">▸</span>Ledger rhythm & close-time deviations</li>
+              <li><span class="bullet">▸</span>Transaction dominance by type</li>
+              <li><span class="bullet">▸</span>Validator health & latency</li>
+              <li><span class="bullet">▸</span>Liquidity, AMMs & escrow pressure</li>
+              <li><span class="bullet">▸</span>Whale movement & capital concentration</li>
             </ul>
           </div>
 
           <div class="landing-panel landing-panel-glow">
+            <div class="panel-icon glow">⚡</div>
             <h2>Why It Matters</h2>
             <p>
               Many exploits, drains, and manipulative events emerge as <strong>patterns</strong>.
-              NaluLF surfaces those signals early.
+              NaluLF surfaces those signals early, giving you the edge to react before the market does.
             </p>
+            <div class="panel-stats">
+              <div class="stat-item">
+                <div class="stat-value">Real-time</div>
+                <div class="stat-label">Data Streaming</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">24/7</div>
+                <div class="stat-label">Monitoring</div>
+              </div>
+            </div>
           </div>
         </section>
 
         <section class="landing-features reveal">
-          <article class="feature-card"><h3>📊 Ledger Rhythm</h3><p>Visualize cadence shifts and timing instability that often precede congestion.</p></article>
-          <article class="feature-card"><h3>🧬 Network Health</h3><p>Monitor validator participation, latency distribution, and resilience under load.</p></article>
-          <article class="feature-card danger"><h3>🐋 Whale Dominance</h3><p>Identify large actors, capital clustering, and sudden influence shifts.</p></article>
-          <article class="feature-card danger"><h3>⚠️ Anomaly Detection</h3><p>Detect bursts, abnormal mixes, and behavior consistent with manipulation.</p></article>
+          <div class="features-header">
+            <h2>Powerful Features</h2>
+            <p>Everything you need to analyze the XRP Ledger</p>
+          </div>
+          
+          <div class="features-grid">
+            <article class="feature-card">
+              <div class="feature-icon">📊</div>
+              <h3>Ledger Rhythm</h3>
+              <p>Visualize cadence shifts and timing instability that often precede congestion.</p>
+              <div class="feature-link" onclick="switchPage('analytics')">Explore →</div>
+            </article>
+            
+            <article class="feature-card">
+              <div class="feature-icon">🧬</div>
+              <h3>Network Health</h3>
+              <p>Monitor validator participation, latency distribution, and resilience under load.</p>
+              <div class="feature-link" onclick="switchPage('validators')">Explore →</div>
+            </article>
+            
+            <article class="feature-card danger">
+              <div class="feature-icon">🐋</div>
+              <h3>Whale Dominance</h3>
+              <p>Identify large actors, capital clustering, and sudden influence shifts.</p>
+              <div class="feature-link" onclick="switchPage('tokens')">Explore →</div>
+            </article>
+            
+            <article class="feature-card danger">
+              <div class="feature-icon">⚠️</div>
+              <h3>Anomaly Detection</h3>
+              <p>Detect bursts, abnormal mixes, and behavior consistent with manipulation.</p>
+              <div class="feature-link" onclick="switchPage('inspector')">Explore →</div>
+            </article>
+          </div>
+        </section>
+        
+        <!-- Call to Action Section -->
+        <section class="landing-cta reveal">
+          <div class="cta-content">
+            <h2>Ready to dive into the ledger?</h2>
+            <p>Start analyzing XRPL data with NaluLF's powerful tools</p>
+            <button class="cta-button" onclick="switchPage('dashboard')">
+              Get Started
+              <span class="cta-arrow">→</span>
+            </button>
+          </div>
         </section>
       </div>
     `;
 
-    // Add Old English font styles
-    const style = document.createElement('style');
-    style.textContent = `
-      .nalulf-logo-container {
-        text-align: center;
-        margin: 2rem 0;
-      }
-      
-      .nalulf-logo {
-        font-family: 'UnifrakturMaguntia', 'Uncial Antiqua', 'MedievalSharp', 'Old English Text MT', 'Engravers MT', 'Blackletter', serif;
-        font-size: 4.5rem;
-        font-weight: 400;
-        letter-spacing: 3px;
-        color: transparent;
-        background: linear-gradient(135deg, #00fff0, #05d9e8, #01c5c4);
-        -webkit-background-clip: text;
-        background-clip: text;
-        margin: 0;
-        text-shadow: 0 0 40px rgba(0, 255, 240, 0.7), 0 0 80px rgba(5, 217, 232, 0.4);
-        position: relative;
-        display: inline-block;
-      }
-      
-      .nalulf-logo::before {
-        content: '';
-        position: absolute;
-        bottom: -8px;
-        left: 0;
-        width: 100%;
-        height: 3px;
-        background: linear-gradient(90deg, transparent 10%, #00fff0 25%, #05d9e8 50%, #00fff0 75%, transparent 90%);
-        opacity: 0.8;
-        border-radius: 2px;
-        box-shadow: 0 0 20px rgba(0, 255, 240, 0.6);
-      }
-      
-      .nalulf-text {
-        display: inline-block;
-        letter-spacing: 5px;
-        text-transform: uppercase;
-      }
-      
-      .nalulf-subtitle {
-        font-family: 'Eagle Lake', 'Uncial Antiqua', 'MedievalSharp', cursive;
-        font-size: 1.2rem;
-        letter-spacing: 3px;
-        color: #d4f1f4;
-        opacity: 0.9;
-        text-transform: uppercase;
-        margin-top: 0.5rem;
-        text-shadow: 0 0 10px rgba(212, 241, 244, 0.5);
-      }
-      
-      @media (max-width: 768px) {
-        .nalulf-logo {
-          font-size: 3.5rem;
-          letter-spacing: 2px;
-        }
-        
-        .nalulf-subtitle {
-          font-size: 1rem;
-          letter-spacing: 2px;
-        }
-      }
-    `;
-    document.head.appendChild(style);
-
     refreshRevealObserver();
-    showFooter();
-    window.dispatchEvent(new CustomEvent("nalulf:pagechange", { detail: { pageId: "dashboard" } }));
-  }
-
-  // -----------------------------
-  // Footer Component
-  // -----------------------------
-  function showFooter() {
-    // Remove existing footer if present
-    const existingFooter = document.getElementById('main-footer');
-    if (existingFooter) existingFooter.remove();
-
-    const footer = document.createElement('footer');
-    footer.id = 'main-footer';
-    footer.className = 'main-footer';
-    footer.innerHTML = `
-      <div class="footer-content">
-        <div class="footer-section">
-          <div class="footer-logo">🌊 <strong>NaluLF</strong></div>
-          <div class="footer-slogan">Riding The Ledger Waves</div>
-        </div>
-        
-        <div class="footer-section">
-          <h4>Navigation</h4>
-          <a href="javascript:void(0)" onclick="switchPage('dashboard')">Dashboard</a>
-          <a href="javascript:void(0)" onclick="switchPage('analytics')">Analytics</a>
-          <a href="javascript:void(0)" onclick="switchPage('inspector')">Inspector</a>
-          <a href="javascript:void(0)" onclick="switchPage('explorer')">Explorer</a>
-        </div>
-        
-        <div class="footer-section">
-          <h4>DeFi</h4>
-          <a href="javascript:void(0)" onclick="switchPage('tokens')">Tokens</a>
-          <a href="javascript:void(0)" onclick="switchPage('amm')">AMM Pools</a>
-          <a href="javascript:void(0)" onclick="switchPage('nfts')">NFTs</a>
-        </div>
-        
-        <div class="footer-section">
-          <h4>Resources</h4>
-          <a href="javascript:void(0)" onclick="switchPage('news')">News</a>
-          <a href="javascript:void(0)" onclick="switchPage('history')">History</a>
-          <a href="javascript:void(0)" onclick="switchPage('about')">About</a>
-          <a href="javascript:void(0)" onclick="switchPage('settings')">Settings</a>
-        </div>
-      </div>
-      
-      <div class="footer-bottom">
-        <p>© ${new Date().getFullYear()} NaluLF. All rights reserved. | XRPL Analytics Platform</p>
-        <div class="footer-links">
-          <a href="javascript:void(0)" onclick="openCommandPalette()">Command (Ctrl+K)</a>
-          <a href="javascript:void(0)" onclick="openThemePicker()">Theme Picker</a>
-          <a href="javascript:void(0)" onclick="switchPage('profile')">Profile</a>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(footer);
-
-    // Add footer styles
-    const footerStyle = document.createElement('style');
-    footerStyle.textContent = `
-      .main-footer {
-        background: linear-gradient(180deg, 
-          rgba(0, 21, 36, 0.95) 0%,
-          rgba(0, 10, 18, 0.98) 100%
-        );
-        border-top: 1.5px solid rgba(0, 255, 240, 0.15);
-        color: #d4f1f4;
-        padding: 2rem 0 0;
-        margin-top: 3rem;
-      }
-      
-      .footer-content {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 0 2rem;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 2rem;
-      }
-      
-      .footer-section {
-        display: flex;
-        flex-direction: column;
-      }
-      
-      .footer-logo {
-        font-family: 'UnifrakturMaguntia', 'Uncial Antiqua', 'MedievalSharp', serif;
-        font-size: 1.8rem;
-        letter-spacing: 2px;
-        color: #00fff0;
-        margin-bottom: 0.5rem;
-      }
-      
-      .footer-slogan {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.8rem;
-        letter-spacing: 2px;
-        opacity: 0.7;
-        text-transform: uppercase;
-      }
-      
-      .footer-section h4 {
-        color: #05d9e8;
-        margin-bottom: 1rem;
-        font-size: 1rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-      }
-      
-      .footer-section a {
-        color: #d4f1f4;
-        text-decoration: none;
-        margin-bottom: 0.5rem;
-        transition: color 0.3s ease;
-      }
-      
-      .footer-section a:hover {
-        color: #00fff0;
-      }
-      
-      .footer-bottom {
-        max-width: 1200px;
-        margin: 2rem auto 0;
-        padding: 1.5rem 2rem;
-        border-top: 1px solid rgba(0, 255, 240, 0.1);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      
-      .footer-bottom p {
-        opacity: 0.7;
-        font-size: 0.9rem;
-      }
-      
-      .footer-links {
-        display: flex;
-        gap: 1rem;
-      }
-      
-      .footer-links a {
-        color: #d4f1f4;
-        text-decoration: none;
-        font-size: 0.9rem;
-        opacity: 0.8;
-        transition: opacity 0.3s ease;
-      }
-      
-      .footer-links a:hover {
-        opacity: 1;
-        color: #00fff0;
-      }
-      
-      @media (max-width: 768px) {
-        .footer-content {
-          grid-template-columns: 1fr;
-          gap: 1.5rem;
-        }
-        
-        .footer-bottom {
-          flex-direction: column;
-          gap: 1rem;
-          text-align: center;
-        }
-      }
-    `;
-    document.head.appendChild(footerStyle);
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
   }
 
   // -----------------------------
@@ -1014,14 +811,14 @@
 
     if (isTxHash(q)) {
       switchPage("explorer");
-      window.dispatchEvent(new CustomEvent("nalulf:search", { detail: { type: "tx", value: q } }));
+      window.dispatchEvent(new CustomEvent("naluxrp:search", { detail: { type: "tx", value: q } }));
       toast("Sent tx hash to Explorer");
       return;
     }
 
     if (isLedgerIndex(q)) {
       switchPage("explorer");
-      window.dispatchEvent(new CustomEvent("nalulf:search", { detail: { type: "ledger", value: Number(q) } }));
+      window.dispatchEvent(new CustomEvent("naluxrp:search", { detail: { type: "ledger", value: Number(q) } }));
       toast("Sent ledger index to Explorer");
       return;
     }
@@ -1090,18 +887,18 @@
   // Dialog + Toast
   // -----------------------------
   function ensureDialog() {
-    if (document.getElementById("nalulfDialogOverlay")) return;
+    if (document.getElementById("naluxDialogOverlay")) return;
 
     const overlay = document.createElement("div");
-    overlay.id = "nalulfDialogOverlay";
-    overlay.className = "nalulf-dialog-overlay";
+    overlay.id = "naluxDialogOverlay";
+    overlay.className = "nalux-dialog-overlay";
     overlay.innerHTML = `
-      <div class="nalulf-dialog" role="dialog" aria-modal="true">
-        <div class="nalulf-dialog-head">
-          <div class="nalulf-dialog-title" id="nalulfDialogTitle">Dialog</div>
-          <button class="nalulf-dialog-close" id="nalulfDialogClose" type="button" aria-label="Close">✕</button>
+      <div class="nalux-dialog" role="dialog" aria-modal="true">
+        <div class="nalux-dialog-head">
+          <div class="nalux-dialog-title" id="naluxDialogTitle">Dialog</div>
+          <button class="nalux-dialog-close" id="naluxDialogClose" type="button" aria-label="Close">✕</button>
         </div>
-        <div class="nalulf-dialog-body" id="nalulfDialogBody"></div>
+        <div class="nalux-dialog-body" id="naluxDialogBody"></div>
       </div>
     `;
 
@@ -1110,14 +907,14 @@
     });
 
     document.body.appendChild(overlay);
-    document.getElementById("nalulfDialogClose")?.addEventListener("click", closeDialog);
+    document.getElementById("naluxDialogClose")?.addEventListener("click", closeDialog);
   }
 
   function openDialog(title, bodyHtml) {
     ensureDialog();
-    const overlay = document.getElementById("nalulfDialogOverlay");
-    const t = document.getElementById("nalulfDialogTitle");
-    const b = document.getElementById("nalulfDialogBody");
+    const overlay = document.getElementById("naluxDialogOverlay");
+    const t = document.getElementById("naluxDialogTitle");
+    const b = document.getElementById("naluxDialogBody");
     if (!overlay || !t || !b) return;
 
     t.textContent = title || "Dialog";
@@ -1134,17 +931,17 @@
   }
 
   function closeDialog() {
-    const overlay = document.getElementById("nalulfDialogOverlay");
+    const overlay = document.getElementById("naluxDialogOverlay");
     if (overlay) overlay.classList.remove("show");
   }
 
   function toast(msg) {
     ensureToast();
-    const host = document.getElementById("nalulfToastHost");
+    const host = document.getElementById("naluxToastHost");
     if (!host) return;
 
     const t = document.createElement("div");
-    t.className = "nalulf-toast";
+    t.className = "nalux-toast";
     t.textContent = String(msg || "");
     host.appendChild(t);
 
@@ -1156,10 +953,10 @@
   }
 
   function ensureToast() {
-    if (document.getElementById("nalulfToastHost")) return;
+    if (document.getElementById("naluxToastHost")) return;
     const host = document.createElement("div");
-    host.id = "nalulfToastHost";
-    host.className = "nalulf-toast-host";
+    host.id = "naluxToastHost";
+    host.className = "nalux-toast-host";
     document.body.appendChild(host);
   }
 
@@ -1414,7 +1211,7 @@
         keywords: "explorer tx hash transaction",
         run: () => {
           switchPage("explorer");
-          window.dispatchEvent(new CustomEvent("nalulf:search", { detail: { type: "tx", value: q } }));
+          window.dispatchEvent(new CustomEvent("naluxrp:search", { detail: { type: "tx", value: q } }));
           toast("Sent tx to Explorer");
         },
       });
@@ -1426,7 +1223,7 @@
         keywords: "explorer ledger index",
         run: () => {
           switchPage("explorer");
-          window.dispatchEvent(new CustomEvent("nalulf:search", { detail: { type: "ledger", value: Number(q) } }));
+          window.dispatchEvent(new CustomEvent("naluxrp:search", { detail: { type: "ledger", value: Number(q) } }));
           toast("Sent ledger to Explorer");
         },
       });
@@ -1549,18 +1346,14 @@
   // Init
   // -----------------------------
   document.addEventListener("DOMContentLoaded", () => {
-    ensurePageHeader();
+    // ✅ FIX: do NOT inject header
+    ensurePageHeader(); // safe: removes if previously injected
 
     applyPageClass("dashboard");
     setTheme(window.UI.currentTheme);
 
-    // Create all page sections
-    createPageContainer();
-
-    // Hide all pages initially
     document.querySelectorAll(".page-section").forEach((s) => (s.style.display = "none"));
 
-    // Show landing page in dashboard section
     const dash = document.getElementById("dashboard");
     if (dash) {
       dash.style.display = "block";
@@ -1574,11 +1367,12 @@
       }
     });
 
-    window.addEventListener("nalulf:savedchange", updatePinnedPill);
+    window.addEventListener("naluxrp:savedchange", updatePinnedPill);
 
+    // ✅ Start connection monitoring for navbar status
     setupConnectionMonitoring();
 
-    window.dispatchEvent(new CustomEvent("nalulf:pagechange", { detail: { pageId: "dashboard" } }));
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
     
     console.log("🌊 NaluLF UI initialized");
   });
