@@ -1,0 +1,462 @@
+/* =========================================
+   NaluLF 🌊 – Global Font & Style Fixes
+   Matches navbar redesign fonts throughout app
+   ========================================= */
+
+/* Import navbar fonts if not already loaded */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Uncial+Antiqua&family=MedievalSharp&display=swap');
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Allura&display=swap');
+
+
+
+/* ========================================= */
+/* GLOBAL FONT APPLICATION */
+/* ========================================= */
+
+/* Apply Outfit as primary font everywhere */
+body,
+html {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+/* Headings use Outfit with proper weights */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+/* Buttons use Outfit */
+button,
+.btn,
+.nav-btn,
+input[type="button"],
+input[type="submit"] {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+}
+
+/* Code, data, monospace elements use JetBrains Mono */
+code,
+pre,
+.monospace,
+.address,
+.hash,
+.ledger-index,
+kbd {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Input fields use Outfit */
+input,
+textarea,
+select {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+/* ========================================= */
+/* LANDING PAGE FONT FIXES */
+/* ========================================= */
+
+.landing-title {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 900;
+  letter-spacing: -2px;
+}
+
+.landing-tagline {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.landing-description {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.landing-btn {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.landing-kicker {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+
+
+
+
+/* ========================================= */
+/* CARD & SECTION FONTS */
+/* ========================================= */
+
+.chart-section h2,
+.card h2,
+.card h3 {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+}
+
+.chart-section p,
+.card p {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+/* ========================================= */
+/* INSPECTOR PAGE FONTS */
+/* ========================================= */
+
+.inspector-header,
+.inspector-title {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+}
+
+.inspector-tab,
+.inspector-button {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+}
+
+.inspector-address,
+.inspector-hash,
+.inspector-data {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.9em;
+}
+
+/* ========================================= */
+/* DIALOG & MODAL FONTS */
+/* ========================================= */
+
+.nalux-dialog-title {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+}
+
+.nalux-dialog-body {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400;
+}
+
+.saved-addr,
+.saved-short {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.9em;
+}
+
+.saved-btn {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+}
+
+/* ========================================= */
+/* COMMAND PALETTE FONTS */
+/* ========================================= */
+
+.cmdk-panel input {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400;
+}
+
+.cmdk-label {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+}
+
+.cmdk-hint,
+.cmdk-hint2 {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.8em;
+}
+
+/* ========================================= */
+/* TOAST NOTIFICATIONS */
+/* ========================================= */
+
+.nalux-toast {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+/* ========================================= */
+/* THEME PICKER */
+/* ========================================= */
+
+.theme-name {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.theme-sub {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 400;
+  font-size: 0.85em;
+}
+
+/* ========================================= */
+/* DATA TABLES & LISTS */
+/* ========================================= */
+
+table,
+.data-table {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+table th,
+.data-table th {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+table td,
+.data-table td {
+  font-weight: 400;
+}
+
+/* Monospace for data columns */
+.data-address,
+.data-hash,
+.data-amount,
+.data-timestamp {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.9em;
+}
+
+/* ========================================= */
+/* ANALYTICS & CHARTS */
+/* ========================================= */
+
+.analytics-title,
+.chart-title {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+}
+
+.analytics-value,
+.metric-value {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+}
+
+.analytics-label,
+.metric-label {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 500;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ========================================= */
+/* VALIDATORS PAGE */
+/* ========================================= */
+
+.validator-name {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+}
+
+.validator-pubkey,
+.validator-address {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.85em;
+}
+
+.validator-status {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ========================================= */
+/* TOKENS & AMM */
+/* ========================================= */
+
+.token-name,
+.pool-name {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+}
+
+.token-symbol {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.token-address,
+.pool-address {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.85em;
+}
+
+.token-amount,
+.pool-balance {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ========================================= */
+/* EXPLORER PAGE */
+/* ========================================= */
+
+.explorer-title {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 800;
+}
+
+.explorer-input {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+.tx-hash,
+.ledger-hash {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.9em;
+}
+
+.tx-type {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ========================================= */
+/* UTILITY CLASSES */
+/* ========================================= */
+
+.font-outfit {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+.font-thin { font-weight: 300 !important; }
+.font-normal { font-weight: 400 !important; }
+.font-semibold { font-weight: 600 !important; }
+.font-bold { font-weight: 700 !important; }
+.font-extrabold { font-weight: 800 !important; }
+.font-black { font-weight: 900 !important; }
+
+/* ========================================= */
+/* SMOOTH SCROLLING FOR PAGE NAVIGATION */
+/* ========================================= */
+
+html {
+  scroll-behavior: auto; /* Instant scroll for page changes */
+}
+
+/* Smooth scroll only for in-page anchors */
+a[href^="#"]:not([href="#"]) {
+  scroll-behavior: smooth;
+}
+
+/* ========================================= */
+/* LOADING STATES */
+/* ========================================= */
+
+.loading-spinner {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 600;
+}
+
+.loading-text {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+/* ========================================= */
+/* BRANDING CONSISTENCY */
+/* ========================================= */
+
+/* Ensure all references to app name use consistent styling */
+.app-name,
+.brand-name {
+  font-family: 'Outfit', sans-serif !important;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--wave-aqua, #00fff0), var(--wave-cyan, #05d9e8));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ========================================= */
+/* RESPONSIVE FONT SIZES */
+/* ========================================= */
+
+@media (max-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+  
+  h1 { font-size: 1.8rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.2rem; }
+  h4 { font-size: 1.1rem; }
+  
+  .landing-title {
+    font-size: 2.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 14px;
+  }
+  
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.3rem; }
+  h3 { font-size: 1.1rem; }
+  
+  .landing-title {
+    font-size: 2rem;
+  }
+}
+
+/* ========================================= */
+/* ANTI-ALIASING & RENDERING */
+/* ========================================= */
+
+body,
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ========================================= */
+/* PRINT STYLES */
+/* ========================================= */
+
+@media print {
+  body {
+    font-family: 'Outfit', sans-serif !important;
+  }
+  
+  code, pre {
+    font-family: 'JetBrains Mono', monospace !important;
+  }
+}
