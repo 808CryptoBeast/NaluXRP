@@ -13,7 +13,6 @@
   overflow: hidden;
   min-height: 100vh;
   width: 100%;
-- display: block !important;
 }
 
 /* (Image layer removed on purpose) */
@@ -764,3 +763,4 @@
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+
