@@ -1,4 +1,4 @@
-/* =========================================
+* =========================================
    NaluXrp 🌊 — Dashboard V2 Styles
    ========================================= */
 
@@ -12,10 +12,8 @@
   position: relative;
   overflow: hidden;
   min-height: 100vh;
-
-  /* ✅ ensure the dashboard wrapper centers correctly */
   width: 100%;
-  display: block !important;
+- display: block !important;
 }
 
 /* (Image layer removed on purpose) */
