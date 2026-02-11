@@ -426,7 +426,7 @@ body.landing-page {
 #uiConnDot.connected {
   background: #50fa7b !important;
   box-shadow: 0 0 10px rgba(80, 250, 123, 0.6);
-  animation: pulse 2s ease-in-out infinite;
+  animation: connectedPulse 2s ease-in-out infinite;
 }
 
 #uiConnDot.disconnected {
@@ -674,6 +674,7 @@ body.landing-page {
 
 /* Gradient text for headers */
 #inspector h2 {
+  color: var(--accent-primary); /* Fallback for accessibility */
   background: linear-gradient(135deg, 
     var(--accent-primary), 
     var(--accent-secondary)
@@ -714,10 +715,6 @@ body.landing-page {
   50% {
     box-shadow: 0 0 20px rgba(80, 250, 123, 0.8);
   }
-}
-
-#uiConnDot.connected {
-  animation: connectedPulse 2s ease-in-out infinite;
 }
 
 /* Loading state for tree */
