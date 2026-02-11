@@ -1,284 +1,330 @@
-🌊 NaluXrp — Riding The Ledger Waves
-Real-Time XRPL Analytics • Validators • Tokens • AMMs • NFTs • Explorer • Dashboard
+# 🌊 NaluXRP - Riding The Ledger's Inner Rhythms
+
+> **Beyond Surface Surfing**: A deep-dive analytical platform for understanding the XRP Ledger's flow dynamics, settlement patterns, and transaction choreography that most explorers miss.
+
+![NaluXRP Dashboard](assets/logo.png)
+
+## 🎯 What Makes NaluXRP Different
+
+Most XRPL explorers show you *what happened*. NaluXRP reveals **how it flows**.
+
+While others surf the surface, we dive into:
+- **Transaction Flow Dynamics** - The rhythm and cadence of value movement across the ledger
+- **Settlement Choreography** - How transactions cascade, settle, and ripple through the network
+- **Deep Pattern Recognition** - Behavioral anomalies, clustering, and flow correlations invisible to basic explorers
+- **Network Pulse Analysis** - The heartbeat of validators, consensus timing, and ledger close patterns
+- **Issuer Relationship Graphs** - Trust line networks and how value *actually* moves between parties
+- **Temporal Flow Patterns** - When, how, and why transaction bursts occur
+
+---
+
+## 🌊 The Rhythm of the Ledger
+
+### Understanding Flow vs. Activity
+
+**Activity** is counting transactions. **Flow** is understanding their interconnected dance.
+
+NaluXRP's unique capabilities:
+
+#### 🔄 **Flow Analytics**
+Track not just payments, but payment *chains*. See how value cascades through accounts, revealing:
+- Multi-hop payment paths
+- Liquidity flow through AMM pools
+- Settlement timing patterns
+- Transaction clustering behavior
+
+#### ⏱️ **Temporal Rhythm Analysis**
+The ledger has a pulse. We measure it:
+- **Ledger close time distribution** - Not just average, but the variance and patterns
+- **Transaction bursts** - When and why activity spikes
+- **Consensus timing** - How validator agreement creates the network heartbeat
+- **Queue dynamics** - How transactions wait and when they clear
+
+#### 🕸️ **Relationship Mapping**
+- **Issuer Trees** - Visualize trust line networks and token distribution
+- **Account Interaction Graphs** - Who transacts with whom, and how often
+- **Fund Tracing** - Follow value through multiple hops across the network
+- **Cluster Detection** - Identify groups of related accounts by behavior
 
-A modern single-page application (SPA) providing live analytics and monitoring for the XRP Ledger, built with a modular frontend architecture and real-time WebSocket streams.
+---
+
+## ✨ Core Features
 
-📌 Table of Contents
+### 📊 **Deep Dashboard**
+Beyond basic metrics:
+- Live transaction stream analysis (not just counts)
+- TPS trends with pattern recognition
+- Fee market dynamics and load indicators
+- Transaction type distribution over time
+- Real-time network health scoring
 
-About the Project
+### 🔍 **Unified Inspector**
+The heart of deep analysis:
+- **Account Issuer Trees** - Map trust networks and token issuance
+- **Transaction Tracing** - Multi-hop payment path analysis
+- **Quick Inspect** - Instant deep-dive into any account
+- **Token/IOU Analytics** - Issued vs. received balances, trustline analysis
+- **Activation Tracking** - When accounts were created and by whom
 
-Features
+### 📈 **Intelligence Analytics**
+Machine learning-inspired pattern detection:
+- **Anomaly Detection** - Flag unusual transaction patterns
+- **Risk Scoring** - Behavioral analysis for accounts
+- **Correlation Analysis** - Find relationships between metrics (TPS vs. fees, etc.)
+- **Burst Detection** - Identify and characterize activity spikes
+- **Flow Clustering** - Group similar transaction patterns
 
-Live Architecture Overview
+### 💧 **AMM Pool Analytics**
+Understand automated market maker dynamics:
+- Liquidity flow patterns
+- Pool utilization rhythms
+- Trading pair correlations
+- Value settlement through pools
 
-Tech Stack
+### 🪙 **Token Explorer**
+See how tokens really move:
+- Distribution patterns
+- Holder concentration analysis
+- Trust line network mapping
+- Issuance flow tracking
 
-Screenshots
+### 🛡️ **Validator Monitoring**
+The network's consensus pulse:
+- Validator performance metrics
+- Agreement timing patterns
+- Network health indicators
+- Consensus participation tracking
 
-Installation
+### 🎨 **NFT Browser**
+Non-fungible flow analysis:
+- Mint and transfer patterns
+- Collection activity rhythms
+- Ownership network graphs
 
-Project Structure
+---
 
-XRPL Data Sources
+## 🧠 Understanding Settlement Arrangements
 
-Security
+### What Are Settlement Arrangements?
 
-Contributing
+In the XRP Ledger, "settlement" isn't just a transaction clearing. It's the *choreography* of:
 
-License
+1. **Consensus Agreement** - Validators reach agreement on transaction order
+2. **Ledger Close** - A new immutable state is created
+3. **Balance Updates** - All affected accounts settle simultaneously
+4. **Cascade Effects** - How one transaction can trigger ripple effects
 
-🌟 About the Project
+### The Flow Rhythm
 
-NaluXrp is a high-performance, real-time analytics platform built as an SPA that runs entirely client-side.
-It connects live to XRPL nodes via WebSocket, aggregates ledger events, visualizes validator performance, and provides modules for:
+NaluXRP reveals three key temporal patterns most miss:
 
-Ledger and transaction monitoring
+#### 1. **Close Time Cadence**
+- Target: ~3-5 seconds per ledger
+- Reality: Varies based on network load, transaction complexity, validator performance
+- **What we show**: Close time distribution, variance, trends over time
 
-XRPL validators & UNL deep-dive
+#### 2. **Transaction Clustering**
+- Transactions don't arrive uniformly - they come in bursts
+- **What we show**: Burst detection, cluster analysis, temporal patterns
 
-Token exploration and metadata
+#### 3. **Settlement Propagation**
+- How quickly do multi-hop payments complete?
+- How do AMM swaps cascade through liquidity pools?
+- **What we show**: Payment path timing, hop latency analysis
 
-AMM pool analytics
+---
 
-NFT scanning
+## 🚀 Quick Start
 
-Whale activity
+### Prerequisites
+- Modern web browser (Chrome, Firefox, Safari, Edge recommended)
+- Internet connection for live XRPL data
+- Optional: Local proxy server for advanced features
 
-System health metrics
+### Installation
 
-Network visualization
+```bash
+# Clone the repository
+git clone https://github.com/808CryptoBeast/NaluXRP.git
+cd NaluXRP
 
-Customizable themes
+# Option 1: Open directly
+# Simply open index.html in your browser
 
-Full mobile-responsive UI
+# Option 2: Use local server (recommended for full features)
+# Python 3
+python -m http.server 8000
 
-The app is designed to feel like a professional trading terminal meets blockchain explorer, but smoother, lighter, and fully front-end based.
+# Node.js
+npx http-server
 
-🚀 Features
-📊 Real-Time Dashboard
+# Then navigate to http://localhost:8000
+```
 
-Live ledger feed (animated conveyor view)
+### Optional: Proxy Server for Enhanced Features
 
-TPS gauge with intensity classification
+For advanced Inspector features and token analytics:
 
-Latency and network health indicators
+```bash
+# Install dependencies
+npm install
 
-Ledger rhythm orb visualizer
+# Start proxy server
+node js/proxy-server.js
 
-Transaction heatmaps (Payments, Offers, NFTs, Trustlines, Other)
+# Proxy runs on http://localhost:3000
+```
 
-🛡 Validators Engine (Deep-Dive)
+---
 
-Live fetch from Ripple public validator API
+## 📁 Architecture
 
-Reliability scoring (1h/24h uptime + agreement)
+```
+NaluXRP/
+├── index.html              # Main application
+├── css/
+│   └── style.css          # Theme system & responsive design
+├── js/
+│   ├── xrpl-connection.js # Deep XRPL connection with transaction streaming
+│   ├── dashboard.js       # Live metrics & pattern detection
+│   ├── analytics.js       # Deep intelligence analytics engine
+│   ├── inspector-trace-tab.js  # Unified inspector with tracing
+│   ├── validators.js      # Validator monitoring & consensus analysis
+│   ├── tokens.js          # Token flow analytics
+│   ├── amm.js             # AMM pool dynamics
+│   ├── nfts.js            # NFT flow tracking
+│   ├── explorer.js        # Transaction & account search
+│   ├── ui.js              # Interface & navigation
+│   ├── navbar.js          # Animated navigation system
+│   ├── profile.js         # Secure wallet management
+│   └── utils.js           # Shared utilities
+├── services/
+│   └── proxy-server.js    # Optional backend proxy for advanced features
+└── docs/
+    ├── ARCHITECTURE.md    # Deep technical architecture
+    ├── LEDGER_FLOW.md     # Understanding XRP Ledger flow dynamics
+    └── ANALYTICS_GUIDE.md # Guide to using deep analytics features
+```
 
-UNL detection
+---
 
-Warning indicators & anomaly detection
+## 🛠️ Technology Stack
 
-Full modal with identity, voting, performance metrics
+- **Frontend**: Pure HTML5, CSS3, JavaScript (ES6+)
+- **XRPL Integration**: xrpl.js (WebSocket + JSON-RPC)
+- **Charts**: Chart.js for visualization
+- **Analytics**: Custom pattern detection algorithms
+- **Backend (Optional)**: Node.js + Express for proxy features
 
-🪙 Token Explorer
+---
 
-Metadata fetch
+## 🎨 Themes
 
-Trustlines & distribution analytics
+Four immersive visual environments:
 
-Holder concentration
+1. **🟡 Gold** - Classic elegance, warm gradients
+2. **🟣 Cosmic** - Purple nebula, space-inspired
+3. **🔵 Starry** - Deep blue with dynamic stars
+4. **🌺 Hawaiian** - Tropical ocean waves
 
-Token verification & warnings
+---
 
-Search + pagination
+## 📖 Deep Dive Documentation
 
-💧 AMM Pools
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - How NaluXRP achieves deep flow analysis
+- **[Ledger Flow Dynamics](docs/LEDGER_FLOW.md)** - Understanding the rhythm of XRP transactions
+- **[Analytics Guide](docs/ANALYTICS_GUIDE.md)** - Using pattern detection and intelligence features
 
-Constant product analytics
+---
 
-Live liquidity, volume, pool depth
+## 🎯 Use Cases
 
-Price & ratio calculations
+### For Researchers
+- Study transaction flow patterns across the network
+- Analyze consensus timing and validator performance
+- Detect behavioral anomalies and clustering
+- Map trust networks and token distribution
 
-LP share estimation
+### For Developers
+- Understand how multi-hop payments work in practice
+- Analyze AMM pool liquidity dynamics
+- Test transaction settlement timing
+- Trace fund flows for forensic analysis
 
-🎨 Themable Interface
+### For Traders
+- Monitor AMM pool utilization
+- Track token distribution changes
+- Identify transaction burst patterns
+- Analyze fee market dynamics
 
-Gold
+### For Validators
+- Monitor network health in real-time
+- Track consensus participation
+- Analyze ledger close timing patterns
+- Detect network stress conditions
 
-Cosmic
+---
 
-Starry
+## 🤝 Contributing
 
-Hawaiian
+We welcome contributions! Areas of interest:
 
-(Extensible)
+- **Analytics Algorithms** - New pattern detection methods
+- **Visualization** - Better ways to show flow dynamics
+- **Performance** - Optimization for large data sets
+- **Features** - New analytical capabilities
 
-📱 Fully Mobile Responsive
+```bash
+# Fork the repository
+# Create feature branch
+git checkout -b feature/YourFeature
 
-Adaptive navbar
+# Commit changes
+git commit -m "Add YourFeature"
 
-Icon-only compact mode
+# Push and open PR
+git push origin feature/YourFeature
+```
 
-Slide-in menu
+---
 
-Tap-friendly dropdowns
+## 🌊 The Philosophy
 
-🏗 Live Architecture Overview
-                    ┌────────────────────────────────────┐
-                    │            NaluXrp SPA              │
-                    │      (HTML / CSS / JavaScript)      │
-                    └────────────────────────────────────┘
-                                  ▲
-                                  │ WebSocket (live)
-                                  │ REST API (analytics)
-                                  │
-        ┌─────────────────────────────────────────────────────────┐
-        │                     XRPL Data Sources                    │
-        │  • wss://s1.ripple.com                                 │
-        │  • data.ripple.com (validators, metrics)               │
-        │  • XRPL Testnet & Devnet                               │
-        └─────────────────────────────────────────────────────────┘
+**"Nalu"** (nah-loo) is Hawaiian for "wave" or "surf."
 
-Submodules:
-  • dashboard.js — real-time ledger engine
-  • validators.js — UNL/scoring system
-  • tokens.js — token metadata + trustlines
-  • amm.js — AMM math engine
-  • analytics.js — higher-level behavioral modeling
-  • explorer.js — account + tx viewer
+But NaluXRP isn't about riding the surface. We dive beneath to understand:
+- The **currents** that drive transaction flow
+- The **tides** of network activity
+- The **undertow** of hidden relationships
+- The **rhythm** of consensus and settlement
 
-💻 Tech Stack
-Layer	Technology
-SPA Framework	Vanilla JavaScript (modular architecture)
-Network	XRPL WebSocket + REST APIs
-Data Viz	Chart.js
-Styling	Modular CSS (navbar.css, dashboard.css, validator.css, responsive.css)
-Rendering	HTML5 components + dynamic DOM templates
-🖼 Screenshots
+We reveal the ocean, not just the waves.
 
-(placeholder images — replace with real screenshots when ready)
+---
 
-Dashboard
+## 📄 License
 
-Validators Explorer
+MIT License - See [LICENSE](LICENSE) file for details.
 
-Token Explorer
+---
 
-AMM Pools
+## 📧 Contact & Links
 
-Mobile Navigation
+- **Repository**: [github.com/808CryptoBeast/NaluXRP](https://github.com/808CryptoBeast/NaluXRP)
+- **Issues**: [Report bugs or request features](https://github.com/808CryptoBeast/NaluXRP/issues)
+- **Discussions**: [Community discussions](https://github.com/808CryptoBeast/NaluXRP/discussions)
 
-📥 Installation
-1. Clone repository
-git clone https://github.com/YourRepo/NaluXrp.git
-cd NaluXrp
+---
 
-2. Open locally
+## 🙏 Acknowledgments
 
-No backend required.
+- **XRPL Foundation** - For the incredible XRP Ledger
+- **xrpl.js Team** - For the excellent JavaScript library
+- **Chart.js** - For beautiful visualizations
+- **The XRPL Community** - For continuous inspiration
 
-Just open index.html in a browser, or run a lightweight server:
+---
 
-npx serve
+**Built with 💙 for deep XRPL exploration**
 
-
-or:
-
-python3 -m http.server 5500
-
-3. Configure API Notes
-
-If using localhost, some Ripple endpoints require a CORS proxy.
-The app is structured to support:
-
-thingproxy.freeboard.io
-
-allorigins.win
-
-Custom proxies
-
-You can configure them in:
-
-js/validators.js
-js/explorer.js
-js/analytics.js
-
-📁 Project Structure
-/assets
-   /icons
-   /screenshots
-/css
-   style.css
-   navbar.css
-   dashboard.css
-   validator.css
-   responsive.css
-/js
-   navbar.js
-   ui.js
-   utils.js
-   dashboard.js
-   validators.js
-   tokens.js
-   amm.js
-   analytics.js
-   explorer.js
-   news.js
-   about.js
-index.html
-README.md
-
-🔗 XRPL Data Sources
-WebSocket
-
-wss://s1.ripple.com
-
-wss://s.altnet.rippletest.net:51233 (Testnet)
-
-REST
-
-https://data.ripple.com/v2/network/validators
-
-https://api.xrpldata.com/ (optional)
-
-https://livenet.xrpl.org (explorer queries)
-
-🔒 Security
-
-This is a frontend-only analytics tool:
-
-No seeds, keys, or signing operations occur in the browser.
-
-No user wallet data is stored or transmitted.
-
-Always warn users never to paste private keys into any unverified interface.
-
-🤝 Contributing
-
-We welcome contributions!
-
-Developer Guidelines
-
-Follow the modular JS structure.
-
-Maintain navbar.js → mobile-first behavior.
-
-Keep CSS scoped to module files.
-
-Use descriptive commits:
-
-feat(validators): add agreement anomaly detection
-fix(navbar): resolve iOS scroll-lock bug
-
-Pull Request Rules
-
-Format with Prettier or standard JS style
-
-No console spam
-
-Include screenshots for UI changes
-
-📄 License
-
-MIT License © 2025
-You may use, modify, and distribute freely with attribution.
+*Don't just watch the ledger. Understand its rhythm.* 🌊
