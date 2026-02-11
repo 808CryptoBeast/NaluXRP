@@ -1,17 +1,58 @@
 {
   "name": "naluxrp",
   "version": "1.0.0",
-  "description": "NaluXrp/\r │\r ├── index.html\r │\r ├── css/\r │   └── style.css\r │\r ├── js/\r │   ├── xrpl-connection.js     ← live XRPL link + streaming\r │   ├── ui.js                  ← navbar, themes, toggles, animations\r │   ├── utils.js               ← helper & export functions\r │   ├── validators.js          ← UNL list + validator metrics\r │   ├── tokens.js              ← live token data + price feeds\r │   ├── amm.js                 ← liquidity pool data\r │   ├── profile.js             ← user wallet + NFTs + bio\r │   ├── history.js             ← ledger + account history\r │   ├── analytics.js           ← advanced metrics, sparkline data\r │   ├── nfts.js                ← NFT display, mint, metadata\r │   ├── explorer.js            ← tx / account search\r │   ├── news.js                ← XRPL ecosystem + dev news\r │   ├── settings.js            ← preferences + node selector\r │   └── about.js               ← about / credits / contact\r │\r └── assets/\r     ├── icons/\r     ├── backgrounds/\r     └── logo.png",
-  "main": "index.js",
+  "description": "NaluXRP - Deep XRPL Flow Analytics Platform. Beyond surface exploration: real-time pattern detection, transaction flow analysis, and rhythm understanding of the XRP Ledger's inner workings.",
+  "main": "index.html",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node js/proxy-server.js",
+    "proxy": "node js/proxy-server.js",
+    "serve": "npx http-server -p 8000 -c-1",
+    "dev": "npx http-server -p 8000 -c-1 -o",
+    "test": "echo \"No tests specified yet\" && exit 0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "xrp",
+    "xrpl",
+    "ripple",
+    "blockchain",
+    "analytics",
+    "flow-analysis",
+    "pattern-detection",
+    "cryptocurrency",
+    "ledger",
+    "real-time",
+    "dashboard",
+    "visualization",
+    "network-analysis",
+    "transaction-tracing",
+    "amm",
+    "nft",
+    "validators",
+    "consensus",
+    "defi"
+  ],
+  "author": "808CryptoBeast",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/808CryptoBeast/NaluXRP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/808CryptoBeast/NaluXRP/issues"
+  },
+  "homepage": "https://github.com/808CryptoBeast/NaluXRP#readme",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "optionalDependencies": {
+    "ws": "^8.18.0"
   }
 }
