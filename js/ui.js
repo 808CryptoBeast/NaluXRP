@@ -346,7 +346,7 @@
     if (!body) return;
 
     body.dataset.landingBg = "1";
-    body.style.backgroundImage = 'url("images/LandingPage-background.jpg")';
+    body.style.backgroundImage = 'url("images/Landingpage-background.jpg")';
     body.style.backgroundSize = "cover";
     body.style.backgroundPosition = "center";
     body.style.backgroundRepeat = "no-repeat";
@@ -1398,3 +1398,4 @@
     getPinned,
   };
 })();
+
