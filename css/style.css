@@ -223,3 +223,535 @@ body.landing-page {
     background-position: center top;
   }
 }
+
+/* =========================================
+   Inspector Page - Modern Professional Design
+   ========================================= */
+
+/* ---------- Inspector Container ---------- */
+#inspector {
+  animation: fadeIn 0.4s ease;
+}
+
+/* ---------- Chart Section (Inspector Context) ---------- */
+#inspector .chart-section {
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* ---------- Inspector Tabs ---------- */
+.inspector-tab-btn {
+  position: relative;
+  padding: 12px 18px !important;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.inspector-tab-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, 
+    var(--accent-primary), 
+    var(--accent-secondary)
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.inspector-tab-btn:hover {
+  border-color: var(--accent-primary);
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.inspector-tab-btn.is-active {
+  background: linear-gradient(135deg, 
+    var(--accent-primary), 
+    var(--accent-secondary)
+  );
+  border-color: var(--accent-secondary);
+  color: #000;
+  font-weight: 900;
+  box-shadow: 0 0 20px var(--glow-color), 
+              0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.inspector-tab-btn.is-active::before {
+  opacity: 1;
+}
+
+.inspector-tab-btn:focus {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* ---------- Inspector Tab Panels ---------- */
+.inspector-tab-panel {
+  animation: slideIn 0.3s ease;
+}
+
+/* ---------- Inspector Cards & Sections ---------- */
+/* Note: Using attribute selectors because HTML is dynamically generated in JS with inline styles.
+   This approach targets card-like elements without modifying the JS structure. */
+#inspector .widget-card,
+#inspector [style*="border-radius"][style*="padding"] {
+  background: rgba(255, 255, 255, 0.04) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+}
+
+#inspector [style*="border-radius"][style*="padding"]:hover {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+
+/* ---------- Inspector Buttons ---------- */
+#inspector .nav-btn,
+#inspector button[class*="nav-btn"] {
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  position: relative;
+  overflow: hidden;
+}
+
+#inspector .nav-btn:not(.inspector-tab-btn):hover,
+#inspector button[class*="nav-btn"]:not(.inspector-tab-btn):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  filter: brightness(1.1);
+}
+
+#inspector .nav-btn:active,
+#inspector button[class*="nav-btn"]:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Specific button styles */
+#inspector button[style*="#50fa7b"],
+#inspector button[style*="linear-gradient(135deg,#50fa7b"] {
+  box-shadow: 0 4px 12px rgba(80, 250, 123, 0.3);
+}
+
+#inspector button[style*="#50a8ff"] {
+  box-shadow: 0 4px 12px rgba(80, 168, 255, 0.3);
+}
+
+#inspector button[style*="#ffb86c"] {
+  box-shadow: 0 4px 12px rgba(255, 184, 108, 0.3);
+}
+
+#inspector button[style*="#ffd1a9"] {
+  box-shadow: 0 4px 12px rgba(255, 209, 169, 0.3);
+}
+
+#inspector button[style*="#bd93f9"] {
+  box-shadow: 0 4px 12px rgba(189, 147, 249, 0.3);
+}
+
+/* ---------- Inspector Inputs & Selects ---------- */
+#inspector input[type="text"],
+#inspector input[type="number"],
+#inspector input[type="date"],
+#inspector select,
+#inspector textarea {
+  background: rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 10px !important;
+  color: var(--text-primary) !important;
+  padding: 10px !important;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+#inspector input[type="text"]:focus,
+#inspector input[type="number"]:focus,
+#inspector input[type="date"]:focus,
+#inspector select:focus,
+#inspector textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 0 0 3px var(--glow-color-light), 
+              0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+#inspector input::placeholder,
+#inspector textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+/* ---------- Connection Badge ---------- */
+#uiConnBadge {
+  background: rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+}
+
+#uiConnBadge:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+#uiConnDot {
+  transition: all 0.3s ease;
+}
+
+#uiConnDot.connected {
+  background: #50fa7b !important;
+  box-shadow: 0 0 10px rgba(80, 250, 123, 0.6);
+  animation: connectedPulse 2s ease-in-out infinite;
+}
+
+#uiConnDot.disconnected {
+  background: #ff5555 !important;
+  box-shadow: 0 0 10px rgba(255, 85, 85, 0.6);
+}
+
+/* ---------- Progress Bar ---------- */
+#uiProgress {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+#uiProgressBar {
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px rgba(80, 250, 123, 0.5);
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* ---------- Tree Visualization ---------- */
+#uiTree {
+  background: rgba(0, 0, 0, 0.15) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+#uiTree::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+#uiTree::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+#uiTree::-webkit-scrollbar-thumb {
+  background: var(--accent-primary);
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+#uiTree::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-secondary);
+}
+
+/* Tree node styling */
+#uiTree [style*="cursor:pointer"] {
+  transition: all 0.2s ease;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+#uiTree [style*="cursor:pointer"]:hover {
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateX(2px);
+}
+
+/* ---------- Edge List & Items ---------- */
+#uiEdgeItems {
+  font-size: 13px;
+}
+
+#uiEdgeItems > div {
+  padding: 8px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+#uiEdgeItems > div:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-left-color: var(--accent-secondary);
+  transform: translateX(4px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ---------- Modal Overlay ---------- */
+#uiModalOverlay {
+  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.7) !important;
+  animation: fadeIn 0.2s ease;
+}
+
+#uiModalOverlay > div {
+  background: var(--bg-secondary) !important;
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--accent-primary) !important;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6),
+              0 0 40px var(--glow-color);
+  animation: slideDown 0.3s ease;
+}
+
+#uiModalClose {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+#uiModalClose:hover {
+  background: rgba(255, 85, 85, 0.8);
+  border-color: #ff5555;
+  transform: rotate(90deg);
+  box-shadow: 0 4px 12px rgba(255, 85, 85, 0.4);
+}
+
+/* ---------- Status Messages ---------- */
+#uiStatus {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid var(--accent-tertiary);
+  font-size: 13px;
+  transition: all 0.3s ease;
+}
+
+/* ---------- Summary & Results Panels ---------- */
+#uiSummary,
+#uiResults,
+#uiEdgeList {
+  background: rgba(255, 255, 255, 0.04) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  transition: all 0.3s ease;
+}
+
+#uiSummary:hover,
+#uiResults:hover,
+#uiEdgeList:hover {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+#uiEdgeList::-webkit-scrollbar {
+  width: 8px;
+}
+
+#uiEdgeList::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+#uiEdgeList::-webkit-scrollbar-thumb {
+  background: var(--accent-primary);
+  border-radius: 4px;
+}
+
+#uiEdgeList::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-secondary);
+}
+
+/* ---------- Details / Summary Elements ---------- */
+#inspector details {
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.3s ease;
+}
+
+#inspector details[open] {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+#inspector summary {
+  padding: 6px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+#inspector summary:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--accent-primary);
+}
+
+/* ---------- Responsive Grid ---------- */
+/* Note: Using attribute selectors for inline styles due to dynamically generated HTML in JS */
+#inspector [style*="grid-template-columns"] {
+  gap: 12px;
+}
+
+@media (max-width: 1024px) {
+  #inspector [style*="grid-template-columns:1fr 360px"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 768px) {
+  #inspector .chart-section {
+    padding: 12px;
+  }
+  
+  .inspector-tab-btn {
+    padding: 10px 14px !important;
+    font-size: 14px;
+  }
+  
+  #inspector input[type="text"],
+  #inspector input[type="number"],
+  #inspector select {
+    min-width: 100% !important;
+  }
+  
+  /* Target flex containers for mobile stacking (inline styles from JS) */
+  #inspector [style*="display:flex"] {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+  
+  #uiTree {
+    max-height: 400px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  #inspector .chart-section {
+    padding: 10px;
+  }
+  
+  .inspector-tab-btn {
+    padding: 8px 12px !important;
+    font-size: 13px;
+  }
+  
+  #inspector button {
+    width: 100%;
+  }
+}
+
+/* ---------- Visual Enhancements ---------- */
+
+/* Gradient text for headers */
+#inspector h2 {
+  color: var(--accent-primary); /* Fallback for accessibility */
+  font-weight: 900;
+}
+
+/* Apply gradient only when supported */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  #inspector h2 {
+    background: linear-gradient(135deg, 
+      var(--accent-primary), 
+      var(--accent-secondary)
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Enhanced focus states for accessibility */
+#inspector *:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Smooth transitions for all interactive elements */
+#inspector button,
+#inspector input,
+#inspector select,
+#inspector textarea,
+#inspector details,
+#inspector summary {
+  transition: all 0.2s ease;
+}
+
+/* Glassmorphism enhancement for cards */
+#inspector [style*="background:rgba"] {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Connection status animations */
+@keyframes connectedPulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(80, 250, 123, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(80, 250, 123, 0.8);
+  }
+}
+
+/* Loading state for tree */
+#uiTree[data-loading="true"] {
+  position: relative;
+  overflow: hidden;
+}
+
+#uiTree[data-loading="true"]::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, 
+    transparent, 
+    rgba(255, 255, 255, 0.1), 
+    transparent
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
