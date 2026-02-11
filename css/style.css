@@ -307,6 +307,8 @@ body.landing-page {
 }
 
 /* ---------- Inspector Cards & Sections ---------- */
+/* Note: Using attribute selectors because HTML is dynamically generated in JS with inline styles.
+   This approach targets card-like elements without modifying the JS structure. */
 #inspector .widget-card,
 #inspector [style*="border-radius"][style*="padding"] {
   background: rgba(255, 255, 255, 0.04) !important;
@@ -618,8 +620,8 @@ body.landing-page {
 }
 
 /* ---------- Responsive Grid ---------- */
+/* Note: Using attribute selectors for inline styles due to dynamically generated HTML in JS */
 #inspector [style*="grid-template-columns"] {
-  display: grid;
   gap: 12px;
 }
 
@@ -645,6 +647,7 @@ body.landing-page {
     min-width: 100% !important;
   }
   
+  /* Target flex containers for mobile stacking (inline styles from JS) */
   #inspector [style*="display:flex"] {
     flex-direction: column;
     align-items: stretch !important;
@@ -675,14 +678,20 @@ body.landing-page {
 /* Gradient text for headers */
 #inspector h2 {
   color: var(--accent-primary); /* Fallback for accessibility */
-  background: linear-gradient(135deg, 
-    var(--accent-primary), 
-    var(--accent-secondary)
-  );
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
   font-weight: 900;
+}
+
+/* Apply gradient only when supported */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  #inspector h2 {
+    background: linear-gradient(135deg, 
+      var(--accent-primary), 
+      var(--accent-secondary)
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
 }
 
 /* Enhanced focus states for accessibility */
