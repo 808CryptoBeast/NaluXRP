@@ -7,6 +7,7 @@
 // - Wave physics simulation
 // - Liquid morphing interactions
 // - Advanced gesture controls
+// - Fixed dropdown behavior (click-to-toggle)
 // - Immersive sound feedback (optional)
 // =======================================================
 
@@ -17,6 +18,7 @@
   const ICON_BP = 1150;
   const BOTTOM_BP = 520;
   const PARTICLE_COUNT = 15;
+  const DROPDOWN_CLOSE_DELAY = 300; // ms delay before auto-close
 
   const PRIMARY_BOTTOM = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
@@ -62,6 +64,8 @@
   let lastActivePage = "dashboard";
   let particles = [];
   let animationFrame = null;
+  let activeDropdown = null;
+  let dropdownCloseTimeout = null;
 
   function mode() {
     if (window.innerWidth <= BOTTOM_BP) return "bottom";
@@ -83,6 +87,7 @@
     if (!navbar) return;
 
     initParticleSystem(navbar);
+    initDropdownBehavior(); // NEW: Fixed dropdown functionality
     ensureBottomNav();
     ensureBottomSheet();
     setupHamburgerInteraction();
@@ -117,6 +122,123 @@
       showBottomNav(false);
       closeBottomSheet();
     }
+  }
+
+  // =========================================
+  // DROPDOWN FIX - Click-to-toggle with smart hover
+  // =========================================
+  function initDropdownBehavior() {
+    const dropdowns = document.querySelectorAll('.nav-dropdown');
+    
+    dropdowns.forEach(dropdown => {
+      const toggle = dropdown.querySelector('.dropdown-toggle');
+      const menu = dropdown.querySelector('.dropdown-menu');
+      
+      if (!toggle || !menu) return;
+
+      // Remove hover-based display (we'll use classes)
+      menu.style.display = ''; // Clear any inline styles
+
+      // Click to toggle
+      toggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const isOpen = menu.classList.contains('show');
+        
+        // Close all other dropdowns
+        closeAllDropdowns();
+        
+        if (!isOpen) {
+          openDropdown(dropdown, menu, toggle);
+        }
+      });
+
+      // Keep menu open when hovering over it
+      menu.addEventListener('mouseenter', () => {
+        clearTimeout(dropdownCloseTimeout);
+      });
+
+      // Delay close when leaving menu
+      menu.addEventListener('mouseleave', () => {
+        dropdownCloseTimeout = setTimeout(() => {
+          closeDropdown(dropdown, menu, toggle);
+        }, DROPDOWN_CLOSE_DELAY);
+      });
+
+      // Also delay close when leaving toggle (for better UX)
+      toggle.addEventListener('mouseleave', () => {
+        if (menu.classList.contains('show')) {
+          dropdownCloseTimeout = setTimeout(() => {
+            closeDropdown(dropdown, menu, toggle);
+          }, DROPDOWN_CLOSE_DELAY);
+        }
+      });
+
+      toggle.addEventListener('mouseenter', () => {
+        clearTimeout(dropdownCloseTimeout);
+      });
+
+      // Close when clicking menu items
+      menu.querySelectorAll('.dropdown-item').forEach(item => {
+        item.addEventListener('click', () => {
+          closeDropdown(dropdown, menu, toggle);
+        });
+      });
+
+      // Keyboard support
+      toggle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle.click();
+        } else if (e.key === 'Escape') {
+          closeDropdown(dropdown, menu, toggle);
+        }
+      });
+    });
+
+    // Close all dropdowns when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.nav-dropdown')) {
+        closeAllDropdowns();
+      }
+    });
+  }
+
+  function openDropdown(dropdown, menu, toggle) {
+    clearTimeout(dropdownCloseTimeout);
+    
+    menu.classList.add('show');
+    toggle.classList.add('dropdown-active');
+    toggle.setAttribute('aria-expanded', 'true');
+    
+    activeDropdown = { dropdown, menu, toggle };
+    
+    // Focus first menu item for keyboard navigation
+    const firstItem = menu.querySelector('.dropdown-item');
+    if (firstItem && document.activeElement === toggle) {
+      setTimeout(() => firstItem.focus(), 100);
+    }
+  }
+
+  function closeDropdown(dropdown, menu, toggle) {
+    menu.classList.remove('show');
+    toggle.classList.remove('dropdown-active');
+    toggle.setAttribute('aria-expanded', 'false');
+    
+    if (activeDropdown && activeDropdown.menu === menu) {
+      activeDropdown = null;
+    }
+  }
+
+  function closeAllDropdowns() {
+    document.querySelectorAll('.dropdown-menu').forEach(menu => {
+      const dropdown = menu.closest('.nav-dropdown');
+      const toggle = dropdown?.querySelector('.dropdown-toggle');
+      if (dropdown && toggle) {
+        closeDropdown(dropdown, menu, toggle);
+      }
+    });
   }
 
   // ========================================= 
@@ -320,6 +442,10 @@
       } else if (typeof window.client !== 'undefined') {
         const isConnected = window.client?.isConnected?.() || false;
         updateStatus(isConnected);
+      } else if (typeof window.XRPL !== 'undefined') {
+        // Check the XRPL global object we created
+        const isConnected = window.XRPL?.connected || false;
+        updateStatus(isConnected);
       } else {
         // Check for connection state in other possible locations
         const connState = window.connectionState || window.xrplConnectionState;
@@ -361,6 +487,13 @@
       updateStatus(false);
     });
 
+    // Listen for XRPL-connection event (from xrpl-connection.js)
+    window.addEventListener("xrpl-connection", (e) => {
+      if (e.detail) {
+        updateStatus(e.detail.connected);
+      }
+    });
+
     // Poll connection status every 2 seconds
     setInterval(checkConnection, 2000);
     
@@ -373,8 +506,10 @@
   // ========================================= 
   function setupKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
-      // ESC to close bottom sheet
+      // ESC to close dropdowns and bottom sheet
       if (e.key === "Escape") {
+        closeAllDropdowns();
+        
         const sheet = document.getElementById("navBottomSheet");
         if (sheet && sheet.classList.contains("show")) {
           closeBottomSheet();
@@ -796,5 +931,15 @@
     `;
     document.head.appendChild(style);
   }
+
+  // ========================================= 
+  // EXPORT PUBLIC API
+  // ========================================= 
+  window.NaluNavbar = {
+    closeAllDropdowns,
+    openBottomSheet,
+    closeBottomSheet,
+    setActivePage: setActiveNav,
+  };
 
 })();
