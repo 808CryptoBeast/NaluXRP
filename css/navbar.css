@@ -53,6 +53,7 @@
   z-index: 60000;
   overflow: visible;
   isolation: isolate;
+  transition: transform 0.3s ease;
 }
 
 /* Multi-layer wave backdrop */
@@ -115,6 +116,7 @@
   border-radius: 50%;
   box-shadow: 0 0 10px var(--wave-cyan);
   animation: particleFloat 8s linear infinite;
+  transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
 @keyframes particleFloat {
@@ -400,7 +402,8 @@ body.has-bottom-nav {
 }
 
 .nav-btn:hover,
-.dropdown-toggle:hover {
+.dropdown-toggle:hover,
+.dropdown-toggle.dropdown-active {
   border-color: var(--wave-aqua);
   color: var(--depth-abyss);
   transform: translateY(-3px);
@@ -411,7 +414,8 @@ body.has-bottom-nav {
 }
 
 .nav-btn:hover::before,
-.dropdown-toggle:hover::before {
+.dropdown-toggle:hover::before,
+.dropdown-toggle.dropdown-active::before {
   opacity: 1;
   transform: scale(1);
 }
@@ -440,7 +444,7 @@ body.has-bottom-nav {
 }
 
 /* ========================================= */
-/* DROPDOWNS - Floating Panels */
+/* DROPDOWNS - Floating Panels (FIXED) */
 /* ========================================= */
 .nav-dropdown {
   position: relative;
@@ -460,26 +464,24 @@ body.has-bottom-nav {
     0 20px 60px rgba(0, 0, 0, 0.6),
     0 0 80px rgba(5, 217, 232, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  display: none;
+  /* CHANGED: Start hidden, use classes to show */
+  display: flex;
   flex-direction: column;
   gap: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-10px);
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
   z-index: 61000;
-  animation: dropdownFloat 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  pointer-events: none;
 }
 
-@keyframes dropdownFloat {
-  0% {
-    opacity: 0;
-    transform: translateY(-20px) scale(0.9);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.nav-dropdown:hover .dropdown-menu {
-  display: flex;
+/* FIXED: Show dropdown with .show class */
+.dropdown-menu.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .dropdown-item {
@@ -998,155 +1000,128 @@ body.has-bottom-nav {
   padding: 10px 16px;
   font-family: 'Outfit', sans-serif;
   font-weight: 700;
-  font-size: 1.2rem;
+  font-size: 1.3rem;
   color: var(--wave-foam);
-  background: rgba(1, 197, 196, 0.1);
+  background: transparent;
   border: 1.5px solid rgba(0, 255, 240, 0.2);
-  border-radius: 12px;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .sheet-close:hover {
-  background: rgba(255, 107, 157, 0.2);
-  border-color: var(--alert-coral);
-  color: var(--alert-coral);
+  background: rgba(0, 255, 240, 0.1);
+  border-color: var(--wave-aqua);
   transform: rotate(90deg);
 }
 
 .sheet-search {
-  padding: 0 24px 20px;
+  padding: 0 24px 16px;
   display: flex;
   gap: 12px;
 }
 
 .sheet-search input {
   flex: 1;
-  padding: 16px 20px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.9rem;
+  padding: 12px 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
   color: var(--wave-foam);
-  background: rgba(1, 197, 196, 0.08);
+  background: rgba(0, 255, 240, 0.05);
   border: 1.5px solid rgba(0, 255, 240, 0.2);
   border-radius: 16px;
-  backdrop-filter: blur(10px);
+  outline: none;
   transition: all 0.3s ease;
 }
 
 .sheet-search input:focus {
-  outline: none;
+  background: rgba(0, 255, 240, 0.1);
   border-color: var(--wave-aqua);
-  background: rgba(1, 197, 196, 0.15);
-  box-shadow: 
-    0 0 30px rgba(0, 255, 240, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 20px rgba(0, 255, 240, 0.2);
 }
 
 .sheet-search button {
-  padding: 16px 28px;
+  padding: 12px 24px;
   font-family: 'Outfit', sans-serif;
-  font-weight: 800;
+  font-weight: 700;
   font-size: 0.9rem;
-  letter-spacing: 1px;
-  text-transform: uppercase;
   color: var(--depth-abyss);
-  background: linear-gradient(135deg, var(--wave-aqua), var(--wave-cyan));
-  border: none;
+  background: linear-gradient(135deg, var(--wave-cyan), var(--wave-teal));
+  border: 1.5px solid var(--wave-aqua);
   border-radius: 16px;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  box-shadow: 0 8px 24px rgba(0, 255, 240, 0.4);
-}
-
-.sheet-search button:hover {
-  transform: translateY(-3px);
-  box-shadow: 
-    0 12px 32px rgba(0, 255, 240, 0.5),
-    0 0 40px rgba(0, 255, 240, 0.3);
-}
-
-.sheet-search button:active {
-  transform: translateY(-1px);
-}
-
-.sheet-body {
-  padding: 0 24px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.sheet-group {
-  background: rgba(1, 197, 196, 0.05);
-  border: 1.5px solid rgba(0, 255, 240, 0.15);
-  border-radius: 20px;
-  overflow: hidden;
   transition: all 0.3s ease;
 }
 
-.sheet-group:hover {
-  border-color: rgba(0, 255, 240, 0.3);
-  background: rgba(1, 197, 196, 0.08);
+.sheet-search button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 30px rgba(0, 255, 240, 0.4);
+}
+
+.sheet-body {
+  padding: 0 24px;
+}
+
+.sheet-group {
+  margin-bottom: 24px;
 }
 
 .sheet-group-toggle {
   width: 100%;
-  padding: 16px 20px;
+  padding: 12px 0;
   font-family: 'Outfit', sans-serif;
-  font-weight: 800;
-  font-size: 1rem;
-  letter-spacing: 0.5px;
-  color: var(--wave-foam);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--wave-aqua);
   background: transparent;
   border: none;
-  cursor: pointer;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .sheet-group-toggle:hover {
-  background: rgba(0, 255, 240, 0.05);
-}
-
-.sheet-group-toggle .chev {
-  font-size: 1.3rem;
-  transition: transform 0.3s ease;
   color: var(--wave-cyan);
 }
 
-.sheet-group-items {
-  padding: 0 16px 16px;
-  display: grid;
-  gap: 10px;
-  animation: expandWave 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+.sheet-group-toggle .chev {
+  transition: transform 0.3s ease;
 }
 
-@keyframes expandWave {
-  0% {
-    opacity: 0;
-    transform: translateY(-20px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.sheet-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  max-height: 500px;
+  overflow: hidden;
+  transition: max-height 0.4s ease, opacity 0.3s ease;
 }
 
 .sheet-group-items.collapsed {
-  display: none;
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
 }
 
 .sheet-item {
-  padding: 14px 18px;
+  padding: 14px 16px;
   font-family: 'Outfit', sans-serif;
-  font-weight: 700;
-  font-size: 0.95rem;
+  font-weight: 600;
+  font-size: 1rem;
   color: var(--wave-foam);
-  background: rgba(0, 42, 72, 0.4);
+  background: rgba(0, 255, 240, 0.05);
   border: 1.5px solid rgba(0, 255, 240, 0.15);
-  border-radius: 14px;
+  border-radius: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1155,51 +1130,37 @@ body.has-bottom-nav {
 }
 
 .sheet-item:hover {
-  background: rgba(1, 197, 196, 0.15);
+  background: rgba(0, 255, 240, 0.1);
   border-color: var(--wave-aqua);
-  color: var(--wave-aqua);
-  transform: translateX(10px);
-  box-shadow: 0 0 30px rgba(0, 255, 240, 0.2);
+  transform: translateX(8px);
+  box-shadow: 0 0 20px rgba(0, 255, 240, 0.2);
 }
 
 .sheet-ico {
-  width: 26px;
-  text-align: center;
-  font-size: 1.2rem;
-  filter: drop-shadow(0 0 8px currentColor);
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.sheet-lbl {
+  flex: 1;
 }
 
 .sheet-empty {
   padding: 20px;
   text-align: center;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.85rem;
   color: var(--wave-foam);
   opacity: 0.5;
-}
-
-body.sheet-open {
-  overflow: hidden;
+  font-style: italic;
 }
 
 /* ========================================= */
-/* ACCESSIBILITY */
+/* KEYBOARD FOCUS STYLES */
 /* ========================================= */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
 .nav-btn:focus-visible,
 .dropdown-toggle:focus-visible,
 .dropdown-item:focus-visible,
 .bottom-item:focus-visible,
-.sheet-item:focus-visible,
-#hamburger:focus-visible {
+.sheet-item:focus-visible {
   outline: 2px solid var(--wave-aqua);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
