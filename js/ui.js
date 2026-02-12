@@ -15,6 +15,8 @@
    ✅ FIX: Branding updated from NaluXrp to NaluLF
    
    ✅ FIX: XRPL connection monitoring with event dispatches for navbar status
+   
+   ✅ FIX: Landing page loading issue - proper handling of page transitions
    ========================================= */
 
 (function () {
@@ -25,11 +27,12 @@
   // Global UI State
   // -----------------------------
   window.UI = {
-    currentPage: "dashboard",
+    currentPage: "landing",  // Start with landing
     currentTheme: "gold",
     themes: ["gold", "cosmic", "starry", "hawaiian"],
     observers: { reveal: null },
     landing: { active: false, onScroll: null },
+    isLandingPage: true,  // Track if we're on landing page
   };
 
   const LS_SAVED = "naluxrp_saved_addresses";
@@ -222,8 +225,11 @@
     const body = document.body;
     if (!body) return;
 
-    clearLandingBackground();
-    stopLandingParallax();
+    // Only clear landing background if we're leaving landing page
+    if (!window.UI.isLandingPage) {
+      clearLandingBackground();
+      stopLandingParallax();
+    }
 
     body.classList.remove("dashboard", "inspector");
     if (pageId === "inspector") body.classList.add("inspector");
@@ -399,10 +405,31 @@
     dashboard: () => {
       const el = document.getElementById("dashboard");
       if (!el) return;
+      
+      // ✅ FIX: Only clear if we're not showing the landing page
+      const hasLandingPage = el.querySelector('.landing-page');
+      if (window.UI.isLandingPage && hasLandingPage) {
+        // We're still on landing page, don't clear it
+        console.log("🌊 NaluLF: Staying on landing page");
+        return;
+      }
+      
+      // Clear and mark that we're leaving landing page
+      window.UI.isLandingPage = false;
+      clearLandingBackground();
+      stopLandingParallax();
       el.innerHTML = ""; // Clear before rendering
+      
       if (typeof window.renderDashboard === "function") {
-        window.renderDashboard();
+        try {
+          console.log("🌊 NaluLF: Rendering dashboard...");
+          window.renderDashboard();
+        } catch (e) {
+          console.error("🌊 NaluLF: Dashboard render failed:", e);
+          showDefaultPage("dashboard");
+        }
       } else {
+        console.warn("🌊 NaluLF: window.renderDashboard not found, showing default page");
         showDefaultPage("dashboard");
       }
     },
@@ -410,6 +437,7 @@
     analytics: () => {
       const el = document.getElementById("analytics");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initAnalytics) window.initAnalytics();
       else showDefaultPage("analytics");
@@ -418,6 +446,7 @@
     validators: () => {
       const el = document.getElementById("validators");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initValidators) window.initValidators();
       else showDefaultPage("validators");
@@ -426,6 +455,7 @@
     tokens: () => {
       const el = document.getElementById("tokens");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initTokens) window.initTokens();
       else showDefaultPage("tokens");
@@ -434,6 +464,7 @@
     amm: () => {
       const el = document.getElementById("amm");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.AMM?.init) window.AMM.init();
       else showDefaultPage("amm");
@@ -442,6 +473,7 @@
     explorer: () => {
       const el = document.getElementById("explorer");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initExplorer) window.initExplorer();
       else showDefaultPage("explorer");
@@ -450,6 +482,7 @@
     nfts: () => {
       const el = document.getElementById("nfts");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initNFTs) window.initNFTs();
       else showDefaultPage("nfts");
@@ -458,6 +491,7 @@
     profile: () => {
       const el = document.getElementById("profile");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initProfile) window.initProfile();
       else showDefaultPage("profile");
@@ -466,6 +500,7 @@
     news: () => {
       const el = document.getElementById("news");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initNews) window.initNews();
       else showDefaultPage("news");
@@ -474,6 +509,7 @@
     history: () => {
       const el = document.getElementById("history");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initHistory) window.initHistory();
       else showDefaultPage("history");
@@ -482,6 +518,7 @@
     settings: () => {
       const el = document.getElementById("settings");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initSettings) window.initSettings();
       else showDefaultPage("settings");
@@ -490,6 +527,7 @@
     about: () => {
       const el = document.getElementById("about");
       if (!el) return;
+      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initAbout) window.initAbout();
       else showDefaultPage("about");
@@ -498,6 +536,7 @@
     inspector: () => {
       const el = document.getElementById("inspector");
       if (!el) return;
+      window.UI.isLandingPage = false;
       
       // Try to connect to XRPL if not already connected
       try {
@@ -533,6 +572,13 @@
     if (!PAGE_META[pageId]) {
       console.error(`🌊 NaluLF: Unknown page: ${pageId}`);
       return;
+    }
+
+    // If switching away from landing, mark it
+    if (window.UI.isLandingPage && pageId === 'dashboard') {
+      window.UI.isLandingPage = false;
+      clearLandingBackground();
+      stopLandingParallax();
     }
 
     // Apply page-specific body classes
@@ -589,13 +635,18 @@
   // Landing Page Function
   // -----------------------------
   function showLandingPage() {
+    console.log("🌊 NaluLF: Showing landing page");
+    window.UI.isLandingPage = true;
     applyPageClass("dashboard");
     setLandingBackground();
     startLandingParallax();
     updatePageHeader("dashboard", { landing: true });
 
     const container = document.getElementById("dashboard");
-    if (!container) return;
+    if (!container) {
+      console.error("🌊 NaluLF: Dashboard container not found!");
+      return;
+    }
 
     container.innerHTML = `
       <div class="landing-page">
@@ -735,7 +786,8 @@
     `;
 
     refreshRevealObserver();
-    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "landing" } }));
+    console.log("✅ NaluLF: Landing page shown successfully");
   }
 
   // -----------------------------
@@ -772,6 +824,7 @@
       <div class="chart-section">
         <h2>🚧 Module Loading</h2>
         <p>This section is initializing.</p>
+        <p style="opacity: 0.7; margin-top: 8px;">If this persists, check the console for errors.</p>
       </div>
     `;
   }
@@ -1346,6 +1399,8 @@
   // Init
   // -----------------------------
   document.addEventListener("DOMContentLoaded", () => {
+    console.log("🌊 NaluLF: Initializing UI...");
+    
     // ✅ FIX: do NOT inject header
     ensurePageHeader(); // safe: removes if previously injected
 
@@ -1358,6 +1413,8 @@
     if (dash) {
       dash.style.display = "block";
       showLandingPage();
+    } else {
+      console.error("🌊 NaluLF: Dashboard element not found!");
     }
 
     window.addEventListener("resize", () => {
@@ -1372,9 +1429,9 @@
     // ✅ Start connection monitoring for navbar status
     setupConnectionMonitoring();
 
-    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "landing" } }));
     
-    console.log("🌊 NaluLF UI initialized");
+    console.log("🌊 NaluLF UI initialized successfully");
   });
 
   // -----------------------------
@@ -1398,4 +1455,3 @@
     getPinned,
   };
 })();
-
