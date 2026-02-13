@@ -1,13 +1,14 @@
 /* =========================================
    NaluLF 🌊 – Inspector Page Styles
    FILE: css/inspector.css
-   Enhanced • Mobile-First • Modern Effects
+   Enhanced • Mobile-First • Theme-Aware
    ========================================= */
 
 /* =================================== */
-/* VARIABLES & THEME */
+/* THEME VARIABLES */
 /* =================================== */
 
+/* Default Theme (Gold/Cyan) */
 :root {
   --inspector-primary: #00fff0;
   --inspector-secondary: #05d9e8;
@@ -24,6 +25,34 @@
   
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-bounce: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* Gold Theme (Default) */
+.theme-gold {
+  --inspector-primary: #FFD700;
+  --inspector-secondary: #FFA500;
+  --inspector-accent: #FFD700;
+}
+
+/* Cosmic Theme (Purple/Pink) */
+.theme-cosmic {
+  --inspector-primary: #bd93f9;
+  --inspector-secondary: #ff79c6;
+  --inspector-accent: #bd93f9;
+}
+
+/* Starry Theme (Blue/Cyan) */
+.theme-starry {
+  --inspector-primary: #00fff0;
+  --inspector-secondary: #05d9e8;
+  --inspector-accent: #50a8ff;
+}
+
+/* Hawaiian Theme (Ocean/Tropical) */
+.theme-hawaiian {
+  --inspector-primary: #00d4ff;
+  --inspector-secondary: #00ffaa;
+  --inspector-accent: #00d4ff;
 }
 
 /* =================================== */
