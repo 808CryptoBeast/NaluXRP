@@ -1,88 +1,65 @@
 /* =========================================================
    FILE: js/account-inspector.js
-   NaluXrp — Unified Inspector (Tabs + Tree + Quick Inspect + Token/IOU Support)
-
-   WHAT'S NEW (v3):
-   ✅ Tabs added: "Issuer Tree" + "Trace"
-   ✅ Trace mount point added (inspector-trace-tab.js renders inside it)
-   ✅ Quick Inspect modal (works for ANY address, no tree needed)
-   ✅ Issued Tokens / Trustlines support:
-      - account_lines aggregation
-      - issuer-side "outstanding issued" estimation (negative balances)
-      - optional gateway_balances attempt (best effort)
-   ✅ Public API expanded:
-      window.UnifiedInspector.quickInspect(address)
-      window.UnifiedInspector.request(payload, opts)
-      window.UnifiedInspector.getTokenSummary(address)
-      window.UnifiedInspector.getTransportState()
-      window.UnifiedInspector.switchToTrace(address)
-
-   NOTES:
-   - No secrets are stored here.
-   - All analysis is client-side, using public XRPL RPC/WS via your connection module.
-
+   NanaKilo - Core Forensic Engine
+   NaluLF (Nalu Ledger Forensics)
+   
+   Deep Observation • Deeper Insights
+   
+   FEATURES:
+   ✅ Flow Analysis (Issuer Tree)
+   ✅ Multi-Asset Tracing
+   ✅ Pattern Detection
+   ✅ Token/IOU Support
+   ✅ Quick Inspection
+   
+   ARCHITECTURE:
+   - Client-side only (no secrets stored)
+   - Public XRPL RPC/WS endpoints
+   - LocalStorage for cache/preferences
    ========================================================= */
 
 (function () {
   "use strict";
 
   // ---------------- CONFIG ----------------
-  const DEPLOYED_PROXY =
-    typeof window !== "undefined" && window.NALU_DEPLOYED_PROXY ? String(window.NALU_DEPLOYED_PROXY) : "";
-
-  // Prefer known working JSON-RPC endpoints (set window.NALU_RPC_HTTP to override)
-  const RPC_HTTP_ENDPOINTS = ["https://xrplcluster.com/", "https://xrpl.ws/"];
-  const RPC_HTTP_OVERRIDE = typeof window !== "undefined" && window.NALU_RPC_HTTP ? String(window.NALU_RPC_HTTP) : "";
-
+  const MODULE_VERSION = "nanakilo-forensics@3.0.0";
+  
+  const LOCAL_KEY_ISSUER_LIST = "nanakilo_issuerList";
+  const LOCAL_KEY_ACTIVE_ISSUER = "nanakilo_activeIssuer";
+  const LOCAL_KEY_GRAPH_CACHE = "nanakilo_graphCache_";
+  
   const SHARED_WAIT_MS = 8000;
+  const DEFAULT_ISSUER_LIST = [];
 
-  // paging / caps
+  // Shared transport
+  let transportState = {
+    wsConnected: false,
+    lastSource: "—"
+  };
+
+  // Issuer registry
+  const issuerRegistry = new Map();
+  let activeIssuer = null;
+  let buildingTree = false;
+
+  // Caches
+  const activationCache = new Map();
+  const accountInfoCache = new Map();
+  const tokenSummaryCache = new Map();
+
+  // Constants for scanning
   const PAGE_LIMIT = 200;
-
-  // Tree scan caps (keep sane)
   const MAX_PAGES_TREE_SCAN = 200;
   const MAX_TX_SCAN_PER_NODE = 50_000;
-
   const DEFAULT_DEPTH = 2;
   const DEFAULT_PER_NODE = 100;
   const DEFAULT_MAX_ACCTS = 250;
   const DEFAULT_MAX_EDGES = 1600;
-
-  // activation lookup caps (earliest-forward scan)
   const ACTIVATION_PAGE_LIMIT = 200;
   const ACTIVATION_MAX_PAGES = 2000;
   const ACTIVATION_MAX_TX_SCAN = 350_000;
 
-  // account_lines caps
-  const LINES_PAGE_LIMIT = 400;
-  const LINES_MAX_PAGES = 50;
-
-  // localStorage keys
-  const LOCAL_KEY_ISSUER_LIST = "naluxrp_issuer_list";
-  const LOCAL_KEY_SELECTED_ISSUER = "naluxrp_selected_issuer";
-
-  // auto-retry
-  const SHARED_RETRY_COOLDOWN_MS = 10_000;
-
-  const MODULE_VERSION = "unified-inspector@3.0.0-tabs-trace-quickinspect-tokens";
-
-  // ---------------- STATE ----------------
-  let buildingTree = false;
-  let activeIssuer = null;
-
-  const issuerRegistry = new Map(); // issuer -> graph
-  const activationCache = new Map(); // addr -> { act|null, complete:boolean, scanned:number, pages:number, source:string }
-  const accountInfoCache = new Map(); // addr -> { domain, balanceXrp, sequence, ownerCount }
-  const tokenSummaryCache = new Map(); // addr -> token summary
-
-  const transportState = {
-    wsConnected: false,
-    lastSource: "—",
-    lastError: null,
-    lastSharedReconnectAttemptAt: 0
-  };
-
-  // ---------------- DOM ----------------
+  // ---------------- UTILITY HELPERS ----------------
   const $ = (id) => document.getElementById(id);
 
   function escapeHtml(s) {
@@ -96,16 +73,18 @@
 
   function safeGetStorage(key) {
     try {
-      return window.localStorage ? window.localStorage.getItem(key) : null;
-    } catch (_) {
+      return localStorage.getItem(key);
+    } catch {
       return null;
     }
   }
 
   function safeSetStorage(key, value) {
     try {
-      if (window.localStorage) window.localStorage.setItem(key, value);
-    } catch (_) {}
+      localStorage.setItem(key, value);
+    } catch (e) {
+      console.warn("localStorage write failed:", e);
+    }
   }
 
   function setStatus(s) {
@@ -114,34 +93,32 @@
   }
 
   function setProgress(p) {
-    const wrap = $("uiProgress");
     const bar = $("uiProgressBar");
-    if (!wrap || !bar) return;
-
-    if (p < 0) {
-      wrap.style.display = "none";
-      bar.style.width = "0%";
-      return;
-    }
-
-    wrap.style.display = "block";
-    const clamped = Math.max(0, Math.min(1, Number(p) || 0));
-    bar.style.width = `${Math.round(clamped * 100)}%`;
+    if (bar) bar.style.width = Math.max(0, Math.min(100, p)) + "%";
   }
 
   function setBuildBusy(busy, label) {
     const btn = $("uiBuild");
     if (!btn) return;
-    btn.disabled = !!busy;
-    btn.style.opacity = busy ? "0.75" : "1";
-    btn.style.cursor = busy ? "not-allowed" : "pointer";
-    btn.textContent = label || (busy ? "Building…" : "Build");
+    btn.disabled = busy;
+    btn.textContent = busy ? (label || "Building...") : "🌳 Build Flow Analysis";
   }
 
   function openModal(title, html) {
-    $("uiModalTitle").textContent = title || "Details";
-    $("uiModalBody").innerHTML = html || "";
-    $("uiModalOverlay").style.display = "flex";
+    const overlay = $("uiModalOverlay");
+    if (!overlay) return;
+    overlay.style.display = "flex";
+    const content = overlay.querySelector("div");
+    if (content) {
+      content.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h3 style="margin:0;font-size:20px;font-weight:900;color:var(--inspector-primary);">${escapeHtml(title)}</h3>
+          <button id="uiModalClose" style="padding:8px 12px;border-radius:10px;border:2px solid rgba(255,0,0,0.3);background:rgba(255,0,0,0.15);color:#ff6b6b;cursor:pointer;font-weight:900;font-size:16px;line-height:1;">✕</button>
+        </div>
+        <div style="max-height:70vh;overflow-y:auto;">${html}</div>
+      `;
+      $("uiModalClose").onclick = closeModal;
+    }
   }
 
   function closeModal() {
@@ -149,113 +126,83 @@
   }
 
   async function copyToClipboard(text) {
-    const s = String(text || "");
     try {
-      await navigator.clipboard.writeText(s);
+      await navigator.clipboard.writeText(text);
       return true;
-    } catch (_) {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = s;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand("copy");
-        ta.remove();
-        return !!ok;
-      } catch (e) {
-        return false;
-      }
+    } catch {
+      return false;
     }
   }
 
   function downloadText(text, filename, mime = "text/plain") {
-    const blob = new Blob([String(text || "")], { type: mime });
+    const blob = new Blob([text], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename || `download-${Date.now()}.txt`;
-    document.body.appendChild(a);
+    a.download = filename;
     a.click();
-    a.remove();
     URL.revokeObjectURL(url);
   }
 
   function explorerLinks(txHash) {
-    if (!txHash) return { xrpscan: null, bithomp: null };
-    return {
-      xrpscan: `https://xrpscan.com/tx/${encodeURIComponent(txHash)}`,
-      bithomp: `https://bithomp.com/explorer/${encodeURIComponent(txHash)}`
-    };
+    return `
+      <a href="https://livenet.xrpl.org/transactions/${txHash}" target="_blank" rel="noopener">XRPL.org</a> • 
+      <a href="https://xrpscan.com/tx/${txHash}" target="_blank" rel="noopener">XRPScan</a> • 
+      <a href="https://bithomp.com/explorer/${txHash}" target="_blank" rel="noopener">Bithomp</a>
+    `;
   }
 
   // ---------------- TIME / INPUT HELPERS ----------------
   function safeToIso(x) {
     try {
-      if (x == null) return null;
-      if (typeof x === "string") {
-        const d = new Date(x);
-        if (!Number.isNaN(d.getTime())) return d.toISOString();
-      }
-      if (typeof x === "number") {
-        if (x > 10_000_000_000) return new Date(x).toISOString(); // ms epoch
-        if (x > 1_000_000_000) return new Date(x * 1000).toISOString(); // sec epoch
-        const rippleEpochMs = Date.UTC(2000, 0, 1);
-        return new Date(rippleEpochMs + x * 1000).toISOString(); // ripple epoch seconds
-      }
+      if (!x) return "";
       const d = new Date(x);
-      if (!Number.isNaN(d.getTime())) return d.toISOString();
-    } catch (_) {}
-    return null;
+      return isNaN(d) ? "" : d.toISOString();
+    } catch {
+      return "";
+    }
   }
 
   function parseNullableInt(v) {
-    const s = String(v ?? "").trim();
-    if (!s) return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? Math.floor(n) : null;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? null : n;
   }
 
   function clampInt(n, min, max) {
-    const nn = Number(n);
-    if (!Number.isFinite(nn)) return min;
-    return Math.max(min, Math.min(max, Math.floor(nn)));
+    if (n == null || isNaN(n)) return null;
+    return Math.max(min, Math.min(max, n));
   }
 
   // ---------------- XRPL AMOUNT ----------------
   function parseAmount(amount) {
-    if (amount == null) return { value: 0, currency: "XRP", issuer: null, raw: amount };
     if (typeof amount === "string") {
-      const v = Number(amount);
-      return { value: Number.isFinite(v) ? v / 1_000_000 : 0, currency: "XRP", issuer: null, raw: amount };
+      return { currency: "XRP", value: parseFloat(amount) / 1_000_000, issuer: null };
     }
-    if (typeof amount === "object" && amount.value != null) {
-      const v = Number(amount.value);
+    if (typeof amount === "object" && amount && amount.value) {
       return {
-        value: Number.isFinite(v) ? v : 0,
         currency: amount.currency || "???",
-        issuer: amount.issuer || null,
-        raw: amount
+        value: parseFloat(amount.value || 0),
+        issuer: amount.issuer || null
       };
     }
-    if (typeof amount === "number") return { value: amount, currency: "XRP", issuer: null, raw: amount };
-    return { value: 0, currency: "XRP", issuer: null, raw: amount };
+    return {
+      currency: "XRP",
+      value: 0,
+      issuer: null
+    };
   }
 
   function formatAmountPretty(cur, val, issuer) {
-    const n = Number(val);
-    const vv = Number.isFinite(n) ? n : 0;
-    if (cur === "XRP") return `${vv.toFixed(6)} XRP`;
-    return `${vv} ${cur}${issuer ? ` • ${String(issuer).slice(0, 6)}…` : ""}`;
+    const v = Number(val) || 0;
+    if (cur === "XRP") return `${v.toFixed(6)} XRP`;
+    const iss = issuer ? ` (${issuer.slice(0, 8)}...)` : "";
+    return `${v.toFixed(6)} ${cur}${iss}`;
   }
 
   // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
   function computeWsConnected() {
-    if (typeof window.isXRPLConnected === "function") return !!window.isXRPLConnected();
-    if (window.XRPL?.connected) return true;
-    if (window.XRPL?.client && typeof window.XRPL.client.isConnected === "function") return !!window.XRPL.client.isConnected();
-    return false;
+    if (!window.sharedXrplClient) return false;
+    return window.sharedXrplClient.isConnected();
   }
 
   function setTransportLastSource(src) {
@@ -264,224 +211,178 @@
   }
 
   function updateConnBadge() {
-    const badge = $("uiConnBadge");
-    const text = $("uiConnText");
-    const dot = $("uiConnDot");
-    if (!badge || !text || !dot) return;
-
     transportState.wsConnected = computeWsConnected();
-
-    if (transportState.wsConnected) {
-      badge.style.background = "linear-gradient(135deg,#50fa7b,#2ecc71)";
-      badge.style.color = "#000";
-      dot.style.background = "rgba(0,0,0,0.35)";
-      text.textContent = `WS live • last: ${transportState.lastSource}`;
-    } else {
-      badge.style.background = "rgba(255,255,255,0.10)";
-      badge.style.color = "var(--text-primary)";
-      dot.style.background = "rgba(255,255,255,0.25)";
-      const err = transportState.lastError ? ` • ${transportState.lastError}` : "";
-      text.textContent = `WS offline • last: ${transportState.lastSource}${err}`;
+    const dot = $("uiConnDot");
+    const text = $("uiConnText");
+    if (dot) {
+      if (transportState.wsConnected) {
+        dot.classList.add("connected");
+      } else {
+        dot.classList.remove("connected");
+      }
+    }
+    if (text) {
+      const status = transportState.wsConnected ? "WS" : "HTTP";
+      text.textContent = `${status} • ${transportState.lastSource}`;
     }
   }
 
   async function waitForSharedConn(timeoutMs = SHARED_WAIT_MS) {
-    return new Promise((resolve) => {
-      try {
-        if (computeWsConnected()) return resolve(true);
+    if (!window.sharedXrplClient) {
+      throw new Error("sharedXrplClient not available");
+    }
+    
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.sharedXrplClient.removeListener("connected", onConn);
+        reject(new Error("WS connection timeout"));
+      }, timeoutMs);
 
-        const onConn = (ev) => {
-          const d = ev && ev.detail;
-          if (d && d.connected) {
-            window.removeEventListener("xrpl-connection", onConn);
-            clearTimeout(t);
-            resolve(true);
-          }
-        };
-        window.addEventListener("xrpl-connection", onConn);
+      const onConn = (ev) => {
+        clearTimeout(timer);
+        window.sharedXrplClient.removeListener("connected", onConn);
+        resolve(ev);
+      };
 
-        const t = setTimeout(() => {
-          window.removeEventListener("xrpl-connection", onConn);
-          resolve(false);
-        }, timeoutMs);
-      } catch (_) {
-        resolve(false);
+      if (window.sharedXrplClient.isConnected()) {
+        clearTimeout(timer);
+        resolve();
+      } else {
+        window.sharedXrplClient.on("connected", onConn);
       }
     });
   }
 
   function attemptSharedReconnect(reason) {
-    const now = Date.now();
-    if (now - transportState.lastSharedReconnectAttemptAt < SHARED_RETRY_COOLDOWN_MS) return;
-    transportState.lastSharedReconnectAttemptAt = now;
-
-    try {
-      if (typeof window.reconnectXRPL === "function") window.reconnectXRPL();
-      else if (typeof window.connectXRPL === "function") window.connectXRPL();
-      transportState.lastError = reason || "reconnect requested";
-    } catch (e) {
-      transportState.lastError = e?.message ? e.message : String(e);
+    console.log("🔄 NanaKilo: Reconnecting...", reason);
+    if (window.sharedXrplClient && typeof window.sharedXrplClient.connect === "function") {
+      window.sharedXrplClient.connect().catch(err => {
+        console.warn("Reconnect failed:", err);
+      });
     }
-    updateConnBadge();
   }
 
   // ---------------- HTTP JSON-RPC ----------------
   async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    
     try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeoutMs);
-
-      const resp = await fetch(url, {
-        method,
-        headers: {
-          Accept: "application/json",
-          ...(body ? { "Content-Type": "application/json" } : {}),
-          ...headers
-        },
-        body: body ? JSON.stringify(body) : null,
-        signal: controller.signal
-      });
-
-      clearTimeout(id);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return await resp.json();
-    } catch (err) {
-      console.warn("tryFetchJson failed", url, err && err.message ? err.message : err);
-      transportState.lastError = err && err.message ? err.message : String(err);
-      updateConnBadge();
-      return null;
+      const opts = { method, headers, signal: controller.signal };
+      if (body) opts.body = typeof body === "string" ? body : JSON.stringify(body);
+      
+      const res = await fetch(url, opts);
+      clearTimeout(timer);
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      clearTimeout(timer);
+      throw e;
     }
   }
 
   function unwrapRpcResult(json) {
-    const r = json?.result;
-    if (!r) return null;
-    if (r.error) return null;
-    if (r.status === "success" && r.result && typeof r.result === "object") return r.result;
-    return r;
+    if (json.result) return json.result;
+    if (json.error) throw new Error(json.error.message || "RPC error");
+    return json;
   }
 
   async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
-    const endpoints = [];
-    if (DEPLOYED_PROXY && DEPLOYED_PROXY.startsWith("http")) endpoints.push(DEPLOYED_PROXY);
-    if (RPC_HTTP_OVERRIDE && RPC_HTTP_OVERRIDE.startsWith("http")) endpoints.push(RPC_HTTP_OVERRIDE);
-    endpoints.push(...RPC_HTTP_ENDPOINTS);
-
-    const body = { method, params: [paramsObj] };
-
-    for (const base of endpoints) {
-      const url = base.endsWith("/") ? base : base + "/";
-      let attempt = 0;
-
-      while (attempt <= retries) {
-        const j = await tryFetchJson(url, { method: "POST", body, timeoutMs });
-        const out = unwrapRpcResult(j);
-        if (out) {
-          setTransportLastSource(base.includes("localhost") ? "local_proxy_http_rpc" : "http_rpc");
-          transportState.lastError = null;
-          updateConnBadge();
-          return out;
-        }
-        attempt += 1;
-        if (attempt <= retries) await new Promise((res) => setTimeout(res, 250 * attempt));
+    const payload = {
+      method,
+      params: [paramsObj]
+    };
+    
+    let lastErr;
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const publicRpc = "https://xrplcluster.com";
+        setTransportLastSource("xrplcluster.com");
+        const json = await tryFetchJson(publicRpc, {
+          method: "POST",
+          body: JSON.stringify(payload),
+          timeoutMs,
+          headers: { "Content-Type": "application/json" }
+        });
+        return unwrapRpcResult(json);
+      } catch (e) {
+        lastErr = e;
+        if (i < retries) await new Promise(r => setTimeout(r, 300));
       }
     }
-
-    return null;
+    throw lastErr;
   }
 
-  // Prefer shared WS request wrapper
   async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
-    // 1) shared wrapper (preferred)
-    if (typeof window.requestXrpl === "function") {
+    if (window.sharedXrplClient && window.sharedXrplClient.isConnected()) {
       try {
-        const r = await window.requestXrpl(payload, { timeoutMs });
-        const out = r?.result || r;
-        setTransportLastSource(computeWsConnected() ? "shared_ws" : "shared_wrapper_http_fallback");
-        transportState.lastError = null;
+        setTransportLastSource("WS");
+        const result = await window.sharedXrplClient.request(payload);
+        transportState.wsConnected = true;
         updateConnBadge();
-        return out;
+        return result;
       } catch (e) {
-        transportState.lastError = e?.message ? e.message : String(e);
-        updateConnBadge();
+        console.warn("WS request failed:", e);
         if (!allowHttpFallback) throw e;
-        // fall through to HTTP fallback (do NOT hard-fail build)
       }
     }
-
-    // 2) direct WS client (only if wrapper not present)
-    if (!window.requestXrpl && window.XRPL?.client?.request) {
-      try {
-        // If it's not actually connected, skip straight to HTTP fallback.
-        if (computeWsConnected()) {
-          const out = await window.XRPL.client.request(payload);
-          setTransportLastSource("direct_ws_client");
-          transportState.lastError = null;
-          updateConnBadge();
-          return out?.result || out;
-        }
-      } catch (e) {
-        transportState.lastError = e?.message ? e.message : String(e);
-        updateConnBadge();
-        if (!allowHttpFallback) throw e;
-        // fall through
-      }
-    }
-
-    // 3) HTTP fallback
+    
     if (allowHttpFallback) {
-      const out = await rpcCall(payload.command, { ...payload }, { timeoutMs, retries: 2 });
-      if (out) return out;
+      return await rpcCall(payload.command, payload, { timeoutMs });
     }
-
-    throw new Error("No XRPL transport available");
+    
+    throw new Error("No transport available");
   }
 
   // ---------------- TX NORMALIZATION ----------------
   function normalizeTxEntry(entry) {
-    const t0 = entry?.tx || entry?.transaction || entry?.tx_json || entry;
-    if (!t0) return null;
+    const tx = entry.tx || entry.transaction || entry;
+    const meta = entry.meta || entry.metaData || tx.meta || tx.metaData || {};
+    
     return {
-      ...t0,
-      _meta: entry?.meta || entry?.metaData || t0?.meta || t0?.metaData || null,
-      hash: t0.hash || entry?.hash || t0?.tx_hash || null,
-      ledger_index: Number(t0.ledger_index ?? t0.LedgerIndex ?? entry?.ledger_index ?? entry?.ledger_index_min ?? 0),
-      _iso: safeToIso(t0.date ?? entry?.date ?? null)
+      hash: tx.hash || entry.hash,
+      ledger_index: tx.ledger_index || entry.ledger_index,
+      date: tx.date || entry.date,
+      TransactionType: tx.TransactionType || tx.type,
+      Account: tx.Account || tx.account,
+      Destination: tx.Destination || tx.destination,
+      Amount: tx.Amount,
+      Fee: tx.Fee,
+      _meta: meta,
+      _iso: safeToIso(tx.date || entry.date),
+      validated: entry.validated ?? true
     };
   }
 
   function normalizeAndSortTxsAsc(entries) {
-    const txs = (entries || []).map(normalizeTxEntry).filter(Boolean);
-    txs.sort((a, b) => {
-      const la = Number(a.ledger_index || 0);
-      const lb = Number(b.ledger_index || 0);
-      if (la !== lb) return la - lb;
-      const da = a._iso ? new Date(a._iso).getTime() : 0;
-      const db = b._iso ? new Date(b._iso).getTime() : 0;
-      return da - db;
+    return entries.map(normalizeTxEntry).sort((a, b) => {
+      const la = a.ledger_index || 0;
+      const lb = b.ledger_index || 0;
+      return la - lb;
     });
-    return txs;
   }
 
   function withinConstraints(tx, constraints) {
-    const l = Number(tx.ledger_index || 0);
-
-    if (constraints.ledgerMin != null && l < constraints.ledgerMin) return false;
-    if (constraints.ledgerMax != null && l > constraints.ledgerMax) return false;
-
-    if (constraints.startDate && tx._iso && tx._iso < constraints.startDate) return false;
-    if (constraints.endDate && tx._iso && tx._iso > constraints.endDate) return false;
-
-    if (constraints.minXrp) {
-      const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-      if (amt.currency === "XRP" && amt.value < constraints.minXrp) return false;
+    const { ledgerMin, ledgerMax, startDate, endDate, minXrp } = constraints;
+    const ledger = tx.ledger_index || 0;
+    
+    if (ledgerMin != null && ledger < ledgerMin) return false;
+    if (ledgerMax != null && ledger > ledgerMax) return false;
+    
+    if (startDate && tx._iso && tx._iso < startDate) return false;
+    if (endDate && tx._iso && tx._iso > endDate) return false;
+    
+    if (minXrp) {
+      const amt = parseAmount(tx.Amount);
+      if (amt.currency === "XRP" && amt.value < minXrp) return false;
     }
-
+    
     return true;
   }
 
   async function fetchAccountTxPaged(address, { marker, limit, forward, ledgerMin, ledgerMax }) {
-    const payload = {
+    const params = {
       command: "account_tx",
       account: address,
       limit: limit || PAGE_LIMIT,
@@ -489,161 +390,139 @@
       ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
       ledger_index_max: ledgerMax == null ? -1 : ledgerMax
     };
-    if (marker) payload.marker = marker;
-
-    const rr = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
-
-    const txs = Array.isArray(rr?.transactions) ? rr.transactions : [];
-    const nextMarker = rr?.marker || null;
-    return { txs, marker: nextMarker, source: transportState.lastSource || "unknown" };
+    
+    if (marker) params.marker = marker;
+    
+    const result = await xrplRequest(params);
+    return {
+      txs: result.transactions || [],
+      marker: result.marker || null
+    };
   }
 
   // ---------------- ACCOUNT INFO ----------------
   function hexToAscii(hex) {
-    try {
-      if (!hex) return null;
-      const clean = String(hex).replace(/^0x/i, "");
-      let str = "";
-      for (let i = 0; i < clean.length; i += 2) {
-        const code = parseInt(clean.slice(i, i + 2), 16);
-        if (!code) continue;
-        str += String.fromCharCode(code);
-      }
-      return str || null;
-    } catch (_) {
-      return null;
+    if (!hex) return "";
+    let str = "";
+    for (let i = 0; i < hex.length; i += 2) {
+      const code = parseInt(hex.substr(i, 2), 16);
+      if (code) str += String.fromCharCode(code);
     }
+    return str;
   }
 
   function normalizeAccountInfo(info) {
-    if (!info || typeof info !== "object") return null;
-
-    const dom = info.Domain || info.domain || null;
-    const domain = dom
-      ? String(dom).startsWith("http")
-        ? String(dom)
-        : (hexToAscii(dom) || String(dom))
-      : null;
-
-    const balDrops = info.Balance ?? info.balance ?? null;
-    const balanceXrp = balDrops != null && Number.isFinite(Number(balDrops)) ? Number(balDrops) / 1_000_000 : null;
-
+    const balanceDrops = info.Balance || "0";
+    const balanceXrp = parseFloat(balanceDrops) / 1_000_000;
+    
     return {
-      domain: domain || null,
-      balanceXrp: balanceXrp != null ? balanceXrp : null,
-      sequence: info.Sequence ?? info.sequence ?? null,
-      ownerCount: info.OwnerCount ?? info.owner_count ?? null
+      address: info.Account,
+      balanceXrp,
+      sequence: info.Sequence,
+      flags: info.Flags,
+      ownerCount: info.OwnerCount,
+      previousTxn: info.PreviousTxnID,
+      domain: hexToAscii(info.Domain || "")
     };
   }
 
   async function fetchAccountInfo(address) {
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
-
-    const out = await xrplRequest({ command: "account_info", account: address, ledger_index: "validated" }, { timeoutMs: 12000 });
-    const data = out?.account_data || out?.result?.account_data || null;
-    const normalized = normalizeAccountInfo(data);
-    accountInfoCache.set(address, normalized);
-    return normalized;
+    
+    try {
+      const result = await xrplRequest({
+        command: "account_info",
+        account: address,
+        ledger_index: "validated"
+      });
+      const normalized = normalizeAccountInfo(result.account_data);
+      accountInfoCache.set(address, normalized);
+      return normalized;
+    } catch (e) {
+      console.warn("fetchAccountInfo failed:", e);
+      return null;
+    }
   }
 
   // ---------------- ACCOUNT LINES + ISSUED TOKENS ----------------
   async function fetchAccountLinesAll(address) {
-    if (!isValidXrpAddress(address)) return { lines: [], pages: 0, complete: true, source: "invalid" };
-
+    if (!isValidXrpAddress(address)) return [];
+    
+    const allLines = [];
     let marker = null;
     let pages = 0;
-    const lines = [];
-
-    while (pages < LINES_MAX_PAGES) {
-      pages += 1;
-
-      const payload = {
-        command: "account_lines",
-        account: address,
-        ledger_index: "validated",
-        limit: LINES_PAGE_LIMIT
-      };
-      if (marker) payload.marker = marker;
-
-      const out = await xrplRequest(payload, { timeoutMs: 20000, allowHttpFallback: true });
-      const got = Array.isArray(out?.lines) ? out.lines : [];
-      got.forEach((x) => lines.push(x));
-
-      marker = out?.marker || null;
-      if (!marker) break;
-    }
-
-    return {
-      lines,
-      pages,
-      complete: !marker,
-      source: transportState.lastSource || "unknown"
-    };
+    const maxPages = 50;
+    
+    do {
+      pages++;
+      const params = { command: "account_lines", account: address, limit: 400 };
+      if (marker) params.marker = marker;
+      
+      const result = await xrplRequest(params);
+      if (result.lines) allLines.push(...result.lines);
+      marker = result.marker;
+    } while (marker && pages < maxPages);
+    
+    return allLines;
   }
 
   async function fetchGatewayBalances(address) {
     try {
-      const out = await xrplRequest(
-        {
-          command: "gateway_balances",
-          account: address,
-          ledger_index: "validated"
-        },
-        { timeoutMs: 20000, allowHttpFallback: true }
-      );
-      return out || null;
-    } catch (e) {
+      const result = await xrplRequest({
+        command: "gateway_balances",
+        account: address,
+        ledger_index: "validated"
+      });
+      return result;
+    } catch {
       return null;
     }
   }
 
   function buildTokenSummaryFromLines(address, linesResp, gatewayResp) {
-    const lines = linesResp?.lines || [];
-    const trustlines = lines.map((l) => {
-      const bal = Number(l.balance);
-      return {
-        peer: l.account || null,
-        currency: l.currency || "???",
-        balance: Number.isFinite(bal) ? bal : 0,
-        limit: l.limit != null ? Number(l.limit) : null,
-        limit_peer: l.limit_peer != null ? Number(l.limit_peer) : null,
-        quality_in: l.quality_in ?? null,
-        quality_out: l.quality_out ?? null
-      };
-    });
-
-    // issuer-side estimate (negative balances on issuer line = others holding positive)
-    const issuedMap = new Map(); // currency -> { holders, outstanding }
-    for (const t of trustlines) {
-      if (!t.currency) continue;
-      if (t.balance < 0) {
-        const cur = t.currency;
-        if (!issuedMap.has(cur)) issuedMap.set(cur, { currency: cur, holders: 0, outstanding: 0 });
-        const row = issuedMap.get(cur);
-        row.holders += 1;
-        row.outstanding += Math.abs(t.balance);
-      }
+    const holding = [];
+    const issued = [];
+    
+    if (Array.isArray(linesResp)) {
+      linesResp.forEach(line => {
+        const val = parseFloat(line.balance);
+        if (val > 0) {
+          holding.push({
+            currency: line.currency,
+            value: val,
+            issuer: line.account,
+            peer: line.account,
+            balance: val
+          });
+        } else if (val < 0) {
+          issued.push({
+            currency: line.currency,
+            value: Math.abs(val),
+            holder: line.account,
+            holders: 1,
+            outstanding: Math.abs(val)
+          });
+        }
+      });
     }
-
-    const issuedEstimated = Array.from(issuedMap.values()).sort((a, b) => b.outstanding - a.outstanding);
-
-    const obligations = gatewayResp?.obligations ? gatewayResp.obligations : null;
-
-    const topTrust = trustlines
-      .slice()
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
-      .slice(0, 18);
-
+    
+    if (gatewayResp?.obligations) {
+      Object.entries(gatewayResp.obligations).forEach(([cur, val]) => {
+        issued.push({ currency: cur, value: parseFloat(val), holder: "various", holders: 0, outstanding: parseFloat(val) });
+      });
+    }
+    
     return {
       address,
-      source: linesResp?.source || "unknown",
-      linesPages: linesResp?.pages ?? 0,
-      linesComplete: linesResp?.complete ?? true,
-      trustlineCount: trustlines.length,
-      topTrustlines: topTrust,
-      issuedEstimated,
-      gatewayObligations: obligations
+      trustlineCount: linesResp ? linesResp.length : 0,
+      linesPages: 0,
+      linesComplete: true,
+      source: "unknown",
+      holding,
+      issuedEstimated: issued,
+      topTrustlines: holding.slice(0, 18),
+      gatewayObligations: gatewayResp?.obligations || null
     };
   }
 
@@ -651,10 +530,12 @@
     const addr = String(address || "").trim();
     if (!isValidXrpAddress(addr)) return null;
     if (tokenSummaryCache.has(addr)) return tokenSummaryCache.get(addr);
-
-    const lines = await fetchAccountLinesAll(addr);
-    const gateway = await fetchGatewayBalances(addr);
-
+    
+    const [lines, gateway] = await Promise.all([
+      fetchAccountLinesAll(addr),
+      fetchGatewayBalances(addr)
+    ]);
+    
     const summary = buildTokenSummaryFromLines(addr, lines, gateway);
     tokenSummaryCache.set(addr, summary);
     return summary;
@@ -662,157 +543,134 @@
 
   // ---------------- ACTIVATION (activated_by) ----------------
   async function getActivatedByStrict(address, constraints) {
-    if (!isValidXrpAddress(address)) return { act: null, complete: true, scanned: 0, pages: 0, source: "invalid" };
-    if (activationCache.has(address)) return activationCache.get(address);
-
-    const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
-    const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
-
-    let marker = null;
-    let pages = 0;
-    let scanned = 0;
-    let source = "unknown";
-    let complete = true;
-
-    while (pages < ACTIVATION_MAX_PAGES && scanned < ACTIVATION_MAX_TX_SCAN) {
-      pages += 1;
-
-      const resp = await fetchAccountTxPaged(address, {
-        marker,
+    if (!isValidXrpAddress(address)) {
+      return { activator: null, complete: false, scanned: 0, pages: 0, source: "invalid" };
+    }
+    
+    if (activationCache.has(address)) {
+      const cached = activationCache.get(address);
+      if (cached.complete) return cached;
+    }
+    
+    try {
+      const fetchResp = await fetchAccountTxPaged(address, {
         limit: ACTIVATION_PAGE_LIMIT,
         forward: true,
-        ledgerMin,
-        ledgerMax
+        ledgerMin: constraints.ledgerMin,
+        ledgerMax: constraints.ledgerMax,
+        marker: null
       });
-
-      source = resp.source || source;
-
-      if (!resp.txs.length) {
-        complete = !resp.marker;
-        break;
-      }
-
-      scanned += resp.txs.length;
-
-      for (const item of resp.txs) {
-        const tx = normalizeTxEntry(item);
-        if (!tx) continue;
-        if (!withinConstraints(tx, constraints)) continue;
-
-        const type = tx.TransactionType || tx.type;
-        if (type !== "Payment") continue;
-
-        const dst = tx.Destination || tx.destination;
-        const src = tx.Account || tx.account;
-        if (dst !== address || !src) continue;
-
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-        const act = {
-          activatedBy: src,
-          date: tx._iso || null,
-          ledger_index: Number(tx.ledger_index || 0),
-          amount: amt.currency === "XRP" ? amt.value : null,
-          currency: amt.currency,
-          tx_hash: String(tx.hash || "")
+      
+      const txs = normalizeAndSortTxsAsc(fetchResp.txs);
+      const first = txs.find(t => 
+        t.TransactionType === "Payment" && 
+        t.Destination === address &&
+        withinConstraints(t, constraints)
+      );
+      
+      if (first) {
+        const activation = {
+          activator: first.Account,
+          complete: true,
+          scanned: txs.length,
+          pages: 1,
+          source: transportState.lastSource || "unknown"
         };
-
-        const entry = { act, complete: true, scanned, pages, source: `activation_${source}` };
-        activationCache.set(address, entry);
-        return entry;
+        activationCache.set(address, activation);
+        return activation;
       }
-
-      marker = resp.marker;
-      if (!marker) break;
-
-      if (pages % 50 === 0) setStatus(`Activation scan ${address.slice(0, 6)}… pages:${pages} scanned:${scanned}`);
+      
+      const activation = {
+        activator: null,
+        complete: true,
+        scanned: txs.length,
+        pages: 1,
+        source: transportState.lastSource || "unknown"
+      };
+      activationCache.set(address, activation);
+      return activation;
+    } catch (e) {
+      console.warn("getActivatedByStrict failed:", e);
+      return {
+        activator: null,
+        complete: false,
+        scanned: 0,
+        pages: 0,
+        source: "error"
+      };
     }
-
-    const entry = { act: null, complete, scanned, pages, source: `activation_${source}` };
-    activationCache.set(address, entry);
-    return entry;
   }
 
   // ---------------- COUNTERPARTY EXTRACTION (for edges) ----------------
   function extractCounterparty(tx) {
-    const type = tx.TransactionType || tx.type || "Unknown";
+    if (!tx) return null;
+    
+    const type = (tx.TransactionType || "").toLowerCase();
 
-    if (type === "Payment") {
-      const to = tx.Destination || tx.destination || null;
-      if (to && isValidXrpAddress(to)) return { counterparty: to, kind: "Destination" };
+    if (type === "payment") {
+      return tx.Destination || null;
+    }
+
+    if (type === "offercreate" || type === "offercancel") {
+      const taker = tx.TakerGets || tx.TakerPays;
+      if (taker && typeof taker === "object" && taker.issuer) return taker.issuer;
       return null;
     }
 
-    if (type === "TrustSet") {
-      const lim = tx.LimitAmount || tx.limit_amount || null;
-      const issuer = lim && typeof lim === "object" ? lim.issuer : null;
-      if (issuer && isValidXrpAddress(issuer)) return { counterparty: issuer, kind: "LimitAmount.issuer" };
+    if (type === "trustset") {
+      const lim = tx.LimitAmount;
+      if (lim && typeof lim === "object" && lim.issuer) return lim.issuer;
       return null;
     }
 
-    if (type === "OfferCreate") {
-      const a = tx.TakerGets || tx.taker_gets || null;
-      const b = tx.TakerPays || tx.taker_pays || null;
-
-      const issuers = [];
-      if (a && typeof a === "object" && a.issuer && isValidXrpAddress(a.issuer)) issuers.push(a.issuer);
-      if (b && typeof b === "object" && b.issuer && isValidXrpAddress(b.issuer)) issuers.push(b.issuer);
-
-      if (issuers.length) return { counterparty: issuers[0], kind: "OfferCreate.issuer" };
-      return null;
-    }
+    if (tx.Destination) return tx.Destination;
+    if (tx.Owner) return tx.Owner;
 
     return null;
   }
 
   // ---------------- OUTGOING COLLECTION (MOST RECENT) ----------------
   async function collectOutgoingTxsMostRecent(address, needCount, constraints) {
+    if (!isValidXrpAddress(address)) {
+      return { txs: [], scanned: 0, pages: 0, complete: false, source: "invalid" };
+    }
+
     const collected = [];
     let marker = null;
     let pages = 0;
     let scanned = 0;
-
-    const ledgerMin = constraints.ledgerMin == null ? -1 : constraints.ledgerMin;
-    const ledgerMax = constraints.ledgerMax == null ? -1 : constraints.ledgerMax;
-
-    while (pages < MAX_PAGES_TREE_SCAN && scanned < MAX_TX_SCAN_PER_NODE) {
-      pages += 1;
-
-      const resp = await fetchAccountTxPaged(address, {
+    
+    while (collected.length < needCount && pages < MAX_PAGES_TREE_SCAN) {
+      pages++;
+      
+      const result = await fetchAccountTxPaged(address, {
         marker,
         limit: PAGE_LIMIT,
         forward: false,
-        ledgerMin,
-        ledgerMax
+        ledgerMin: constraints.ledgerMin,
+        ledgerMax: constraints.ledgerMax
       });
-
-      if (!resp.txs.length) break;
-      scanned += resp.txs.length;
-
-      for (const entry of resp.txs) {
-        const tx = normalizeTxEntry(entry);
-        if (!tx) continue;
-        if (!withinConstraints(tx, constraints)) continue;
-
-        const from = tx.Account || tx.account;
-        if (from !== address) continue;
-
-        collected.push(tx);
-        if (collected.length >= needCount) break;
+      
+      const txs = normalizeAndSortTxsAsc(result.txs);
+      scanned += txs.length;
+      
+      for (const tx of txs) {
+        if (tx.Account === address && withinConstraints(tx, constraints)) {
+          collected.push(tx);
+          if (collected.length >= needCount) break;
+        }
       }
-
-      if (collected.length >= needCount) break;
-
-      marker = resp.marker;
+      
+      marker = result.marker;
       if (!marker) break;
-
-      if (pages % 10 === 0) setStatus(`Scanning recent outgoing ${address.slice(0, 6)}… pages:${pages} found:${collected.length}`);
     }
-
-    const picked = normalizeAndSortTxsAsc(collected.slice(0, needCount));
-
+    
     return {
-      txs: picked,
-      meta: { pages, scanned, outgoingFound: collected.length, mode: "most_recent" }
+      txs: collected,
+      scanned,
+      pages,
+      complete: !marker,
+      source: transportState.lastSource || "unknown"
     };
   }
 
@@ -820,363 +678,232 @@
   function makeGraph(issuer, params) {
     return {
       issuer,
-      builtAt: null,
       params,
       nodes: new Map(),
       edges: [],
-      adjacency: new Map(),
-      parentChoice: new Map()
+      stats: { totalScanned: 0, totalPages: 0, processedAccounts: 0 },
+      builtAt: new Date().toISOString()
     };
   }
 
   function ensureNode(g, addr, level) {
-    if (!g.nodes.has(addr)) {
-      g.nodes.set(addr, {
-        address: addr,
-        level,
-        outCount: 0,
-        inCount: 0,
-        outXrp: 0,
-        inXrp: 0,
-        activation: null,
-        acctInfo: null,
-        outgoingFirst: [],
-        outgoingMeta: null
-      });
-    } else {
-      const n = g.nodes.get(addr);
-      n.level = Math.min(n.level, level);
-    }
+    if (!isValidXrpAddress(addr)) return null;
+    if (g.nodes.has(addr)) return g.nodes.get(addr);
+
+    const n = {
+      addr,
+      level,
+      activatedBy: null,
+      activatedBySource: "pending",
+      acctInfo: null,
+      outTxs: [],
+      outScanned: 0,
+      outPages: 0,
+      outComplete: false,
+      outCount: 0
+    };
+
+    g.nodes.set(addr, n);
+    return n;
   }
 
   function addEdge(g, e) {
-    const idx = g.edges.length;
     g.edges.push(e);
-
-    if (!g.adjacency.has(e.from)) g.adjacency.set(e.from, []);
-    g.adjacency.get(e.from).push(idx);
-
-    ensureNode(g, e.from, g.nodes.get(e.from)?.level ?? 99);
-    ensureNode(g, e.to, g.nodes.get(e.to)?.level ?? 99);
-
-    if (!g.parentChoice.has(e.to)) g.parentChoice.set(e.to, e.from);
-
-    const a = g.nodes.get(e.from);
-    a.outCount += 1;
-    if (e.currency === "XRP") a.outXrp += Number(e.amount || 0);
-
-    const b = g.nodes.get(e.to);
-    b.inCount += 1;
-    if (e.currency === "XRP") b.inXrp += Number(e.amount || 0);
   }
 
   async function buildIssuerTree(g) {
-    const { depth, perNode, maxAccounts, maxEdges, constraints } = g.params;
+    const { issuer, params } = g;
+    const depth = clampInt(params.depth, 1, 10) || DEFAULT_DEPTH;
+    const perNode = clampInt(params.perNode, 1, 500) || DEFAULT_PER_NODE;
+    const maxAccounts = clampInt(params.maxAccounts, 1, 2000) || DEFAULT_MAX_ACCTS;
+    const maxEdges = clampInt(params.maxEdges, 1, 20000) || DEFAULT_MAX_EDGES;
 
-    ensureNode(g, g.issuer, 0);
+    const constraints = {
+      ledgerMin: params.ledgerMin || null,
+      ledgerMax: params.ledgerMax || null,
+      startDate: params.startDate || null,
+      endDate: params.endDate || null,
+      minXrp: params.minXrp || null
+    };
 
-    g.nodes.get(g.issuer).acctInfo = await fetchAccountInfo(g.issuer);
-    g.nodes.get(g.issuer).activation = await getActivatedByStrict(g.issuer, constraints);
+    ensureNode(g, issuer, 0);
 
-    const q = [{ addr: g.issuer, level: 0 }];
-    const seen = new Set([g.issuer]);
+    const q = [{ addr: issuer, level: 0 }];
     let processed = 0;
 
-    const denom = () => Math.max(1, Math.min(maxAccounts, processed + q.length));
-
-    while (q.length) {
-      const { addr, level } = q.shift();
-      processed += 1;
-
-      setStatus(`Building… nodes:${processed}/${Math.min(maxAccounts, processed + q.length)} • edges:${g.edges.length} • ${addr.slice(0, 6)}… lvl ${level}/${depth}`);
-      setProgress(processed / denom());
-
-      if (level >= depth) continue;
-      if (g.nodes.size >= maxAccounts) break;
-      if (g.edges.length >= maxEdges) break;
-
-      const res = await collectOutgoingTxsMostRecent(addr, perNode, constraints);
-      const txs = res.txs;
-
+    while (q.length > 0 && processed < maxAccounts && g.edges.length < maxEdges) {
+      const item = q.shift();
+      const { addr, level } = item;
       const node = g.nodes.get(addr);
-      node.outgoingMeta = res.meta || null;
+      if (!node || node.outComplete) continue;
 
-      node.outgoingFirst = txs.map((tx) => {
-        const type = tx.TransactionType || tx.type || "Unknown";
-        const cp = extractCounterparty(tx);
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-        return {
-          tx_hash: String(tx.hash || ""),
-          type,
-          counterparty: cp?.counterparty || null,
-          counterpartyKind: cp?.kind || null,
-          ledger_index: Number(tx.ledger_index || 0),
-          date: tx._iso || null,
-          amount: amt.value,
-          currency: amt.currency,
-          issuer: amt.issuer || null
-        };
-      });
+      processed += 1;
+      g.stats.processedAccounts = processed;
 
-      for (const tx of txs) {
-        if (g.edges.length >= maxEdges) break;
+      const denom = () => Math.max(1, Math.min(maxAccounts, processed + q.length));
+      setProgress(((processed + q.length * 0.5) / denom()) * 100);
+      setStatus(`🔍 ${processed}/${maxAccounts} • ${q.length} queued • ${g.edges.length} edges`);
 
-        const from = tx.Account || tx.account;
-        if (!from || from !== addr) continue;
-
-        const type = tx.TransactionType || tx.type || "Unknown";
-        const cp = extractCounterparty(tx);
-        if (!cp?.counterparty) continue;
-
-        const to = cp.counterparty;
-        const kind = cp.kind;
-
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-
-        addEdge(g, {
-          from,
-          to,
-          ledger_index: Number(tx.ledger_index || 0),
-          date: tx._iso || null,
-          amount: amt.value,
-          currency: amt.currency,
-          issuer: amt.issuer || null,
-          tx_hash: String(tx.hash || ""),
-          type,
-          kind
-        });
-
-        if (!seen.has(to) && g.nodes.size < maxAccounts) {
-          seen.add(to);
-          ensureNode(g, to, level + 1);
-
-          g.nodes.get(to).acctInfo = await fetchAccountInfo(to);
-          g.nodes.get(to).activation = await getActivatedByStrict(to, constraints);
-
-          q.push({ addr: to, level: level + 1 });
+      try {
+        if (!node.acctInfo) {
+          const inf = await fetchAccountInfo(addr);
+          node.acctInfo = inf;
         }
+      } catch (e) {
+        console.warn(`fetchAccountInfo failed for ${addr}:`, e?.message || e);
+      }
+
+      try {
+        if (level === 0 || !node.activatedBy) {
+          const actRes = await getActivatedByStrict(addr, constraints);
+          node.activatedBy = actRes.activator;
+          node.activatedBySource = actRes.source || "unknown";
+        }
+      } catch (e) {
+        console.warn(`getActivatedByStrict failed for ${addr}:`, e?.message || e);
+      }
+
+      try {
+        const res = await collectOutgoingTxsMostRecent(addr, perNode, constraints);
+        node.outTxs = res.txs;
+        node.outScanned = res.scanned;
+        node.outPages = res.pages;
+        node.outComplete = res.complete;
+        node.outCount = res.txs.length;
+
+        g.stats.totalScanned += res.scanned;
+        g.stats.totalPages += res.pages;
+
+        for (const t of res.txs) {
+          const cp = extractCounterparty(t);
+          if (!cp || !isValidXrpAddress(cp)) continue;
+
+          const amt = parseAmount(t.Amount || null);
+
+          addEdge(g, {
+            from: addr,
+            to: cp,
+            type: t.TransactionType || "unknown",
+            hash: t.hash || null,
+            ledger_index: t.ledger_index || null,
+            date: t._iso || null,
+            amount: amt.value,
+            currency: amt.currency,
+            issuer: amt.issuer || null
+          });
+
+          if (level + 1 < depth && !g.nodes.has(cp)) {
+            ensureNode(g, cp, level + 1);
+            q.push({ addr: cp, level: level + 1 });
+          }
+        }
+      } catch (e) {
+        console.warn(`collectOutgoingTxsMostRecent failed for ${addr}:`, e?.message || e);
+      }
+
+      if (g.edges.length >= maxEdges) {
+        setStatus(`⚠️ Max edges (${maxEdges}) reached. Stopping build.`);
+        break;
       }
     }
 
-    g.builtAt = new Date().toISOString();
-    setProgress(-1);
+    setProgress(0);
   }
 
   // ---------------- PATH ----------------
   function findShortestPath(g, src, dst) {
-    if (src === dst) return [src];
-    const prev = new Map();
-    const q = [src];
-    prev.set(src, null);
+    if (!g || !g.nodes.has(src) || !g.nodes.has(dst)) return null;
 
-    while (q.length) {
-      const cur = q.shift();
-      const idxs = g.adjacency.get(cur) || [];
-      for (const ei of idxs) {
-        const e = g.edges[ei];
-        const nxt = e.to;
-        if (!prev.has(nxt)) {
-          prev.set(nxt, cur);
-          if (nxt === dst) {
-            const path = [];
-            let x = dst;
-            while (x != null) {
-              path.push(x);
-              x = prev.get(x);
-            }
-            return path.reverse();
-          }
-          q.push(nxt);
+    const adj = new Map();
+    g.edges.forEach((e) => {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from).push(e);
+    });
+
+    const q = [{ node: src, path: [] }];
+    const visited = new Set([src]);
+
+    while (q.length > 0) {
+      const { node, path } = q.shift();
+      if (node === dst) return path;
+
+      const neighbors = adj.get(node) || [];
+      for (const e of neighbors) {
+        const next = e.to;
+        if (!visited.has(next) && g.nodes.has(next)) {
+          visited.add(next);
+          q.push({ node: next, path: [...path, e] });
         }
       }
     }
+
     return null;
   }
 
   // ---------------- PATTERNS ----------------
   function runPatternScanFull(g) {
-    const outBy = new Map();
-    const inBy = new Map();
-    for (const e of g.edges) {
-      if (!outBy.has(e.from)) outBy.set(e.from, []);
-      outBy.get(e.from).push(e);
-      if (!inBy.has(e.to)) inBy.set(e.to, []);
-      inBy.get(e.to).push(e);
-    }
-
-    const issuerOut = outBy.get(g.issuer) || [];
-    const firstHopCounts = new Map();
-    for (const e of issuerOut) firstHopCounts.set(e.to, (firstHopCounts.get(e.to) || 0) + 1);
-    const top = Array.from(firstHopCounts.entries()).sort((a, b) => b[1] - a[1])[0] || [null, 0];
-    const dom = issuerOut.length ? top[1] / issuerOut.length : 0;
-
-    const hubCounts = new Map();
-    const firstHop = new Set(issuerOut.map((e) => e.to));
-
-    for (const leaf of firstHop) {
-      const outs = outBy.get(leaf) || [];
-      for (const e of outs) {
-        const hub = e.to;
-        if (!hubCounts.has(hub)) hubCounts.set(hub, new Set());
-        hubCounts.get(hub).add(leaf);
-      }
-    }
-
-    const reconHubs = Array.from(hubCounts.entries())
-      .map(([hub, contributors]) => ({ hub, contributors: contributors.size }))
-      .filter((x) => x.contributors >= 3)
-      .sort((a, b) => b.contributors - a.contributors)
-      .slice(0, 120);
-
-    const bursts = [];
-    const BURST_LEDGER_WINDOW = 200;
-    const BURST_MIN_TX = 12;
-
-    for (const n of g.nodes.values()) {
-      const txs = Array.isArray(n.outgoingFirst) ? n.outgoingFirst : [];
-      if (txs.length < BURST_MIN_TX) continue;
-
-      const ledgers = txs.map((t) => Number(t.ledger_index || 0)).filter((x) => x > 0).sort((a, b) => a - b);
-      if (ledgers.length < BURST_MIN_TX) continue;
-
-      let best = 0;
-      let bestSpan = null;
-
-      let j = 0;
-      for (let i = 0; i < ledgers.length; i++) {
-        while (ledgers[i] - ledgers[j] > BURST_LEDGER_WINDOW) j++;
-        const count = i - j + 1;
-        if (count > best) {
-          best = count;
-          bestSpan = [ledgers[j], ledgers[i]];
-        }
-      }
-
-      if (best >= BURST_MIN_TX && bestSpan) {
-        bursts.push({ address: n.address, txs: best, span: bestSpan[1] - bestSpan[0], from: bestSpan[0], to: bestSpan[1] });
-      }
-    }
-
-    bursts.sort((a, b) => b.txs - a.txs);
+    const adj = new Map();
+    g.edges.forEach((e) => {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from).push(e.to);
+    });
 
     const cycles = [];
-    const seenCycle = new Set();
-
-    const nodesLimit = 600;
-    const nodeList = Array.from(g.nodes.keys()).slice(0, nodesLimit);
+    const maxCycles = 60;
 
     function canonicalizeCycle(path) {
-      const strs = path.slice(0, -1);
-      if (!strs.length) return "";
-      let best = strs;
-      for (let i = 1; i < strs.length; i++) {
-        const rotated = strs.slice(i).concat(strs.slice(0, i));
-        if (rotated.join("|") < best.join("|")) best = rotated;
-      }
-      return best.join("|");
+      const minIdx = path.indexOf(Math.min(...path));
+      return [...path.slice(minIdx), ...path.slice(0, minIdx)].join("→");
     }
 
     function dfs(start, cur, depthLeft, stack, visited) {
-      if (cycles.length >= 120) return;
+      if (cycles.length >= maxCycles) return;
+      if (depthLeft === 0) return;
 
-      const idxs = g.adjacency.get(cur) || [];
-      for (const ei of idxs) {
-        const nxt = g.edges[ei].to;
-
+      const neighbors = adj.get(cur) || [];
+      for (const nxt of neighbors) {
         if (nxt === start && stack.length >= 2) {
-          const cyc = stack.concat([start]);
-          const key = canonicalizeCycle(cyc);
-          if (!seenCycle.has(key)) {
-            seenCycle.add(key);
-            cycles.push({ length: cyc.length - 1, path: cyc.slice() });
+          const can = canonicalizeCycle([...stack, nxt]);
+          if (!cycles.some((c) => c.canonical === can)) {
+            cycles.push({ canonical: can, path: [...stack, nxt] });
           }
           continue;
         }
 
-        if (depthLeft <= 0) continue;
         if (visited.has(nxt)) continue;
-
         visited.add(nxt);
-        stack.push(nxt);
-        dfs(start, nxt, depthLeft - 1, stack, visited);
-        stack.pop();
+        dfs(start, nxt, depthLeft - 1, [...stack, nxt], visited);
         visited.delete(nxt);
       }
     }
 
-    const startNodes = [g.issuer]
-      .concat(
-        nodeList
-          .filter((a) => a !== g.issuer)
-          .sort((a, b) => (outBy.get(b)?.length || 0) - (outBy.get(a)?.length || 0))
-          .slice(0, 18)
-      )
-      .slice(0, 24);
-
-    for (const start of startNodes) {
-      const visited = new Set([start]);
-      dfs(start, start, 6, [start], visited);
-      if (cycles.length >= 120) break;
+    const starts = Array.from(adj.keys()).slice(0, 30);
+    for (const s of starts) {
+      if (cycles.length >= maxCycles) break;
+      const visited = new Set([s]);
+      dfs(s, s, 8, [s], visited);
     }
 
-    cycles.sort((a, b) => a.length - b.length);
-
-    const classicHubs = [];
-    for (const addr of g.nodes.keys()) {
-      const ins = inBy.get(addr) || [];
-      const outs = outBy.get(addr) || [];
-      const parents = new Set(ins.map((x) => x.from));
-      const children = new Set(outs.map((x) => x.to));
-      if (parents.size >= 6 && children.size <= 3 && ins.length >= 8 && outs.length >= 4) {
-        classicHubs.push({ hub: addr, parents: parents.size, in: ins.length, children: children.size, out: outs.length });
-      }
-    }
-    classicHubs.sort((a, b) => b.parents - a.parents);
-
-    return {
-      summary: {
-        issuerFirstHopUniqueRecipients: firstHopCounts.size,
-        issuerFirstHopDominancePct: Math.round(dom * 100),
-        issuerTopRecipient: top[0],
-        reconsolidationHubs: classicHubs.length,
-        fanInHubsFromIssuerFirstHop: reconHubs.length,
-        burstsDetected: bursts.length,
-        cyclesDetected: cycles.length
-      },
-      reconHubs,
-      classicHubs: classicHubs.slice(0, 120),
-      bursts: bursts.slice(0, 120),
-      cycles: cycles.slice(0, 60)
-    };
+    return cycles.map((c) => c.path);
   }
 
   // ---------------- ISSUER LIST ----------------
   function normalizeIssuerListText(text) {
-    const raw = String(text || "")
-      .split(/[\n,;\s]+/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const uniq = [];
-    const seen = new Set();
-    for (const a of raw) {
-      if (!isValidXrpAddress(a)) continue;
-      if (seen.has(a)) continue;
-      seen.add(a);
-      uniq.push(a);
-    }
-    return uniq;
+    return text
+      .split(/[\n,;]+/)
+      .map(line => line.trim())
+      .filter(line => line && isValidXrpAddress(line));
   }
 
   function getIssuerList() {
-    const v = safeGetStorage(LOCAL_KEY_ISSUER_LIST);
-    if (!v) return [];
+    const raw = safeGetStorage(LOCAL_KEY_ISSUER_LIST);
+    if (!raw) return DEFAULT_ISSUER_LIST;
+    
     try {
-      const arr = JSON.parse(v);
-      if (!Array.isArray(arr)) return [];
-      return arr.filter(isValidXrpAddress);
-    } catch (_) {
-      return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : DEFAULT_ISSUER_LIST;
+    } catch {
+      return DEFAULT_ISSUER_LIST;
     }
   }
 
@@ -1185,80 +912,72 @@
   }
 
   function hydrateIssuerSelect() {
-    const list = getIssuerList();
     const sel = $("uiIssuerSelect");
-    sel.innerHTML = "";
-
-    if (!list.length) {
+    if (!sel) return;
+    
+    sel.innerHTML = '<option value="">-- Select Issuer --</option>';
+    
+    const list = getIssuerList();
+    list.forEach(addr => {
       const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "— paste issuers —";
+      opt.value = addr;
+      opt.textContent = `${addr.slice(0, 12)}...${addr.slice(-8)}`;
       sel.appendChild(opt);
-      return;
+    });
+    
+    const last = safeGetStorage(LOCAL_KEY_ACTIVE_ISSUER);
+    if (last && list.includes(last)) {
+      sel.value = last;
+      activeIssuer = last;
     }
-
-    for (const issuer of list) {
-      const opt = document.createElement("option");
-      opt.value = issuer;
-      opt.textContent = issuer;
-      sel.appendChild(opt);
-    }
-
-    const stored = safeGetStorage(LOCAL_KEY_SELECTED_ISSUER);
-    const initial = stored && list.includes(stored) ? stored : list[0];
-    sel.value = initial;
-    onIssuerSelected(initial, { autoBuildIfMissing: true });
   }
 
   function onIssuerSelected(issuer, { autoBuildIfMissing } = { autoBuildIfMissing: false }) {
-    if (!issuer || !isValidXrpAddress(issuer)) return;
     activeIssuer = issuer;
-    safeSetStorage(LOCAL_KEY_SELECTED_ISSUER, issuer);
-
-    const cached = issuerRegistry.get(issuer);
-    if (cached?.builtAt) {
-      renderAll(cached);
-      setStatus(`Loaded cached tree (${cached.nodes.size} accounts / ${cached.edges.length} edges)`);
-      return;
-    }
-
-    clearViews();
-    setStatus("Ready");
-
-    // Guard: avoid ReferenceError if this file is ever partially loaded / older cached version
-    if (autoBuildIfMissing) {
-      if (typeof buildTreeClicked === "function") {
-        buildTreeClicked().catch(() => {});
-      } else {
-        setStatus("Inspector loaded (build handler not ready yet). Click Build.");
+    safeSetStorage(LOCAL_KEY_ACTIVE_ISSUER, issuer);
+    
+    if (issuerRegistry.has(issuer)) {
+      renderAll(issuerRegistry.get(issuer));
+    } else {
+      clearViews();
+      if (autoBuildIfMissing) {
+        buildTreeClicked();
       }
     }
   }
 
   // ---------------- TABS ----------------
   function bindInspectorTabs() {
-    const tabs = document.querySelectorAll(".inspector-tab-btn[data-tab]");
-    const panels = document.querySelectorAll(".inspector-tab-panel[data-panel]");
-    if (!tabs.length || !panels.length) return;
-
+    const tabs = document.querySelectorAll(".inspector-tab-btn");
+    const panes = document.querySelectorAll(".inspector-tab-pane");
+    
     function activate(name) {
-      tabs.forEach((t) => {
-        const on = t.getAttribute("data-tab") === name;
-        t.classList.toggle("is-active", on);
-        t.setAttribute("aria-selected", on ? "true" : "false");
+      tabs.forEach(btn => {
+        if (btn.dataset.tab === name) {
+          btn.classList.add("is-active");
+          btn.setAttribute("aria-selected", "true");
+        } else {
+          btn.classList.remove("is-active");
+          btn.setAttribute("aria-selected", "false");
+        }
       });
-      panels.forEach((p) => {
-        const on = p.getAttribute("data-panel") === name;
-        p.style.display = on ? "block" : "none";
+      
+      panes.forEach(pane => {
+        if (pane.dataset.tab === name) {
+          pane.style.display = "block";
+        } else {
+          pane.style.display = "none";
+        }
       });
-
-      if (name === "trace" && typeof window.initInspectorTraceTab === "function") {
-        window.initInspectorTraceTab({ mountId: "inspectorTraceMount" });
-      }
     }
-
-    tabs.forEach((t) => t.addEventListener("click", () => activate(t.getAttribute("data-tab"))));
-    activate("tree");
+    
+    tabs.forEach(btn => {
+      btn.addEventListener("click", () => {
+        activate(btn.dataset.tab);
+      });
+    });
+    
+    activate("flow");
   }
 
   function switchToTraceTab() {
@@ -1268,729 +987,635 @@
 
   function switchToTraceAndSetSeed(addr) {
     switchToTraceTab();
-    if (window.InspectorTraceTab && typeof window.InspectorTraceTab.setSeedAddress === "function") {
-      window.InspectorTraceTab.setSeedAddress(addr);
+    if (window.NanaKiloTrace && window.NanaKiloTrace.setOrigin) {
+      window.NanaKiloTrace.setOrigin(addr);
     }
   }
 
   // ---------------- RENDER ----------------
   function ensurePage() {
-    let page = document.getElementById("inspector");
+    let page = $("inspector");
+    
+    // If element doesn't exist, create it (shouldn't happen if HTML has it)
     if (!page) {
       page = document.createElement("section");
       page.id = "inspector";
       page.className = "page-section";
-      const main = document.getElementById("main") || document.body;
+      const main = document.querySelector("main") || document.body;
       main.appendChild(page);
     }
-    return page;
-  }
-
-  function renderPage() {
-    const page = ensurePage();
+    
+    // Only render if empty (prevents re-rendering on every call)
+    if (page.innerHTML.trim()) return;
 
     page.innerHTML = `
-      <div class="chart-section" style="padding:18px;">
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <h2 style="margin:0">Unified Inspector</h2>
-          <div style="opacity:.85">tree • trace • token-aware • investigation-first</div>
-          <div style="opacity:.65;font-size:12px;">${escapeHtml(MODULE_VERSION)}</div>
+    <div class="chart-section" style="font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+        <h2 style="font-family: 'MedievalSharp', serif ; letter-spacing: 1px;">👁️‍🗨️ NanaKilo • Account Forensics</h2>
+        <div style="margin-bottom:2rem; font-family:  'MedievalSharp', serif;">
+          <strong>NLF (Nana Ledger Forensics)</strong> • Build issuer trees • Path analysis • Token tracking • Quick inspect
+        </div>
+        <div style="font-size:12px;opacity:0.7;margin-bottom:1.5rem;font-family: 'Outfit', sans-serif;">${MODULE_VERSION}</div>
 
-          <div id="uiConnBadge" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.10);">
-            <div id="uiConnDot" style="width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,0.25);"></div>
-            <div id="uiConnText" style="font-weight:900;font-size:12px;">—</div>
-            <button id="uiRetryWs" style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:var(--text-primary);cursor:pointer;">Retry</button>
-          </div>
+        <!-- Connection Badge -->
+        <div id="uiConnBadge" style="display:inline-flex;align-items:center;gap:10px;margin-bottom:1.5rem;">
+          <div id="uiConnDot" style="width:10px;height:10px;border-radius:50%;background:#666;"></div>
+          <div id="uiConnText">Initializing…</div>
+          <button id="uiRetryWs">Reconnect</button>
         </div>
 
         <!-- Tabs -->
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
-          <button class="nav-btn inspector-tab-btn is-active" data-tab="tree" aria-selected="true" type="button"
-            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
-            🌳 Issuer Tree
-          </button>
-          <button class="nav-btn inspector-tab-btn" data-tab="trace" aria-selected="false" type="button"
-            style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);">
-            🧭 Trace
-          </button>
-
-          <div style="margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;">
-            <input id="uiQuickAddr" placeholder="Quick inspect address (paste r...)" style="min-width:280px;padding:10px;border-radius:12px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);" />
-            <button id="uiQuickInspectBtn" class="nav-btn" type="button"
-              style="padding:10px 14px;border-radius:12px;border:none;background:#50fa7b;color:#000;font-weight:900;">
-              Quick Inspect
-            </button>
-          </div>
+        <div class="inspector-tabs">
+          <button class="inspector-tab-btn is-active" data-tab="flow">🌊 Flow Analysis</button>
+          <button class="inspector-tab-btn" data-tab="trace">🔍 Trace</button>
         </div>
 
-        <!-- Panels -->
-        <div class="inspector-tab-panel" data-panel="tree" style="display:block;margin-top:12px;">
-          <div style="display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:start;">
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                  <div style="font-weight:900;">Issuers</div>
-                  <select id="uiIssuerSelect" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);"></select>
-                  <button id="uiBuild" class="nav-btn" style="padding:10px 14px;border-radius:10px;background:linear-gradient(135deg,#50fa7b,#2ecc71);border:none;color:#000;font-weight:900;">Build</button>
-                </div>
+        <!-- TAB: FLOW ANALYSIS -->
+        <div class="inspector-tab-pane" data-tab="flow" style="display:block;">
+          <!-- Issuer Management -->
+          <div style="margin-bottom:2rem;">
+            <h3>📋 Issuer List</h3>
+            <textarea id="uiIssuerListText" placeholder="Paste XRP addresses (one per line)…" style="width:100%;min-height:100px;margin-bottom:10px;"></textarea>
+            <button id="uiSaveList">💾 Save List</button>
+            <button id="uiClearCache">🗑️ Clear Cache</button>
+          </div>
 
-                <details style="margin-top:10px;">
-                  <summary style="cursor:pointer;opacity:.9;">Issuer list (edit)</summary>
-                  <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;margin-top:10px;">
-                    <textarea id="uiIssuerList" placeholder="Paste issuers (one per line or comma-separated)" style="width:100%;min-height:86px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);resize:vertical;"></textarea>
-                    <div style="display:flex;flex-direction:column;gap:8px;">
-                      <button id="uiSaveList" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#50a8ff;border:none;color:#000;font-weight:900;">Save</button>
-                      <button id="uiClearCache" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffb86c;border:none;color:#000;font-weight:900;">Clear</button>
-                    </div>
-                  </div>
-                </details>
+          <!-- Quick Inspect -->
+          <div style="margin-bottom:2rem;">
+            <h3>⚡ Quick Inspect</h3>
+            <div class="quick-inspect-row">
+              <input id="uiQuickAddr" type="text" placeholder="Enter any XRP address…" />
+              <button id="uiQuickInspectBtn">🔎 Inspect</button>
+            </div>
+          </div>
 
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                  <label style="font-size:13px;">Depth</label>
-                  <input id="uiDepth" type="number" min="1" max="6" value="${DEFAULT_DEPTH}" style="width:70px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Per-node</label>
-                  <input id="uiPerNode" type="number" min="10" max="300" value="${DEFAULT_PER_NODE}" style="width:90px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Max accts</label>
-                  <input id="uiMaxA" type="number" min="20" max="2000" value="${DEFAULT_MAX_ACCTS}" style="width:100px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;">Max edges</label>
-                  <input id="uiMaxE" type="number" min="50" max="10000" value="${DEFAULT_MAX_EDGES}" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                </div>
+          <!-- Issuer Selector & Build -->
+          <div style="margin-bottom:2rem;">
+            <h3>🌳 Build Tree</h3>
+            <label>Issuer:</label>
+            <select id="uiIssuerSelect"></select>
 
-                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                  <label style="font-size:13px;">Date</label>
-                  <input id="uiStart" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiEnd" type="date" style="padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <label style="font-size:13px;margin-left:8px;">Ledger</label>
-                  <input id="uiLedgerMin" type="number" placeholder="min" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiLedgerMax" type="number" placeholder="max" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                  <input id="uiMinXrp" type="number" placeholder="Min XRP" style="width:110px;padding:8px;border-radius:10px;border:1px solid var(--accent-tertiary);" />
-                </div>
-
-                <div id="uiProgress" style="margin-top:10px;height:10px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;display:none;">
-                  <div id="uiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#50fa7b,#2ecc71)"></div>
-                </div>
-
-                <div id="uiStatus" style="margin-top:8px;color:var(--text-secondary)">Ready</div>
+            <div style="margin-top:1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+              <div>
+                <label>Depth:</label>
+                <input id="uiDepth" type="number" min="1" max="10" value="${DEFAULT_DEPTH}" />
               </div>
-
-              <div style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:var(--card-bg);">
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <div style="font-weight:900;">Issuer Tree</div>
-                  <input id="uiSearch" placeholder="Search edges..." style="margin-left:auto;flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
-                </div>
-
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-                  <input id="uiTarget" placeholder="Target address (path optional)" style="flex:1;min-width:260px;padding:10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary)"/>
-                  <button id="uiFindPath" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#ffd1a9;border:none;color:#000;font-weight:900;">Path</button>
-                  <button id="uiPatterns" class="nav-btn" style="padding:10px 12px;border-radius:10px;background:#bd93f9;border:none;color:#000;font-weight:900;">Patterns</button>
-                </div>
-
-                <div id="uiTree" style="margin-top:10px;max-height:520px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:10px;background:rgba(0,0,0,0.12);"></div>
+              <div>
+                <label>Per Node:</label>
+                <input id="uiPerNode" type="number" min="1" max="500" value="${DEFAULT_PER_NODE}" />
+              </div>
+              <div>
+                <label>Max Accounts:</label>
+                <input id="uiMaxAccounts" type="number" min="1" max="2000" value="${DEFAULT_MAX_ACCTS}" />
+              </div>
+              <div>
+                <label>Max Edges:</label>
+                <input id="uiMaxEdges" type="number" min="1" max="20000" value="${DEFAULT_MAX_EDGES}" />
               </div>
             </div>
 
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div id="uiSummary" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:180px;border:1px solid rgba(255,255,255,0.06);">
-                <div style="opacity:.8">Tree summary appears here.</div>
-              </div>
-
-              <div id="uiResults" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;border:1px solid rgba(255,255,255,0.06);">
-                <div style="opacity:.8">Path + patterns appear here.</div>
-              </div>
-
-              <div id="uiEdgeList" style="padding:12px;background:rgba(255,255,255,0.02);border-radius:12px;min-height:220px;max-height:420px;overflow:auto;border:1px solid rgba(255,255,255,0.06);">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                  <strong>Edges (counterparty-derived)</strong>
-                  <button id="uiExportGraph" class="nav-btn" style="margin-left:auto;padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Export</button>
+            <details style="margin-top:1rem;">
+              <summary style="cursor:pointer;font-weight:700;">🔧 Advanced Filters</summary>
+              <div style="padding:1rem;margin-top:0.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+                <div>
+                  <label>Ledger Min:</label>
+                  <input id="uiLedgerMin" type="number" placeholder="optional" />
                 </div>
-                <div id="uiEdgeItems" style="margin-top:10px;"></div>
+                <div>
+                  <label>Ledger Max:</label>
+                  <input id="uiLedgerMax" type="number" placeholder="optional" />
+                </div>
+                <div>
+                  <label>Start Date:</label>
+                  <input id="uiStartDate" type="date" />
+                </div>
+                <div>
+                  <label>End Date:</label>
+                  <input id="uiEndDate" type="date" />
+                </div>
+                <div>
+                  <label>Min XRP:</label>
+                  <input id="uiMinXrp" type="number" step="0.000001" placeholder="optional" />
+                </div>
               </div>
+            </details>
+
+            <div style="margin-top:1rem;">
+              <button id="uiBuild">🚀 Build Tree</button>
+              <button id="uiFindPath">🗺️ Find Path</button>
+              <button id="uiPatterns">🔄 Patterns</button>
+              <button id="uiExportGraph">💾 Export</button>
             </div>
+
+            <div id="uiProgress" style="display:block;margin-top:12px;background:#333;border-radius:4px;height:8px;overflow:hidden;">
+              <div id="uiProgressBar" style="width:0%;height:100%;background:#50fa7b;transition:width 0.3s;"></div>
+            </div>
+            <div id="uiStatus" style="margin-top:12px;">Ready</div>
+          </div>
+
+          <!-- Summary -->
+          <div id="uiSummary" style="margin-bottom:2rem;"></div>
+
+          <!-- Tree View -->
+          <div style="margin-bottom:2rem;">
+            <h3>🌳 Tree</h3>
+            <div id="uiTree"></div>
+          </div>
+
+          <!-- Edge Filter -->
+          <div style="margin-bottom:2rem;">
+            <h3>🔗 Edge Filter</h3>
+            <div id="uiEdgeFilter"></div>
+            <div id="uiEdgeList"></div>
           </div>
         </div>
 
-        <div class="inspector-tab-panel" data-panel="trace" style="display:none;margin-top:12px;">
-          <div id="inspectorTraceMount"></div>
+        <!-- TAB: TRACE (rendered by inspector-trace-tab.js) -->
+        <div class="inspector-tab-pane" data-tab="trace" style="display:none;">
+          <div id="trace-mount-point"></div>
         </div>
+      </div>
 
-        <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:12000;">
-          <div style="width:min(980px,95%);max-height:80vh;overflow:auto;background:var(--bg-secondary);padding:14px;border-radius:10px;border:1px solid var(--accent-tertiary);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <strong id="uiModalTitle">Details</strong>
-              <button id="uiModalClose">✕</button>
-            </div>
-            <div id="uiModalBody"></div>
+      <!-- Modal -->
+      <div id="uiModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:10000;align-items:center;justify-content:center;">
+        <div style="position:relative;width:auto;max-width:900px;background:#1a1a1a;padding:24px;border-radius:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+            <h2 id="uiModalTitle" style="margin:0;"></h2>
+            <button id="uiModalClose">✖</button>
           </div>
+          <div id="uiModalBody"></div>
         </div>
       </div>
     `;
+  }
 
-    $("uiModalClose").addEventListener("click", closeModal);
+  function renderPage() {
+    ensurePage();
 
-    $("uiRetryWs").addEventListener("click", () => {
-      attemptSharedReconnect("manual retry");
-      setStatus("Retry requested.");
-    });
-
-    $("uiQuickInspectBtn").addEventListener("click", () => {
-      const addr = ($("uiQuickAddr")?.value || "").trim();
-      quickInspectAddress(addr, { perNode: 160 });
-    });
-
-    updateConnBadge();
-    window.addEventListener("xrpl-connection", () => updateConnBadge());
-    setInterval(updateConnBadge, 1500);
-
-    const list = getIssuerList();
-    $("uiIssuerList").value = list.join("\n");
     hydrateIssuerSelect();
+    bindInspectorTabs();
 
-    $("uiIssuerSelect").addEventListener("change", () => onIssuerSelected($("uiIssuerSelect").value));
-    $("uiSaveList").addEventListener("click", () => {
-      const arr = normalizeIssuerListText($("uiIssuerList").value);
-      setIssuerList(arr);
+    // Issuer List
+    $("uiSaveList").onclick = () => {
+      const text = $("uiIssuerListText").value;
+      const list = normalizeIssuerListText(text);
+      setIssuerList(list);
       hydrateIssuerSelect();
-      setStatus(`Saved issuer list (${arr.length})`);
-    });
-    $("uiClearCache").addEventListener("click", () => {
+      setStatus(`✅ Saved ${list.length} issuer(s)`);
+    };
+
+    $("uiClearCache").onclick = () => {
       issuerRegistry.clear();
       activationCache.clear();
       accountInfoCache.clear();
       tokenSummaryCache.clear();
+      activeIssuer = null;
       clearViews();
       setStatus("Cache cleared");
-    });
+    };
 
-    $("uiBuild").addEventListener("click", () => buildTreeClicked().catch(() => {}));
-    $("uiSearch").addEventListener("input", renderEdgeFilterActive);
-    $("uiFindPath").addEventListener("click", findPathClicked);
-    $("uiPatterns").addEventListener("click", patternsClicked);
-    $("uiExportGraph").addEventListener("click", exportActiveGraph);
+    // Quick Inspect
+    $("uiQuickInspectBtn").onclick = async () => {
+      const addr = ($("uiQuickAddr").value || "").trim();
+      if (!isValidXrpAddress(addr)) {
+        alert("Invalid XRP address");
+        return;
+      }
+      await quickInspectAddress(addr);
+    };
 
-    bindInspectorTabs();
+    // Issuer Selector
+    $("uiIssuerSelect").onchange = (e) => {
+      const iss = e.target.value || "";
+      onIssuerSelected(iss, { autoBuildIfMissing: false });
+    };
+
+    // Buttons
+    $("uiBuild").onclick = buildTreeClicked;
+    $("uiFindPath").onclick = findPathClicked;
+    $("uiPatterns").onclick = patternsClicked;
+    $("uiExportGraph").onclick = exportActiveGraph;
+
+    // Modal
+    $("uiModalClose").onclick = closeModal;
+    $("uiModalOverlay").onclick = (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    };
+
+    // Connection Badge Retry
+    $("uiRetryWs").onclick = () => attemptSharedReconnect("user retry");
+
+    updateConnBadge();
+    setInterval(updateConnBadge, 2500);
   }
 
   function clearViews() {
-    if ($("uiTree")) $("uiTree").innerHTML = "";
-    if ($("uiSummary")) $("uiSummary").innerHTML = `<div style="opacity:.8">Tree summary appears here.</div>`;
-    if ($("uiResults")) $("uiResults").innerHTML = `<div style="opacity:.8">Path + patterns appear here.</div>`;
-    if ($("uiEdgeItems")) $("uiEdgeItems").innerHTML = "";
+    $("uiSummary").innerHTML = "";
+    $("uiTree").innerHTML = "";
+    $("uiEdgeFilter").innerHTML = "";
+    $("uiEdgeList").innerHTML = "";
   }
 
   function renderAll(g) {
+    if (!g) {
+      clearViews();
+      return;
+    }
     renderSummary(g);
     renderTree(g);
     renderEdgeFilter(g);
   }
 
   function renderSummary(g) {
-    const issuer = g.issuer;
+    const nodes = g.nodes.size;
     const edges = g.edges.length;
-    const accounts = g.nodes.size;
+    const scanned = g.stats.totalScanned;
+    const pages = g.stats.totalPages;
+    const processed = g.stats.processedAccounts;
 
-    const issuerNode = g.nodes.get(issuer);
-    const info = issuerNode?.acctInfo || null;
-    const actEntry = issuerNode?.activation || null;
-    const act = actEntry?.act || null;
-
-    const domain = info?.domain ? escapeHtml(info.domain) : "—";
-    const bal = info?.balanceXrp != null ? `${info.balanceXrp.toFixed(6)} XRP` : "—";
-
-    const actHtml = act
-      ? (() => {
-          const links = act.tx_hash ? explorerLinks(act.tx_hash) : null;
-          const txLinks = links
-            ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-               <a href="${escapeHtml(links.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
-            : "";
-          const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
-          return `<div style="margin-top:8px;"><strong>Activated by</strong>: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
-            amt
-          )} • ${escapeHtml(act.date || "—")} <span style="opacity:.7">(${escapeHtml(actEntry.source)})</span>
-          <div style="margin-top:4px;font-size:12px;opacity:.85;">${txLinks}</div>
-          </div>`;
-        })()
-      : `<div style="margin-top:8px;opacity:.85;"><strong>Activated by</strong>: — <span style="opacity:.7">(${escapeHtml(
-          actEntry?.source || "unknown"
-        )}${actEntry && !actEntry.complete ? ", incomplete" : ""})</span></div>`;
-
-    $("uiSummary").innerHTML = `
-      <div><strong>Issuer</strong>: <code>${escapeHtml(issuer)}</code></div>
-      <div style="margin-top:8px;"><strong>Domain</strong>: ${domain}</div>
-      <div style="margin-top:6px;"><strong>Balance</strong>: ${escapeHtml(bal)} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
-      ${actHtml}
-      <div style="margin-top:10px;">Accounts: <strong>${escapeHtml(accounts)}</strong> • Edges: <strong>${escapeHtml(edges)}</strong></div>
-      <div style="margin-top:6px;opacity:.8;font-size:12px;">Built: ${escapeHtml(g.builtAt || "—")}</div>
-      <div style="margin-top:10px;padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);font-size:12px;opacity:.85;">
-        Tip: For drain-style tracking, use the <strong>Trace</strong> tab (hop-by-hop graph).
+    const html = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+        <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+          <div style="opacity:0.7;font-size:11px;">NODES</div>
+          <div style="font-size:24px;font-weight:900;">${nodes}</div>
+        </div>
+        <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+          <div style="opacity:0.7;font-size:11px;">EDGES</div>
+          <div style="font-size:24px;font-weight:900;">${edges}</div>
+        </div>
+        <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+          <div style="opacity:0.7;font-size:11px;">SCANNED</div>
+          <div style="font-size:24px;font-weight:900;">${scanned.toLocaleString()}</div>
+        </div>
+        <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+          <div style="opacity:0.7;font-size:11px;">PAGES</div>
+          <div style="font-size:24px;font-weight:900;">${pages}</div>
+        </div>
+        <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+          <div style="opacity:0.7;font-size:11px;">PROCESSED</div>
+          <div style="font-size:24px;font-weight:900;">${processed}</div>
+        </div>
       </div>
     `;
+
+    $("uiSummary").innerHTML = html;
   }
 
   function renderTree(g) {
-    const host = $("uiTree");
-    if (!host) return;
-
-    const levels = new Map();
-    levels.set(g.issuer, 0);
-    const qq = [g.issuer];
-
-    while (qq.length) {
-      const cur = qq.shift();
-      const lv = levels.get(cur) ?? 0;
-      if (lv >= g.params.depth) continue;
-
-      const idxs = g.adjacency.get(cur) || [];
-      for (const ei of idxs) {
-        const e = g.edges[ei];
-        if (!levels.has(e.to)) {
-          levels.set(e.to, lv + 1);
-          qq.push(e.to);
-        }
-      }
-    }
-
-    const children = new Map();
-    for (const addr of levels.keys()) children.set(addr, []);
-    for (const [child, parent] of g.parentChoice.entries()) {
-      if (!parent) continue;
-      if (levels.has(child) && levels.has(parent) && levels.get(child) === levels.get(parent) + 1) {
-        children.get(parent).push(child);
-      }
-    }
-    for (const [p, arr] of children.entries()) {
-      arr.sort((a, b) => (g.nodes.get(b)?.inCount || 0) - (g.nodes.get(a)?.inCount || 0));
+    const tree = $("uiTree");
+    if (!g || g.nodes.size === 0) {
+      tree.innerHTML = `<div style="opacity:0.7;padding:20px;text-align:center;">No tree built yet</div>`;
+      return;
     }
 
     function activationLine(entry) {
-      if (!entry) return `<div style="opacity:.7;font-size:12px;">activated by: —</div>`;
-      if (!entry.act) {
-        return `<div style="opacity:.75;font-size:12px;">activated by: — <span style="opacity:.7">(${escapeHtml(entry.source || "unknown")}${
-          entry.complete ? "" : ", incomplete"
-        })</span></div>`;
-      }
-      const act = entry.act;
-      const amt = act.amount != null ? `XRP ${act.amount.toFixed(6)}` : escapeHtml(act.currency || "—");
-      return `<div style="opacity:.85;font-size:12px;">activated by: <code>${escapeHtml(act.activatedBy)}</code> • ${escapeHtml(
-        amt
-      )} • ${escapeHtml(act.date || "—")}</div>`;
+      const { activatedBy, activatedBySource } = entry;
+      if (!activatedBy) return `<div style="opacity:0.5;font-size:11px;">no activation found (${activatedBySource})</div>`;
+      return `<div style="font-size:11px;opacity:0.7;">activated_by: <code>${escapeHtml(activatedBy)}</code> • src: ${escapeHtml(
+        activatedBySource
+      )}</div>`;
     }
 
     function nodeRow(addr) {
       const n = g.nodes.get(addr);
-      const lvl = levels.get(addr) ?? n?.level ?? 0;
-      const firstN = Array.isArray(n?.outgoingFirst) ? n.outgoingFirst.length : 0;
+      if (!n) return "";
+
+      const short = addr.slice(0, 8) + "..." + addr.slice(-6);
+      const bal = n.acctInfo?.balanceXrp != null ? n.acctInfo.balanceXrp.toFixed(6) + " XRP" : "—";
+      const dom = n.acctInfo?.domain ? escapeHtml(n.acctInfo.domain).slice(0, 24) : "—";
+
+      const btnExpand = `<button class="uiToggle" data-addr="${escapeHtml(addr)}">+</button>`;
+      const btnInspect = `<button class="uiNode" data-addr="${escapeHtml(addr)}">🔍</button>`;
+      const btnTrace = `<button class="uiTraceMini" data-addr="${escapeHtml(addr)}">🌊</button>`;
 
       return `
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-          <div>
-            <div><code>${escapeHtml(addr)}</code> <span style="opacity:.7">lvl ${escapeHtml(lvl)}</span></div>
-            ${activationLine(n?.activation)}
-            <div style="opacity:.75;font-size:12px;margin-top:4px;">
-              edges out:${escapeHtml(n?.outCount ?? 0)} (XRP ${(n?.outXrp ?? 0).toFixed(2)}) •
-              edges in:${escapeHtml(n?.inCount ?? 0)} (XRP ${(n?.inXrp ?? 0).toFixed(2)}) •
-              recent outgoing loaded:${escapeHtml(firstN)}
-            </div>
+        <div style="margin-bottom:0.5rem;padding:10px;background:rgba(255,255,255,0.03);border-radius:10px;border-left:3px solid #50fa7b;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+            ${btnExpand}
+            <strong style="font-family:'JetBrains Mono',monospace;font-size:13px;">${escapeHtml(short)}</strong>
+            <span style="opacity:0.7;font-size:11px;">L${n.level}</span>
+            ${btnInspect}
+            ${btnTrace}
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-            <button class="uiNode" data-addr="${escapeHtml(addr)}" style="padding:6px 10px;border-radius:10px;border:none;background:#50fa7b;color:#000;cursor:pointer;font-weight:900;">Inspect</button>
+          <div style="font-size:12px;margin-bottom:4px;">
+            <strong>Balance:</strong> ${escapeHtml(bal)} • 
+            <strong>Domain:</strong> ${escapeHtml(dom)}
           </div>
+          <div style="font-size:12px;margin-bottom:4px;">
+            <strong>Out:</strong> ${n.outCount} txs (scanned: ${n.outScanned}, pages: ${n.outPages}, complete: ${n.outComplete ? "✅" : "⚠️"})
+          </div>
+          ${activationLine(n)}
+          <div class="uiChildrenContainer" data-addr="${escapeHtml(addr)}" style="display:none;margin-top:8px;"></div>
         </div>
       `;
     }
 
     function renderRec(addr, indentPx) {
-      const kids = children.get(addr) || [];
-      const sectionId = `uiKids_${addr}`;
-      const hasKids = kids.length > 0;
+      const children = Array.from(g.nodes.values()).filter((x) => x.activatedBy === addr);
+      if (children.length === 0) return "";
 
-      const head = `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);margin-left:${indentPx}px;">
-          <div style="display:flex;align-items:flex-start;gap:8px;">
-            ${
-              hasKids
-                ? `<button class="uiToggle" data-target="${escapeHtml(sectionId)}" style="width:28px;height:28px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;cursor:pointer;">▾</button>`
-                : `<div style="width:28px;height:28px;opacity:.35;display:flex;align-items:center;justify-content:center;">•</div>`
-            }
-            <div style="flex:1;">${nodeRow(addr)}</div>
-          </div>
-          ${hasKids ? `<div id="${escapeHtml(sectionId)}"></div>` : ""}
-        </div>
-      `;
-
-      let html = head;
-      if (hasKids) {
-        const inner = kids.map((k) => renderRec(k, indentPx + 18)).join("");
-        html = html.replace(`<div id="${escapeHtml(sectionId)}"></div>`, `<div id="${escapeHtml(sectionId)}">${inner}</div>`);
-      }
-      return html;
+      const inner = children.map((c) => nodeRow(c.addr) + renderRec(c.addr, indentPx + 24)).join("");
+      return `<div style="margin-left:${indentPx}px;">${inner}</div>`;
     }
 
-    host.innerHTML = renderRec(g.issuer, 0);
+    const root = g.issuer;
+    const html = nodeRow(root) + renderRec(root, 24);
+    tree.innerHTML = html;
 
-    Array.from(document.querySelectorAll(".uiToggle")).forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const target = btn.getAttribute("data-target");
-        const el = document.getElementById(target);
-        if (!el) return;
-        const open = el.style.display !== "none";
-        el.style.display = open ? "none" : "block";
-        btn.textContent = open ? "▸" : "▾";
-      })
-    );
+    // expand/collapse
+    tree.querySelectorAll(".uiToggle").forEach((btn) => {
+      btn.onclick = () => {
+        const addr = btn.dataset.addr;
+        const cont = tree.querySelector(`.uiChildrenContainer[data-addr="${addr}"]`);
+        if (!cont) return;
+        if (cont.style.display === "none") {
+          cont.style.display = "block";
+          btn.textContent = "−";
+        } else {
+          cont.style.display = "none";
+          btn.textContent = "+";
+        }
+      };
+    });
 
-    Array.from(document.querySelectorAll(".uiNode")).forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const addr = btn.getAttribute("data-addr");
-        quickInspectAddress(addr, { perNode: 180 });
-      })
-    );
+    // quick inspect
+    tree.querySelectorAll(".uiNode").forEach((btn) => {
+      btn.onclick = async () => {
+        const addr = btn.dataset.addr;
+        await quickInspectAddress(addr);
+      };
+    });
+
+    // trace
+    tree.querySelectorAll(".uiTraceMini").forEach((btn) => {
+      btn.onclick = () => {
+        const addr = btn.dataset.addr;
+        switchToTraceAndSetSeed(addr);
+      };
+    });
   }
 
   function renderEdgeFilter(g) {
-    const q = String(($("uiSearch") || {}).value || "").trim().toLowerCase();
-    const items = $("uiEdgeItems");
-    if (!items) return;
+    const filter = $("uiEdgeFilter");
+    if (!g || g.edges.length === 0) {
+      filter.innerHTML = "";
+      $("uiEdgeList").innerHTML = "";
+      return;
+    }
 
-    const filtered = q
-      ? g.edges.filter((e) => {
-          const hay = `${e.from} ${e.to} ${e.tx_hash} ${e.type} ${e.kind} ${e.currency} ${e.issuer || ""} ${e.amount} ${e.ledger_index} ${e.date || ""}`.toLowerCase();
-          return hay.includes(q);
-        })
-      : g.edges;
+    const types = [...new Set(g.edges.map((e) => e.type))].sort();
+    const currencies = [...new Set(g.edges.map((e) => e.currency))].sort();
 
-    const slice = filtered.slice(0, 300);
-    items.innerHTML =
-      slice
-        .map((e) => {
-          const shortHash = e.tx_hash ? e.tx_hash.slice(0, 10) + "…" : "";
-          const cur = e.currency === "XRP" ? "XRP" : `${e.currency}${e.issuer ? ` • ${e.issuer.slice(0, 6)}…` : ""}`;
-          return `<div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.05);font-size:12px;">
-            <div><code>${escapeHtml(e.from.slice(0, 8))}…</code> → <code>${escapeHtml(e.to.slice(0, 8))}…</code>
-              • ${escapeHtml(e.type)} <span style="opacity:.7">(${escapeHtml(e.kind)})</span>
-              • ledger ${escapeHtml(e.ledger_index)}
-              • ${escapeHtml(cur)} ${escapeHtml(e.amount)}
-            </div>
-            <div style="opacity:.75;">${escapeHtml(e.date || "—")} • ${escapeHtml(shortHash)}</div>
-          </div>`;
-        })
-        .join("") || `<div style="opacity:.7">No edges (try increasing per-node / clearing filters).</div>`;
+    let html = `<div style="margin-bottom:1rem;">`;
+    html += `<label style="margin-right:10px;">Type:</label><select id="uiTypeFilter" style="margin-right:20px;"><option value="">All</option>`;
+    types.forEach((t) => {
+      html += `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`;
+    });
+    html += `</select>`;
+
+    html += `<label style="margin-right:10px;">Currency:</label><select id="uiCurrencyFilter"><option value="">All</option>`;
+    currencies.forEach((c) => {
+      html += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`;
+    });
+    html += `</select>`;
+    html += `</div>`;
+
+    filter.innerHTML = html;
+
+    const typeSelect = $("uiTypeFilter");
+    const currencySelect = $("uiCurrencyFilter");
+
+    const updateList = () => renderEdgeFilterActive();
+
+    typeSelect.onchange = updateList;
+    currencySelect.onchange = updateList;
+
+    renderEdgeFilterActive();
   }
 
   function renderEdgeFilterActive() {
-    const g = issuerRegistry.get(activeIssuer);
-    if (!g) return;
-    renderEdgeFilter(g);
+    const g = activeIssuer ? issuerRegistry.get(activeIssuer) : null;
+    if (!g || g.edges.length === 0) {
+      $("uiEdgeList").innerHTML = "";
+      return;
+    }
+
+    const typeSelect = $("uiTypeFilter");
+    const currencySelect = $("uiCurrencyFilter");
+    const typeVal = typeSelect ? typeSelect.value : "";
+    const currencyVal = currencySelect ? currencySelect.value : "";
+
+    let filtered = g.edges;
+    if (typeVal) filtered = filtered.filter((e) => e.type === typeVal);
+    if (currencyVal) filtered = filtered.filter((e) => e.currency === currencyVal);
+
+    if (filtered.length === 0) {
+      $("uiEdgeList").innerHTML = `<div style="opacity:0.7;padding:20px;text-align:center;">No edges match filter</div>`;
+      return;
+    }
+
+    const shown = filtered.slice(0, 200);
+    let html = `<div style="font-size:12px;margin-bottom:10px;opacity:0.8;">Showing ${shown.length} of ${filtered.length} edges</div>`;
+
+    shown.forEach((e) => {
+      const amt = formatAmountPretty(e.currency, e.amount, e.issuer);
+
+      html += `
+        <div style="padding:10px;margin-bottom:6px;background:rgba(255,255,255,0.03);border-radius:8px;border-left:3px solid #50fa7b;">
+          <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(e.type)}</div>
+          <div style="font-size:11px;font-family:'JetBrains Mono',monospace;margin-bottom:4px;">
+            ${escapeHtml(e.from.slice(0, 8))}… → ${escapeHtml(e.to.slice(0, 8))}…
+          </div>
+          <div style="font-size:12px;margin-bottom:4px;"><strong>Amount:</strong> ${escapeHtml(amt)}</div>
+          <div style="font-size:11px;opacity:0.7;">
+            Ledger: ${e.ledger_index || "—"} • 
+            ${e.date ? escapeHtml(e.date.slice(0, 10)) : "no date"}
+            ${e.hash ? ` • ${explorerLinks(e.hash)}` : ""}
+          </div>
+        </div>
+      `;
+    });
+
+    $("uiEdgeList").innerHTML = html;
   }
 
   // ---------------- QUICK INSPECT ----------------
   function getCurrentConstraintsFromUI() {
-    const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
-    const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
-    const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
-    const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
-    const minXrp = Number(($("uiMinXrp") || {}).value || 0);
-    return { startDate, endDate, ledgerMin, ledgerMax, minXrp };
+    const ledgerMin = parseNullableInt($("uiLedgerMin")?.value);
+    const ledgerMax = parseNullableInt($("uiLedgerMax")?.value);
+    const startDate = ($("uiStartDate")?.value || "").trim() || null;
+    const endDate = ($("uiEndDate")?.value || "").trim() || null;
+    const minXrp = $("uiMinXrp")?.value ? Number($("uiMinXrp").value) : null;
+
+    return { ledgerMin, ledgerMax, startDate, endDate, minXrp };
   }
 
   function renderTokenSummaryBlock(summary) {
-    if (!summary) return `<div style="opacity:.75;">Token data unavailable.</div>`;
+    if (!summary || summary.trustlineCount === 0) {
+      return `<div style="opacity:0.7;padding:10px;">No trustlines found</div>`;
+    }
 
-    const topTrust = (summary.topTrustlines || []).slice(0, 12);
-    const issued = (summary.issuedEstimated || []).slice(0, 10);
-
-    const obligations = summary.gatewayObligations
-      ? Object.entries(summary.gatewayObligations)
-          .slice(0, 10)
-          .map(([cur, amt]) => `<div style="font-size:12px;"><strong>${escapeHtml(cur)}</strong>: ${escapeHtml(String(amt))}</div>`)
-          .join("")
-      : "";
-
-    return `
-      <details style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
-        <summary style="cursor:pointer;font-weight:900;">Trustlines & Issued Tokens</summary>
-
-        <div style="margin-top:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-          <div style="font-size:12px;opacity:.8;">lines: ${escapeHtml(summary.trustlineCount)} • src: ${escapeHtml(summary.source)}</div>
-          <div style="font-size:12px;opacity:.75;">pages: ${escapeHtml(summary.linesPages)} • complete: ${escapeHtml(String(summary.linesComplete))}</div>
-        </div>
-
-        ${
-          issued.length
-            ? `
-              <div style="margin-top:10px;">
-                <div style="font-weight:900;font-size:13px;">Estimated outstanding (issuer-side heuristic)</div>
-                <div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;">
-                  ${issued
-                    .map(
-                      (x) => `
-                      <div style="padding:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-                        <div><strong>${escapeHtml(x.currency)}</strong></div>
-                        <div style="font-size:12px;opacity:.85;">holders: ${escapeHtml(x.holders)}</div>
-                        <div style="font-size:12px;opacity:.85;">outstanding: ${escapeHtml(String(x.outstanding))}</div>
-                      </div>
-                    `
-                    )
-                    .join("")}
-                </div>
-              </div>
-            `
-            : `
-              <div style="margin-top:10px;opacity:.85;font-size:12px;">
-                No issuer-style outstanding balances detected from account_lines (may not be an issuer).
-              </div>
-            `
-        }
-
-        ${
-          obligations
-            ? `
-              <div style="margin-top:10px;">
-                <div style="font-weight:900;font-size:13px;">Gateway obligations (if available)</div>
-                <div style="margin-top:6px;opacity:.9;">${obligations}</div>
-              </div>
-            `
-            : `
-              <div style="margin-top:10px;opacity:.75;font-size:12px;">
-                gateway_balances not available (some nodes restrict this). Estimate above comes from account_lines.
-              </div>
-            `
-        }
-
-        <div style="margin-top:10px;">
-          <div style="font-weight:900;font-size:13px;">Top trustlines (largest abs balances)</div>
-          <div style="margin-top:6px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${
-              topTrust.length
-                ? topTrust
-                    .map(
-                      (t) => `
-                      <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-                        <div><strong>${escapeHtml(t.currency)}</strong> • peer: <code>${escapeHtml((t.peer || "").slice(0, 10))}…</code></div>
-                        <div style="opacity:.85;margin-top:4px;">balance: ${escapeHtml(String(t.balance))} • limit: ${escapeHtml(String(t.limit ?? "—"))}</div>
-                      </div>
-                    `
-                    )
-                    .join("")
-                : `<div style="padding:10px;opacity:.75;font-size:12px;">No trustlines found.</div>`
-            }
-          </div>
-        </div>
-
-        <div style="margin-top:10px;opacity:.75;font-size:12px;">
-          Note: issued-token totals are heuristics. DEX/AMM routing may move value without obvious Payment edges.
-        </div>
-      </details>
+    let html = `
+      <h3 style="margin:1rem 0 0.5rem 0;">🪙 Token Summary</h3>
+      <div style="margin-bottom:1rem;font-size:13px;">
+        <strong>Trustlines:</strong> ${summary.trustlineCount}
+      </div>
     `;
+
+    if (summary.issuedEstimated && summary.issuedEstimated.length > 0) {
+      html += `<h4 style="margin:1rem 0 0.5rem 0;">📊 Issued (estimated via negative balances)</h4>`;
+      summary.issuedEstimated.slice(0, 10).forEach((row) => {
+        html += `
+          <div style="padding:8px;margin-bottom:6px;background:rgba(0,0,0,0.3);border-radius:8px;">
+            <div style="font-weight:700;">${escapeHtml(row.currency)}</div>
+            <div style="font-size:12px;">Holders: ${row.holders} • Outstanding: ${row.outstanding.toFixed(6)}</div>
+          </div>
+        `;
+      });
+    }
+
+    if (summary.topTrustlines && summary.topTrustlines.length > 0) {
+      html += `<h4 style="margin:1rem 0 0.5rem 0;">🔗 Top Trustlines</h4>`;
+      summary.topTrustlines.slice(0, 10).forEach((t) => {
+        html += `
+          <div style="padding:8px;margin-bottom:6px;background:rgba(0,0,0,0.3);border-radius:8px;">
+            <div style="font-weight:700;">${escapeHtml(t.currency)}</div>
+            <div style="font-size:11px;font-family:'JetBrains Mono',monospace;">Peer: ${escapeHtml(
+              t.peer ? t.peer.slice(0, 10) + "…" : "—"
+            )}</div>
+            <div style="font-size:12px;">Balance: ${t.balance.toFixed(6)}</div>
+          </div>
+        `;
+      });
+    }
+
+    return html;
   }
 
   async function quickInspectAddress(address, { perNode = 120 } = {}) {
     const addr = String(address || "").trim();
     if (!isValidXrpAddress(addr)) {
-      setStatus("Quick inspect: invalid address.");
+      alert("Invalid XRP address");
       return;
     }
 
+    openModal("⚡ Quick Inspect", `<div style="padding:20px;text-align:center;">Loading ${escapeHtml(addr)}…</div>`);
+
     try {
-      setStatus(`Quick inspect: ${addr.slice(0, 6)}…`);
-      setProgress(0.1);
-
-      waitForSharedConn(1200).then((ok) => {
-        if (!ok) attemptSharedReconnect("quick inspect requested but ws offline");
-      });
-
       const constraints = getCurrentConstraintsFromUI();
 
-      const info = await fetchAccountInfo(addr);
-      setProgress(0.25);
+      const [acctInfo, tokenSummary, outgoingRes] = await Promise.all([
+        fetchAccountInfo(addr),
+        getTokenSummary(addr),
+        collectOutgoingTxsMostRecent(addr, perNode, constraints)
+      ]);
 
-      const activation = await getActivatedByStrict(addr, constraints);
-      setProgress(0.45);
+      const outgoing = outgoingRes.txs || [];
 
-      const res = await collectOutgoingTxsMostRecent(addr, clampInt(perNode, 10, 300), constraints);
-      setProgress(0.65);
+      let html = `<div style="max-height:70vh;overflow-y:auto;">`;
 
-      let tokenSummary = null;
-      try {
-        tokenSummary = await getTokenSummary(addr);
-      } catch (_) {
-        tokenSummary = null;
-      }
-      setProgress(0.85);
+      html += `<h3 style="margin:0 0 1rem 0;">Account: ${escapeHtml(addr)}</h3>`;
 
-      const outgoing = (res.txs || []).map((tx) => {
-        const type = tx.TransactionType || tx.type || "Unknown";
-        const cp = extractCounterparty(tx);
-        const amt = parseAmount(tx.Amount ?? tx.delivered_amount ?? tx._meta?.delivered_amount ?? null);
-        return {
-          tx_hash: String(tx.hash || ""),
-          type,
-          counterparty: cp?.counterparty || null,
-          counterpartyKind: cp?.kind || null,
-          ledger_index: Number(tx.ledger_index || 0),
-          date: tx._iso || null,
-          amount: amt.value,
-          currency: amt.currency,
-          issuer: amt.issuer || null
-        };
-      });
-
-      const hashesOnly = outgoing.map((x) => x.tx_hash).filter(Boolean).join("\n");
-
-      const csv = [
-        ["tx_hash", "type", "counterparty", "counterpartyKind", "ledger_index", "date", "amount", "currency", "issuer"].join(","),
-        ...outgoing.map((x) =>
-          [
-            `"${String(x.tx_hash || "").replace(/"/g, '""')}"`,
-            `"${String(x.type || "").replace(/"/g, '""')}"`,
-            `"${String(x.counterparty || "").replace(/"/g, '""')}"`,
-            `"${String(x.counterpartyKind || "").replace(/"/g, '""')}"`,
-            Number(x.ledger_index || 0),
-            `"${String(x.date || "").replace(/"/g, '""')}"`,
-            Number.isFinite(Number(x.amount)) ? Number(x.amount) : "",
-            `"${String(x.currency || "").replace(/"/g, '""')}"`,
-            `"${String(x.issuer || "").replace(/"/g, '""')}"`,
-          ].join(",")
-        )
-      ].join("\n");
-
-      const domain = info?.domain || null;
-      const balance = info?.balanceXrp != null ? info.balanceXrp.toFixed(6) : null;
-
-      const act = activation?.act || null;
-      const actLinks = act?.tx_hash ? explorerLinks(act.tx_hash) : null;
-
-      const actBlock = act
-        ? `
-          <div style="margin-top:10px;">
-            <div style="font-weight:900;">Activated by</div>
-            <div style="margin-top:6px;">
-              <code>${escapeHtml(act.activatedBy)}</code>
-              <span style="opacity:.8;"> • ledger ${escapeHtml(act.ledger_index)} • ${escapeHtml(act.date || "—")}</span>
-            </div>
-            <div style="margin-top:6px;opacity:.9;">
-              ${act.amount != null ? `XRP ${escapeHtml(act.amount.toFixed(6))}` : escapeHtml(act.currency || "—")}
-              <span style="opacity:.7;">(${escapeHtml(activation.source || "unknown")})</span>
-            </div>
-            <div style="margin-top:6px;font-size:12px;opacity:.9;">
-              ${
-                actLinks?.xrpscan
-                  ? `<a href="${escapeHtml(actLinks.xrpscan)}" target="_blank" rel="noopener noreferrer">XRPScan</a>
-                     <a href="${escapeHtml(actLinks.bithomp)}" target="_blank" rel="noopener noreferrer" style="margin-left:10px;">Bithomp</a>`
-                  : `<span style="opacity:.75;">no tx link</span>`
-              }
-            </div>
-          </div>
-        `
-        : `
-          <div style="margin-top:10px;">
-            <div style="font-weight:900;">Activated by</div>
-            <div style="margin-top:6px;opacity:.85;">— <span style="opacity:.7;">(${escapeHtml(activation?.source || "unknown")}${
-              activation && !activation.complete ? ", incomplete" : ""
-            })</span></div>
+      if (acctInfo) {
+        html += `
+          <div style="padding:12px;margin-bottom:1rem;background:rgba(255,255,255,0.05);border-radius:12px;">
+            <div style="margin-bottom:8px;"><strong>Balance:</strong> ${
+              acctInfo.balanceXrp != null ? acctInfo.balanceXrp.toFixed(6) + " XRP" : "—"
+            }</div>
+            <div style="margin-bottom:8px;"><strong>Domain:</strong> ${escapeHtml(acctInfo.domain || "—")}</div>
+            <div style="margin-bottom:8px;"><strong>Sequence:</strong> ${acctInfo.sequence ?? "—"}</div>
+            <div><strong>Owner Count:</strong> ${acctInfo.ownerCount ?? "—"}</div>
           </div>
         `;
+      }
 
-      const metaLine = res?.meta
-        ? `<div style="margin-top:10px;opacity:.8;font-size:12px;">scan: pages=${escapeHtml(res.meta.pages)} • scanned=${escapeHtml(
-            res.meta.scanned
-          )} • mode=${escapeHtml(res.meta.mode)}</div>`
-        : "";
+      html += renderTokenSummaryBlock(tokenSummary);
 
-      const rows = outgoing
-        .slice(0, 220)
-        .map((x, i) => {
-          const links = x.tx_hash ? explorerLinks(x.tx_hash) : null;
-          const cp = x.counterparty ? `<code>${escapeHtml(x.counterparty)}</code>` : `<span style="opacity:.6;">—</span>`;
-          const cpKind = x.counterpartyKind ? `<span style="opacity:.7;">${escapeHtml(x.counterpartyKind)}</span>` : "";
-          const amt = formatAmountPretty(x.currency, x.amount, x.issuer);
-          const txLink = links?.xrpscan ? `<a href="${escapeHtml(links.xrpscan)}" target="_blank" rel="noopener noreferrer">tx</a>` : "";
-          return `
-            <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-              <div style="display:flex;justify-content:space-between;gap:10px;">
-                <div><strong>#${i + 1}</strong> • ${escapeHtml(x.type)} • ${cp} ${cpKind}</div>
-                <div style="opacity:.8;">ledger ${escapeHtml(x.ledger_index)} • ${escapeHtml(x.date || "—")} • ${txLink}</div>
-              </div>
-              <div style="margin-top:4px;opacity:.9;">${escapeHtml(amt)}</div>
-            </div>
-          `;
-        })
-        .join("");
-
-      const tokenBlock = renderTokenSummaryBlock(tokenSummary);
-
-      const html = `
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
-          <div style="flex:1;min-width:320px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-            <div style="font-weight:900;">Account</div>
-            <div style="margin-top:6px;"><code>${escapeHtml(addr)}</code></div>
-            <div style="margin-top:8px;opacity:.9;"><strong>Domain</strong>: ${domain ? escapeHtml(domain) : "—"}</div>
-            <div style="margin-top:6px;opacity:.9;"><strong>Balance</strong>: ${balance != null ? escapeHtml(balance) + " XRP" : "—"} • Seq: ${escapeHtml(info?.sequence ?? "—")} • Owners: ${escapeHtml(info?.ownerCount ?? "—")}</div>
-            ${actBlock}
-            ${metaLine}
-            ${tokenBlock}
-          </div>
-
-          <div style="width:340px;min-width:280px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);">
-            <div style="font-weight:900;">Actions</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-              <button id="qiCopyAddr" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy address</button>
-              <button id="qiCopyHashes" style="padding:8px 10px;border-radius:10px;border:none;background:#50a8ff;color:#000;font-weight:900;cursor:pointer;">Copy hashes</button>
-              <button id="qiExportCsv" style="padding:8px 10px;border-radius:10px;border:none;background:#ffd166;color:#000;font-weight:900;cursor:pointer;">Export CSV</button>
-              <button id="qiExportJson" style="padding:8px 10px;border-radius:10px;border:none;background:#bd93f9;color:#000;font-weight:900;cursor:pointer;">Export JSON</button>
-              <button id="qiTraceFrom" style="padding:8px 10px;border-radius:10px;border:1px solid var(--accent-tertiary);background:transparent;color:var(--text-primary);cursor:pointer;">Trace from here</button>
-            </div>
-            <div style="margin-top:10px;opacity:.85;font-size:12px;">
-              outgoing loaded: <strong>${escapeHtml(outgoing.length)}</strong>
-            </div>
-            <div style="margin-top:6px;opacity:.75;font-size:12px;">
-              note: issuer-tree edges only exist when counterparty exists (Payment/TrustSet/OfferCreate issuer).
-            </div>
-          </div>
-        </div>
-
-        <div style="margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12);">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div style="font-weight:900;">Recent outgoing transactions</div>
-            <div style="opacity:.75;font-size:12px;">(shown chronological)</div>
-          </div>
-          <div style="margin-top:10px;max-height:420px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${rows || `<div style="padding:12px;opacity:.75;">No outgoing txs found in this range. Try removing date/ledger filters or increasing per-node.</div>`}
-          </div>
+      html += `<h3 style="margin:1.5rem 0 0.5rem 0;">📤 Outgoing Transactions (${outgoing.length})</h3>`;
+      html += `
+        <div style="margin-bottom:1rem;font-size:13px;">
+          Scanned: ${outgoingRes.scanned} • Pages: ${outgoingRes.pages} • Complete: ${outgoingRes.complete ? "✅" : "⚠️"}
         </div>
       `;
 
-      openModal(`Quick Inspect: ${addr}`, html);
-      setProgress(-1);
-      setStatus("Ready");
+      html += `
+        <div style="margin-bottom:1rem;">
+          <button id="qiCopyAddr">📋 Copy Address</button>
+          <button id="qiCopyHashes">📋 Copy Hashes</button>
+          <button id="qiExportCsv">💾 Export CSV</button>
+          <button id="qiExportJson">💾 Export JSON</button>
+          <button id="qiTraceFrom">🌊 Trace From</button>
+        </div>
+      `;
+
+      if (outgoing.length === 0) {
+        html += `<div style="opacity:0.7;padding:20px;text-align:center;">No outgoing transactions found</div>`;
+      } else {
+        outgoing.slice(0, 50).forEach((t) => {
+          const amt = parseAmount(t.Amount || null);
+          const cp = extractCounterparty(t);
+
+          html += `
+            <div style="padding:10px;margin-bottom:8px;background:rgba(0,0,0,0.35);border-radius:10px;border-left:3px solid #50fa7b;">
+              <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(t.TransactionType || "unknown")}</div>
+              <div style="font-size:11px;font-family:'JetBrains Mono',monospace;margin-bottom:4px;">
+                ${t.hash ? escapeHtml(t.hash.slice(0, 12) + "…") : "no hash"}
+              </div>
+              <div style="font-size:12px;margin-bottom:4px;"><strong>Amount:</strong> ${escapeHtml(
+                formatAmountPretty(amt.currency, amt.value, amt.issuer)
+              )}</div>
+              ${cp ? `<div style="font-size:11px;opacity:0.7;">To: ${escapeHtml(cp.slice(0, 10))}…</div>` : ""}
+              <div style="font-size:11px;opacity:0.7;">
+                Ledger: ${t.ledger_index || "—"} • 
+                ${t._iso ? escapeHtml(t._iso.slice(0, 10)) : "no date"}
+                ${t.hash ? ` • ${explorerLinks(t.hash)}` : ""}
+              </div>
+            </div>
+          `;
+        });
+
+        if (outgoing.length > 50) {
+          html += `<div style="opacity:0.7;padding:10px;text-align:center;">Showing first 50 of ${outgoing.length} transactions</div>`;
+        }
+      }
+
+      html += `</div>`;
+
+      openModal("⚡ Quick Inspect", html);
 
       $("qiCopyAddr").onclick = async () => {
         const ok = await copyToClipboard(addr);
-        $("qiCopyAddr").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-        setTimeout(() => ($("qiCopyAddr").textContent = "Copy address"), 1200);
+        alert(ok ? "✅ Address copied" : "❌ Failed to copy");
       };
 
       $("qiCopyHashes").onclick = async () => {
-        const ok = await copyToClipboard(hashesOnly || "");
-        $("qiCopyHashes").textContent = ok ? "Copied ✅" : "Copy failed ❌";
-        setTimeout(() => ($("qiCopyHashes").textContent = "Copy hashes"), 1200);
+        const hashes = outgoing.map((t) => t.hash).filter(Boolean);
+        const ok = await copyToClipboard(hashes.join("\n"));
+        alert(ok ? `✅ ${hashes.length} hashes copied` : "❌ Failed to copy");
       };
 
-      $("qiExportCsv").onclick = () => downloadText(csv, `naluxrp-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
+      const csv = [
+        "hash,type,ledger_index,date,amount,currency,issuer,counterparty",
+        ...outgoing.map((t) => {
+          const amt = parseAmount(t.Amount || null);
+          const cp = extractCounterparty(t) || "";
+          return `"${t.hash || ""}","${t.TransactionType || ""}",${t.ledger_index || ""},"${t._iso || ""}",${amt.value},"${amt.currency}","${
+            amt.issuer || ""
+          }","${cp}"`;
+        })
+      ].join("\n");
+
+      $("qiExportCsv").onclick = () => downloadText(csv, `nanakilo-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
 
       $("qiExportJson").onclick = () => {
-        const obj = {
-          version: MODULE_VERSION,
+        const data = {
           address: addr,
-          fetched_at: new Date().toISOString(),
-          transport: { ...transportState },
-          accountInfo: info || null,
-          activation: activation || null,
-          tokenSummary: tokenSummary || null,
-          outgoing,
-          outgoingMeta: res?.meta || null
+          accountInfo: acctInfo,
+          tokenSummary,
+          outgoing: outgoing,
+          exportedAt: new Date().toISOString(),
+          source: "NanaKilo Quick Inspect"
         };
-        downloadText(JSON.stringify(obj, null, 2), `naluxrp-quickinspect-${addr}-${Date.now()}.json`, "application/json");
+        downloadText(JSON.stringify(data, null, 2), `nanakilo-quickinspect-${addr}.json`, "application/json");
       };
 
       $("qiTraceFrom").onclick = () => {
@@ -1998,224 +1623,155 @@
         switchToTraceAndSetSeed(addr);
       };
     } catch (e) {
-      console.error(e);
-      setProgress(-1);
-      setStatus(`Quick inspect failed: ${e?.message ? e.message : String(e)}`);
+      openModal("⚠️ Error", `<div style="padding:20px;color:#ff5555;">${escapeHtml(e?.message || String(e))}</div>`);
     }
   }
 
   // ---------------- EXPORT GRAPH ----------------
   function exportActiveGraph() {
-    const g = issuerRegistry.get(activeIssuer);
+    const g = activeIssuer ? issuerRegistry.get(activeIssuer) : null;
     if (!g) {
-      setStatus("Build a tree first.");
+      alert("No active graph to export");
       return;
     }
 
-    const exportObj = {
-      version: MODULE_VERSION,
+    const data = {
       issuer: g.issuer,
-      builtAt: g.builtAt,
-      transport: { lastSource: transportState.lastSource, wsConnected: transportState.wsConnected, lastError: transportState.lastError },
       params: g.params,
-      nodes: Array.from(g.nodes.values()).map((n) => ({
-        address: n.address,
-        level: n.level,
-        outCount: n.outCount,
-        inCount: n.inCount,
-        outXrp: Number(n.outXrp.toFixed(6)),
-        inXrp: Number(n.inXrp.toFixed(6)),
-        domain: n.acctInfo?.domain || null,
-        balanceXrp: n.acctInfo?.balanceXrp ?? null,
-        activated_by: n.activation?.act || null,
-        activation_source: n.activation?.source || null,
-        activation_complete: n.activation?.complete ?? null,
-        outgoingMeta: n.outgoingMeta || null,
-        recentOutgoing: n.outgoingFirst || []
-      })),
-      edges: g.edges
+      stats: g.stats,
+      builtAt: g.builtAt,
+      nodes: Array.from(g.nodes.values()),
+      edges: g.edges,
+      exportedAt: new Date().toISOString(),
+      source: "NanaKilo Account Inspector"
     };
 
-    downloadText(JSON.stringify(exportObj, null, 2), `naluxrp-issuer-tree-${g.issuer}-${Date.now()}.json`, "application/json");
+    const json = JSON.stringify(data, null, 2);
+    downloadText(json, `nanakilo-tree-${g.issuer}-${g.edges.length}edges.json`, "application/json");
+    setStatus(`✅ Exported ${g.edges.length} edges`);
   }
 
   // ---------------- BUTTON HANDLERS ----------------
   async function buildTreeClicked() {
-    const issuer = $("uiIssuerSelect").value;
-    if (!issuer || !isValidXrpAddress(issuer)) {
-      setStatus("Pick a valid issuer.");
+    if (!activeIssuer || !isValidXrpAddress(activeIssuer)) {
+      alert("Select a valid issuer first");
       return;
     }
 
-    if (buildingTree) return;
+    if (buildingTree) {
+      alert("Already building…");
+      return;
+    }
+
     buildingTree = true;
+    setBuildBusy(true, "Building…");
 
     try {
-      setBuildBusy(true, "Building…");
-      setProgress(0);
-      setStatus("Starting build…");
+      const depth = clampInt($("uiDepth").value, 1, 10);
+      const perNode = clampInt($("uiPerNode").value, 1, 500);
+      const maxAccounts = clampInt($("uiMaxAccounts").value, 1, 2000);
+      const maxEdges = clampInt($("uiMaxEdges").value, 1, 20000);
 
-      activeIssuer = issuer;
+      const ledgerMin = parseNullableInt($("uiLedgerMin")?.value);
+      const ledgerMax = parseNullableInt($("uiLedgerMax")?.value);
+      const startDate = ($("uiStartDate")?.value || "").trim() || null;
+      const endDate = ($("uiEndDate")?.value || "").trim() || null;
+      const minXrp = $("uiMinXrp")?.value ? Number($("uiMinXrp").value) : null;
 
-      $("uiTree").innerHTML = `<div style="padding:12px;opacity:.85;">Building tree…</div>`;
-      $("uiEdgeItems").innerHTML = `<div style="padding:12px;opacity:.7;">Edges will populate as nodes expand…</div>`;
-
-      const depth = clampInt(Number(($("uiDepth") || {}).value || DEFAULT_DEPTH), 1, 6);
-      const perNode = clampInt(Number(($("uiPerNode") || {}).value || DEFAULT_PER_NODE), 10, 300);
-      const maxAccounts = clampInt(Number(($("uiMaxA") || {}).value || DEFAULT_MAX_ACCTS), 20, 2000);
-      const maxEdges = clampInt(Number(($("uiMaxE") || {}).value || DEFAULT_MAX_EDGES), 50, 10000);
-
-      const startDate = ($("uiStart") || {}).value ? new Date(($("uiStart") || {}).value).toISOString() : null;
-      const endDate = ($("uiEnd") || {}).value ? new Date(($("uiEnd") || {}).value).toISOString() : null;
-      const ledgerMin = parseNullableInt(($("uiLedgerMin") || {}).value);
-      const ledgerMax = parseNullableInt(($("uiLedgerMax") || {}).value);
-      const minXrp = Number(($("uiMinXrp") || {}).value || 0);
-
-      const constraints = { startDate, endDate, ledgerMin, ledgerMax, minXrp };
-
-      const g = makeGraph(issuer, { depth, perNode, maxAccounts, maxEdges, constraints });
-      clearViews();
-
-      waitForSharedConn(1500).then((ok) => {
-        if (!ok) attemptSharedReconnect("build requested but ws offline");
+      const g = makeGraph(activeIssuer, {
+        depth,
+        perNode,
+        maxAccounts,
+        maxEdges,
+        ledgerMin,
+        ledgerMax,
+        startDate,
+        endDate,
+        minXrp
       });
 
       await buildIssuerTree(g);
 
-      issuerRegistry.set(issuer, g);
+      issuerRegistry.set(activeIssuer, g);
       renderAll(g);
-
-      setStatus(`Tree built: ${g.nodes.size} accounts • ${g.edges.length} edges`);
-      setProgress(-1);
+      setStatus(`✅ Tree built: ${g.edges.length} edges, ${g.nodes.size} nodes`);
     } catch (e) {
+      setStatus(`❌ Error: ${e?.message || String(e)}`);
       console.error(e);
-      setStatus(`Build failed: ${e?.message ? e.message : String(e)}`);
-      setProgress(-1);
     } finally {
       buildingTree = false;
       setBuildBusy(false, "Build");
+      setProgress(0);
     }
   }
 
   function findPathClicked() {
-    const g = issuerRegistry.get(activeIssuer);
+    const g = activeIssuer ? issuerRegistry.get(activeIssuer) : null;
     if (!g) {
-      setStatus("Build a tree first.");
+      alert("No graph built");
       return;
     }
-    const target = ($("uiTarget") || {}).value?.trim();
-    if (!isValidXrpAddress(target)) {
-      setStatus("Enter a valid target address.");
-      return;
-    }
-    const path = findShortestPath(g, g.issuer, target);
-    if (!path) {
-      $("uiResults").innerHTML = `<div>No path found (within current tree).</div>`;
-      return;
-    }
-    $("uiResults").innerHTML = `
-      <div><strong>Shortest path</strong> (${escapeHtml(path.length - 1)} hops)</div>
-      <div style="margin-top:8px;">${path
-        .map(
-          (p) => `<div style="display:flex;align-items:center;gap:8px;">
-            <code>${escapeHtml(p)}</code>
-            <button class="uiNodeMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Inspect</button>
-            <button class="uiTraceMini" data-addr="${escapeHtml(p)}" style="padding:4px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-primary);cursor:pointer;">Trace</button>
-          </div>`
-        )
-        .join("")}</div>
-    `;
 
-    Array.from(document.querySelectorAll(".uiNodeMini")).forEach((btn) =>
-      btn.addEventListener("click", () => quickInspectAddress(btn.getAttribute("data-addr"), { perNode: 160 }))
-    );
-    Array.from(document.querySelectorAll(".uiTraceMini")).forEach((btn) =>
-      btn.addEventListener("click", () => switchToTraceAndSetSeed(btn.getAttribute("data-addr")))
-    );
+    const src = prompt("Source address:");
+    if (!src || !isValidXrpAddress(src)) return;
+
+    const dst = prompt("Destination address:");
+    if (!dst || !isValidXrpAddress(dst)) return;
+
+    const path = findShortestPath(g, src, dst);
+    if (!path) {
+      alert("No path found");
+      return;
+    }
+
+    let html = `<h3>Path: ${path.length} hops</h3>`;
+    path.forEach((e, i) => {
+      html += `
+        <div style="padding:10px;margin-bottom:8px;background:rgba(0,0,0,0.35);border-radius:10px;">
+          <div style="font-weight:700;">Hop ${i + 1}: ${escapeHtml(e.type)}</div>
+          <div style="font-size:11px;font-family:'JetBrains Mono',monospace;">
+            ${escapeHtml(e.from.slice(0, 10))}… → ${escapeHtml(e.to.slice(0, 10))}…
+          </div>
+          <div style="font-size:12px;">Amount: ${escapeHtml(formatAmountPretty(e.currency, e.amount, e.issuer))}</div>
+          <div style="font-size:11px;opacity:0.7;">Ledger: ${e.ledger_index || "—"}</div>
+        </div>
+      `;
+    });
+
+    openModal("🗺️ Shortest Path", html);
   }
 
   function patternsClicked() {
-    const g = issuerRegistry.get(activeIssuer);
+    const g = activeIssuer ? issuerRegistry.get(activeIssuer) : null;
     if (!g) {
-      setStatus("Build a tree first.");
+      alert("No graph built");
       return;
     }
 
-    const report = runPatternScanFull(g);
+    const cycles = runPatternScanFull(g);
 
-    const hubRows = report.reconHubs.length
-      ? report.reconHubs
-          .map(
-            (h) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div><code>${escapeHtml(h.hub)}</code></div>
-          <div style="opacity:.85;margin-top:4px;">contributors from issuer-first-hop: <strong>${escapeHtml(h.contributors)}</strong></div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No fan-in hubs detected from issuer first-hop.</div>`;
+    if (cycles.length === 0) {
+      alert("No cycles found");
+      return;
+    }
 
-    const burstRows = report.bursts.length
-      ? report.bursts
-          .map(
-            (b) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div><code>${escapeHtml(b.address)}</code></div>
-          <div style="opacity:.85;margin-top:4px;">burst txs: <strong>${escapeHtml(b.txs)}</strong> • span: ${escapeHtml(b.span)} ledgers (${escapeHtml(
-              b.from
-            )} → ${escapeHtml(b.to)})</div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No bursts detected (within loaded outgoing windows).</div>`;
-
-    const cycleRows = report.cycles.length
-      ? report.cycles
-          .map(
-            (c) => `
-        <div style="padding:8px;border-bottom:1px dashed rgba(255,255,255,0.08);font-size:12px;">
-          <div style="opacity:.85;">len ${escapeHtml(c.length)}:</div>
-          <div style="margin-top:4px;">${c.path.map((p) => `<code style="margin-right:6px;">${escapeHtml(p.slice(0, 6))}…</code>`).join(" ")}</div>
-        </div>`
-          )
-          .join("")
-      : `<div style="padding:12px;opacity:.75;">No cycles found (within current graph bounds).</div>`;
-
-    $("uiResults").innerHTML = `
-      <div style="padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);">
-        <div style="font-weight:900;">Pattern summary</div>
-        <div style="margin-top:10px;opacity:.9;">
-          <div>Issuer first-hop unique recipients: <strong>${escapeHtml(report.summary.issuerFirstHopUniqueRecipients)}</strong></div>
-          <div>Issuer first-hop dominance: <strong>${escapeHtml(report.summary.issuerFirstHopDominancePct)}%</strong></div>
-          <div>Issuer top recipient: <code>${escapeHtml(report.summary.issuerTopRecipient || "—")}</code></div>
-          <div>Classic reconsolidation hubs: <strong>${escapeHtml(report.summary.reconsolidationHubs)}</strong></div>
-          <div>Fan-in hubs from issuer first-hop: <strong>${escapeHtml(report.summary.fanInHubsFromIssuerFirstHop)}</strong></div>
-          <div>Bursts detected: <strong>${escapeHtml(report.summary.burstsDetected)}</strong></div>
-          <div>Cycles detected: <strong>${escapeHtml(report.summary.cyclesDetected)}</strong></div>
-        </div>
-
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Fan-in hubs (issuer → many → hub)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${hubRows}
+    let html = `<h3>🔄 Cycles Found: ${cycles.length}</h3>`;
+    cycles.slice(0, 30).forEach((cycle, i) => {
+      html += `
+        <div style="padding:10px;margin-bottom:8px;background:rgba(0,0,0,0.35);border-radius:10px;">
+          <div style="font-weight:700;">Cycle ${i + 1}: ${cycle.length} hops</div>
+          <div style="font-size:11px;font-family:'JetBrains Mono',monospace;">
+            ${cycle.map((a) => escapeHtml(a.slice(0, 6))).join(" → ")}
           </div>
         </div>
+      `;
+    });
 
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Bursts (high-density outgoing)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${burstRows}
-          </div>
-        </div>
+    if (cycles.length > 30) {
+      html += `<div style="opacity:0.7;padding:10px;text-align:center;">Showing first 30 of ${cycles.length} cycles</div>`;
+    }
 
-        <div style="margin-top:14px;">
-          <div style="font-weight:900;">Cycles (bounded)</div>
-          <div style="margin-top:8px;max-height:220px;overflow:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.06);">
-            ${cycleRows}
-          </div>
-        </div>
-      </div>
-    `;
+    openModal("🔄 Pattern Scan", html);
   }
 
   // ---------------- INIT ----------------
@@ -2224,11 +1780,10 @@
     setStatus("Ready");
   }
 
-  window.initInspector = initInspector;
-
-  // ✅ Public API for Trace Tab + others
-  window.UnifiedInspector = {
+  // ---------------- PUBLIC API ----------------
+  window.NanaKilo = {
     version: MODULE_VERSION,
+    init: initInspector,
     request: (payload, opts) => xrplRequest(payload, opts || {}),
     quickInspect: (addr) => quickInspectAddress(addr, { perNode: 160 }),
     getTokenSummary: (addr) => getTokenSummary(addr),
@@ -2240,5 +1795,13 @@
     switchToTrace: (addr) => switchToTraceAndSetSeed(addr)
   };
 
-  console.log(`✅ Unified Inspector loaded (${MODULE_VERSION})`);
+  // ✅ Also export as window.initInspector for ui.js
+  window.initInspector = initInspector;
+  
+  // ✅ Export UnifiedInspector for quick inspect
+  window.UnifiedInspector = {
+    quickInspect: (addr) => quickInspectAddress(addr, { perNode: 160 })
+  };
+
+  console.log(`✅ ${MODULE_VERSION} loaded`);
 })();
