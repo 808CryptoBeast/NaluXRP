@@ -8,7 +8,9 @@
     "proxy": "node js/proxy-server.js",
     "serve": "npx http-server -p 8000 -c-1",
     "dev": "npx http-server -p 8000 -c-1 -o",
-    "test": "echo \"No tests specified yet\" && exit 0"
+    "test": "echo \"No tests specified yet\" && exit 0",
+    "lint": "eslint js/**/*.js",
+    "lint:fix": "eslint js/**/*.js --fix"
   },
   "keywords": [
     "xrp",
@@ -47,6 +49,7 @@
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
+    "eslint": "^8.57.0",
     "http-server": "^14.1.1"
   },
   "engines": {
