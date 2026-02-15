@@ -1,24 +1,16 @@
-* =========================================
-   NaluXrp 🌊 — Dashboard V2 Styles
+/* =========================================
+   NaluLF 🌊 — Dashboard V2 Styles
+   Enhanced with ALL XRPL Transaction Types
    ========================================= */
-
-/* =========================================================
-   ✅ DASHBOARD OVERLAY ONLY (NO BACKGROUND IMAGE)
-   - Keeps the opaque/dim tint layer
-   - DOES NOT set any background-image here
-   ========================================================= */
 
 #dashboard{
   position: relative;
   overflow: hidden;
   min-height: 100vh;
   width: 100%;
+  display: block !important;
 }
 
-/* (Image layer removed on purpose) */
-/* If you had #dashboard::before with background-image before, it's gone. */
-
-/* Readability overlay (kept) */
 #dashboard::after{
   content: "";
   position: absolute;
@@ -28,32 +20,25 @@
   pointer-events: none;
 }
 
-/* Keep dashboard content above overlay */
 #dashboard > *{
   position: relative;
   z-index: 1;
 }
 
-/* Base container for dashboard page */
 .dashboard-page{
   width: 100%;
   max-width: 1400px;
-
-  /* ✅ hard-center the entire dashboard wrapper */
   margin: 0 auto !important;
-
   padding: 0 20px;
   box-sizing: border-box;
   animation: fadeIn 0.7s ease-out;
 }
 
-/* Header: network selector + connection box */
 .dashboard-header{
   width: 100%;
   max-width: 1400px;
   margin: 0 auto 20px auto;
   padding: 0;
-
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -61,7 +46,6 @@
   gap: 15px;
 }
 
-/* Network selector */
 .network-selector{
   display: flex;
   align-items: center;
@@ -103,7 +87,6 @@
   border-radius: 2px;
 }
 
-/* Connection box */
 .connection-box{
   display: flex;
   align-items: center;
@@ -135,26 +118,15 @@
   transition: color 0.2s ease;
 }
 
-/* =========================================================
-   ✅ CENTERING FIX FOR YOUR CURRENT MARKUP
-   Your dashboard markup often only renders .dashboard-col-main
-   (no .dashboard-col-side). If grid stays "1fr 380px", the
-   content looks shoved off-center.
-   FIX: default to 1-column; auto-upgrade to 2-col only if the
-   side column actually exists (modern browsers).
-   ========================================================= */
-
 .dashboard-columns{
   display: grid;
-  grid-template-columns: 1fr; /* ✅ default single column = centered */
+  grid-template-columns: 1fr;
   gap: 20px;
-
   width: 100%;
   max-width: 1400px;
   margin: 0 auto;
 }
 
-/* If the side column exists, use 2 columns */
 @supports selector(.dashboard-columns:has(.dashboard-col-side)){
   .dashboard-columns:has(.dashboard-col-side){
     grid-template-columns: minmax(0, 1fr) 380px;
@@ -177,7 +149,6 @@
   flex-shrink: 0;
 }
 
-/* Metrics section */
 .dashboard-metrics-title{
   font-size: 1.4em;
   font-weight: 700;
@@ -197,7 +168,6 @@
   width: 100%;
 }
 
-/* Override metric-card slightly for dashboard */
 .dashboard-metric-grid .metric-card{
   text-align: left;
 }
@@ -206,7 +176,6 @@
   font-size: 1.5em;
 }
 
-/* Widget header/body */
 .widget-header{
   display: flex;
   align-items: center;
@@ -234,7 +203,6 @@
   width: 100%;
 }
 
-/* Widget chart container */
 .widget-chart{
   width: 100%;
   max-width: 100%;
@@ -261,7 +229,6 @@
   z-index: -1;
 }
 
-/* Pills */
 .widget-pill{
   display: inline-block;
   padding: 4px 10px;
@@ -273,7 +240,6 @@
   margin: 3px;
 }
 
-/* Whale list */
 .whale-item{
   display: flex;
   justify-content: space-between;
@@ -292,7 +258,6 @@
   font-weight: 700;
 }
 
-/* Latency ribbon */
 .latency-ribbon{
   display: flex;
   width: 100%;
@@ -335,7 +300,6 @@
   will-change: transform;
 }
 
-/* Apply animation class (keyframes are defined in components/animations.css) */
 .ledger-stream-animate{
   animation: ledgerConveyorMove 40s linear infinite;
 }
@@ -344,7 +308,6 @@
   animation-play-state: paused;
 }
 
-/* Particles underneath */
 .ledger-stream-particles{
   pointer-events: none;
   position: absolute;
@@ -364,7 +327,6 @@
   animation: ledgerParticleDrift linear infinite;
 }
 
-/* Ledger cards — keep ledger-specific extras below */
 .ledger-card{
   position: relative;
   transform: translateZ(0);
@@ -385,7 +347,6 @@
   padding: 14px 18px 16px;
 }
 
-/* Aura underlay */
 .ledger-card::before{
   content: "";
   position: absolute;
@@ -403,32 +364,44 @@
 
 .ledger-card--payment::before{
   background: radial-gradient(circle at 0 0,
-    rgba(80,184,255,0.75),
-    rgba(0,100,255,0.15),
+    rgba(80,250,123,0.75),
+    rgba(46,204,113,0.15),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
+
 .ledger-card--offer::before{
   background: radial-gradient(circle at 100% 0,
-    rgba(191,90,255,0.75),
-    rgba(120,30,255,0.2),
+    rgba(255,184,108,0.75),
+    rgba(255,149,0,0.2),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
+
 .ledger-card--nft::before{
   background: radial-gradient(circle at 50% 0,
-    rgba(255,159,67,0.8),
-    rgba(255,111,0,0.25),
+    rgba(189,147,249,0.8),
+    rgba(155,114,242,0.25),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
+
 .ledger-card--trust::before{
   background: radial-gradient(circle at 0 100%,
-    rgba(0,217,158,0.8),
-    rgba(0,150,136,0.25),
+    rgba(80,168,255,0.8),
+    rgba(59,130,246,0.25),
     transparent 70%);
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
+
+.ledger-card--amm::before{
+  background: radial-gradient(circle at 100% 100%,
+    rgba(0,212,255,0.85),
+    rgba(0,180,216,0.3),
+    transparent 70%);
+  animation: ledgerAuraPulse 4s ease-in-out infinite;
+}
+
 .ledger-card--other::before{
   background: radial-gradient(circle at 100% 100%,
     rgba(241,250,140,0.85),
@@ -437,7 +410,6 @@
   animation: ledgerAuraPulse 4s ease-in-out infinite;
 }
 
-/* Ledger card header */
 .ledger-card-header{
   display: flex;
   justify-content: space-between;
@@ -470,7 +442,6 @@
   border: 1px solid rgba(255,255,255,0.2);
 }
 
-/* Stats row */
 .ledger-main-row{
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -495,7 +466,6 @@
   color: var(--accent-secondary);
 }
 
-/* Type bars */
 .ledger-type-bars{
   display: flex;
   flex-direction: column;
@@ -504,7 +474,7 @@
 
 .ledger-type-row{
   display: grid;
-  grid-template-columns: 70px 1fr auto;
+  grid-template-columns: 90px 1fr auto;
   gap: 6px;
   align-items: center;
 }
@@ -529,12 +499,197 @@
   box-shadow: 0 0 12px currentColor;
 }
 
-/* Type colors */
-.type-payment{ background: linear-gradient(90deg,#40a9ff,#00d4ff); color:#00d4ff; }
-.type-offer{ background: linear-gradient(90deg,#ff9f43,#ff6b1a); color:#ff9f43; }
-.type-nft{ background: linear-gradient(90deg,#ff9f43,#ff3f81); color:#ff9f43; }
-.type-trust{ background: linear-gradient(90deg,#00e6a8,#00b894); color:#00e6a8; }
-.type-other{ background: linear-gradient(90deg,#f1fa8c,#ffe66d); color:#f1fa8c; }
+/* ============================================================
+   All XRPL Transaction Type Colors (34 types)
+   ============================================================ */
+
+/* Core Transactions */
+.type-payment {
+  background: linear-gradient(90deg, #50fa7b, #2ecc71);
+  color: #50fa7b;
+  box-shadow: 0 0 12px rgba(80, 250, 123, 0.5);
+}
+
+.type-offer {
+  background: linear-gradient(90deg, #ffb86c, #ff9500);
+  color: #ffb86c;
+  box-shadow: 0 0 12px rgba(255, 184, 108, 0.5);
+}
+
+.type-offer-cancel {
+  background: linear-gradient(90deg, #ff6b6b, #ff5252);
+  color: #ff6b6b;
+  box-shadow: 0 0 12px rgba(255, 107, 107, 0.5);
+}
+
+.type-trust {
+  background: linear-gradient(90deg, #50a8ff, #3b82f6);
+  color: #50a8ff;
+  box-shadow: 0 0 12px rgba(80, 168, 255, 0.5);
+}
+
+/* NFT Transactions */
+.type-nft {
+  background: linear-gradient(90deg, #bd93f9, #9b72f2);
+  color: #bd93f9;
+  box-shadow: 0 0 12px rgba(189, 147, 249, 0.5);
+}
+
+.type-nft-burn {
+  background: linear-gradient(90deg, #ff6b6b, #ff5252);
+  color: #ff6b6b;
+  box-shadow: 0 0 12px rgba(255, 107, 107, 0.5);
+}
+
+.type-nft-offer {
+  background: linear-gradient(90deg, #bd93f9, #a78bfa);
+  color: #bd93f9;
+  box-shadow: 0 0 12px rgba(189, 147, 249, 0.5);
+}
+
+.type-nft-cancel {
+  background: linear-gradient(90deg, #f472b6, #ec4899);
+  color: #f472b6;
+  box-shadow: 0 0 12px rgba(244, 114, 182, 0.5);
+}
+
+.type-nft-accept {
+  background: linear-gradient(90deg, #8b5cf6, #7c3aed);
+  color: #8b5cf6;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.5);
+}
+
+/* AMM Transactions (Automated Market Maker) */
+.type-amm-create {
+  background: linear-gradient(90deg, #00d4ff, #00b4d8);
+  color: #00d4ff;
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.5);
+}
+
+.type-amm-deposit {
+  background: linear-gradient(90deg, #00ffaa, #00e676);
+  color: #00ffaa;
+  box-shadow: 0 0 12px rgba(0, 255, 170, 0.5);
+}
+
+.type-amm-withdraw {
+  background: linear-gradient(90deg, #ffd700, #ffa500);
+  color: #ffd700;
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.5);
+}
+
+.type-amm-vote {
+  background: linear-gradient(90deg, #00fff0, #05d9e8);
+  color: #00fff0;
+  box-shadow: 0 0 12px rgba(0, 255, 240, 0.5);
+}
+
+.type-amm-bid {
+  background: linear-gradient(90deg, #ff79c6, #ff6ac1);
+  color: #ff79c6;
+  box-shadow: 0 0 12px rgba(255, 121, 198, 0.5);
+}
+
+.type-amm-delete {
+  background: linear-gradient(90deg, #ff6b6b, #ff5252);
+  color: #ff6b6b;
+  box-shadow: 0 0 12px rgba(255, 107, 107, 0.5);
+}
+
+/* Escrow Transactions */
+.type-escrow-create {
+  background: linear-gradient(90deg, #4ade80, #22c55e);
+  color: #4ade80;
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.5);
+}
+
+.type-escrow-finish {
+  background: linear-gradient(90deg, #34d399, #10b981);
+  color: #34d399;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.5);
+}
+
+.type-escrow-cancel {
+  background: linear-gradient(90deg, #fb923c, #f97316);
+  color: #fb923c;
+  box-shadow: 0 0 12px rgba(251, 146, 60, 0.5);
+}
+
+/* Payment Channel Transactions */
+.type-paychan-create {
+  background: linear-gradient(90deg, #60a5fa, #3b82f6);
+  color: #60a5fa;
+  box-shadow: 0 0 12px rgba(96, 165, 250, 0.5);
+}
+
+.type-paychan-fund {
+  background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+  color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+}
+
+.type-paychan-claim {
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  color: #818cf8;
+  box-shadow: 0 0 12px rgba(129, 140, 248, 0.5);
+}
+
+/* Check Transactions */
+.type-check-create {
+  background: linear-gradient(90deg, #a78bfa, #8b5cf6);
+  color: #a78bfa;
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.5);
+}
+
+.type-check-cash {
+  background: linear-gradient(90deg, #c084fc, #a855f7);
+  color: #c084fc;
+  box-shadow: 0 0 12px rgba(192, 132, 252, 0.5);
+}
+
+.type-check-cancel {
+  background: linear-gradient(90deg, #f472b6, #ec4899);
+  color: #f472b6;
+  box-shadow: 0 0 12px rgba(244, 114, 182, 0.5);
+}
+
+/* Account Management Transactions */
+.type-account-set {
+  background: linear-gradient(90deg, #94a3b8, #64748b);
+  color: #94a3b8;
+  box-shadow: 0 0 12px rgba(148, 163, 184, 0.5);
+}
+
+.type-account-delete {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+  color: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.5);
+}
+
+.type-regular-key {
+  background: linear-gradient(90deg, #78716c, #57534e);
+  color: #78716c;
+  box-shadow: 0 0 12px rgba(120, 113, 108, 0.5);
+}
+
+.type-signer-list {
+  background: linear-gradient(90deg, #71717a, #52525b);
+  color: #71717a;
+  box-shadow: 0 0 12px rgba(113, 113, 122, 0.5);
+}
+
+/* Special Transactions */
+.type-clawback {
+  background: linear-gradient(90deg, #dc2626, #b91c1c);
+  color: #dc2626;
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.5);
+}
+
+.type-other {
+  background: linear-gradient(90deg, #6b7280, #4b5563);
+  color: #6b7280;
+  box-shadow: 0 0 12px rgba(107, 114, 128, 0.5);
+}
 
 .ledger-type-count{
   font-size: 0.8rem;
@@ -582,7 +737,6 @@
   font-size: 0.9rem;
 }
 
-/* Heatmap */
 .tx-heatmap-grid{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -651,7 +805,6 @@
     rgba(0, 212, 255, 0.9));
 }
 
-/* Optional per-type hues */
 .tx-heat-tile.heat-payment::before{
   background: radial-gradient(circle at 0 0,
     rgba(80,250,123, calc(var(--heat, 0.5) * 0.7)),
@@ -741,6 +894,10 @@
   .ledger-main-row{
     grid-template-columns: repeat(2, 1fr);
   }
+  
+  .ledger-type-row{
+    grid-template-columns: 80px 1fr auto;
+  }
 }
 
 @media (max-width: 480px){
@@ -756,11 +913,13 @@
     width: 280px;
     min-width: 280px;
   }
+  
+  .ledger-type-row{
+    grid-template-columns: 70px 1fr auto;
+  }
 }
 
-/* Extra animations (kept small; shared ones are in components/animations.css) */
 @keyframes fadeSlideIn{
   0% { opacity: 0; transform: translateY(-15px); }
   100% { opacity: 1; transform: translateY(0); }
 }
-
