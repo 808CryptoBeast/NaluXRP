@@ -169,7 +169,6 @@ body.theme-hawaiian {
   z-index: 0;
 }
 
-/* FULL BACKGROUND + DESIGN STYLES REMAIN PRESERVED */
 /* =========================================
    NaluXrp 🌊 – Background Images
    Fully Responsive + Mobile Friendly
@@ -178,48 +177,51 @@ body.theme-hawaiian {
 /* Dashboard Background */
 body.dashboard {
   background-image: url("../images/Dashboard-background.jpg");
-  background-size: contain; /* Ensure the background fully fits in the viewport */
+  background-size: cover; /* Cover the entire viewport */
   background-position: center; /* Center the focal point */
   background-repeat: no-repeat; /* Prevent tiling */
   background-attachment: scroll; /* Scrolling background for performance */
+  min-height: 100vh; /* Ensure full viewport height coverage */
 }
 
 @media (max-width: 768px) {
   /* Adjust dashboard background for smaller screens */
   body.dashboard {
-    background-size: contain; /* Keep fitting within smaller screens */
-    background-position: top center; /* Refocus the top part of the image */
+    background-size: cover; /* Cover the full screen */
+    background-position: center; /* Keep centered */
   }
 }
 
 /* Account Inspector Page Background */
 body.inspector {
   background-image: url("../images/InspectorPage-background.jpg");
-  background-size: contain; /* Fit the full image */
+  background-size: cover; /* Cover the entire viewport */
   background-position: center; /* Center for alignment */
   background-repeat: no-repeat;
   background-attachment: scroll; /* Better performance on mobile */
+  min-height: 100vh; /* Ensure full viewport height coverage */
 }
 
 @media (max-width: 768px) {
   body.inspector {
-    background-size: contain;
-    background-position: center top;
+    background-size: cover;
+    background-position: center;
   }
 }
 
 /* Landing Page Background */
 body.landing-page {
   background-image: url("../images/Landingpage-background.jpg");
-  background-size: contain; /* Ensure the image scales completely */
+  background-size: cover; /* Cover the entire viewport */
   background-position: center; /* Align to center */
   background-repeat: no-repeat;
   background-attachment: scroll; /* Remove 'fixed' to align correctly */
+  min-height: 100vh; /* Ensure full viewport height coverage */
 }
 
 @media (max-width: 768px) {
   body.landing-page {
-    background-size: contain;
-    background-position: center top;
+    background-size: cover;
+    background-position: center;
   }
 }
