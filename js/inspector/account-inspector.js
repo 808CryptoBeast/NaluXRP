@@ -1,5 +1,5 @@
 /* =========================================================
-   FILE: js/account-inspector.js
+   FILE: js/inspector/account-inspector.js
    NanaKilo - Core Forensic Engine
    NaluLF (Nalu Ledger Forensics)
    
@@ -16,13 +16,15 @@
    - Client-side only (no secrets stored)
    - Public XRPL RPC/WS endpoints
    - LocalStorage for cache/preferences
+   
+   ✅ FIX v3.0.1: Added initialization guard + always clear before render
    ========================================================= */
 
 (function () {
   "use strict";
 
   // ---------------- CONFIG ----------------
-  const MODULE_VERSION = "nanakilo-forensics@3.0.0";
+  const MODULE_VERSION = "nanakilo-forensics@3.0.1-FIXED";
   
   const LOCAL_KEY_ISSUER_LIST = "nanakilo_issuerList";
   const LOCAL_KEY_ACTIVE_ISSUER = "nanakilo_activeIssuer";
@@ -993,6 +995,7 @@
   }
 
   // ---------------- RENDER ----------------
+  // ✅✅✅ FIX #1: Always clear before rendering (prevents stacking)
   function ensurePage() {
     let page = $("inspector");
     
@@ -1005,12 +1008,12 @@
       main.appendChild(page);
     }
     
-    // Only render if empty (prevents re-rendering on every call)
-    if (page.innerHTML.trim()) return;
+    // ✅ CRITICAL FIX: ALWAYS clear before rendering (no conditional check)
+    page.innerHTML = "";
 
     page.innerHTML = `
     <div class="chart-section" style="font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-        <h2 style="font-family: 'MedievalSharp', serif ; letter-spacing: 1px;">👁️‍🗨️ NanaKilo • Account Forensics</h2>
+        <h2 style="font-family: 'MedievalSharp', serif !important; letter-spacing: 1px;">👁️‍🗨️ NanaKilo • Account Forensics</h2>
         <div style="margin-bottom:2rem; font-family:  'MedievalSharp', serif;">
           <strong>NLF (Nana Ledger Forensics)</strong> • Build issuer trees • Path analysis • Token tracking • Quick inspect
         </div>
@@ -1775,9 +1778,27 @@
   }
 
   // ---------------- INIT ----------------
+  // ✅✅✅ FIX #2: Guard to prevent duplicate initialization
   function initInspector() {
+    // ⚡⚡⚡ CRITICAL: Prevent duplicate initialization within 1 second
+    if (window._naluInspectorInitialized) {
+      console.log("⚠️ Inspector already initialized, skipping duplicate call");
+      return;
+    }
+    
+    window._naluInspectorInitialized = true;
+    console.log("🔧 Inspector initializing...");
+    
+    // Reset the flag after 1 second to allow re-init after page switch
+    setTimeout(() => {
+      window._naluInspectorInitialized = false;
+      console.log("🔓 Inspector lock released");
+    }, 1000);
+    
     renderPage();
     setStatus("Ready");
+    
+    console.log("✅ Inspector initialized");
   }
 
   // ---------------- PUBLIC API ----------------
