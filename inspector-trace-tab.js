@@ -1,31 +1,53 @@
 /* =========================================================
-   inspector-trace-tab.js — Adds "🚨 Trace Funds" tab to Inspector
-   - Injects a new tab into existing inspector tablist (if present)
-   - Adds a new tab panel with tracing UI (Payments hop-by-hop BFS)
-   - Cancel + Export JSON/CSV
-   - Prefill from current Inspector account when possible
-   - Safe: no duplicate tabs/panels; works with most tab systems
+   FILE: js/inspector/inspector-trace-tab-enhanced.js
+   Enhanced Trace Tab with NFT, AMM, LP, DEX Support
+   
+   NEW FEATURES:
+   ✅ Multi-transaction type tracing (Payment, NFT, AMM, DEX)
+   ✅ NFT floor manipulation detection
+   ✅ AMM rug pull detection
+   ✅ LP sandwich attack detection
+   ✅ Wash trading across all asset types
+   ✅ Fake volume detection
    ========================================================= */
 
 (function () {
-  const VERSION = "inspector-trace-tab@1.0.0";
-  const TAB_ID = "nalu-trace";
-  const TAB_LABEL = "Trace Funds";
-  const TAB_ICON = "🚨";
+  "use strict";
 
+  const VERSION = "inspector-trace-tab@4.0.0-multi-asset";
   const DEFAULTS = {
     maxHops: 4,
     perAccountTxLimit: 60,
     maxEdges: 400,
     ledgerMin: -1,
-    ledgerMax: -1
+    ledgerMax: -1,
+    traceTypes: {
+      payment: true,
+      nft: true,
+      amm: true,
+      dex: true,
+      escrow: false,
+      check: false
+    }
+  };
+
+  // Transaction type categories
+  const TX_TYPES = {
+    PAYMENT: ['Payment'],
+    NFT: ['NFTokenMint', 'NFTokenBurn', 'NFTokenCreateOffer', 'NFTokenAcceptOffer', 'NFTokenCancelOffer'],
+    AMM: ['AMMCreate', 'AMMDeposit', 'AMMWithdraw', 'AMMVote', 'AMMBid', 'AMMDelete'],
+    DEX: ['OfferCreate', 'OfferCancel'],
+    ESCROW: ['EscrowCreate', 'EscrowFinish', 'EscrowCancel'],
+    CHECK: ['CheckCreate', 'CheckCash', 'CheckCancel'],
+    TRUST: ['TrustSet']
   };
 
   let traceRunning = false;
   let traceCancelled = false;
+  let lastResult = null;
+  let currentMount = null;
 
-  function el(id) { return document.getElementById(id); }
-
+  // ---------------- UTILS ----------------
   function escapeHtml(s) {
     return String(s ?? "")
       .replaceAll("&", "&amp;")
@@ -53,25 +75,47 @@
     return Math.max(min, Math.min(max, n));
   }
 
-  // -----------------------------
-  // XRPL request wrapper
-  // -----------------------------
+  function $(id) {
+    return currentMount ? currentMount.querySelector(`#${CSS.escape(id)}`) : document.getElementById(id);
+  }
+
+  function trimFloat(n) {
+    const s = String(n);
+    if (s.includes("e") || s.includes("E")) return n.toFixed(6);
+    const fixed = n.toFixed(6);
+    return fixed.replace(/\.?0+$/, "");
+  }
+
+  // ---------------- XRPL REQUEST WRAPPER ----------------
   function getXRPLRequester() {
+    if (window.UnifiedInspector && typeof window.UnifiedInspector.request === "function") {
+      return async (payload) => {
+        const r = await window.UnifiedInspector.request(payload, { timeoutMs: 20000 });
+        return r?.result || r;
+      };
+    }
+
+    if (typeof window.requestXrpl === "function") {
+      return async (payload) => {
+        const r = await window.requestXrpl(payload, { timeoutMs: 20000 });
+        return r?.result || r;
+      };
+    }
+
     if (window.xrplConnection && typeof window.xrplConnection.request === "function") {
       return (payload) => window.xrplConnection.request(payload);
     }
+    
     if (window.xrplClient && typeof window.xrplClient.request === "function") {
       return (payload) => window.xrplClient.request(payload);
     }
-    if (window.__xrplClient && typeof window.__xrplClient.request === "function") {
-      return (payload) => window.__xrplClient.request(payload);
-    }
+
     return null;
   }
 
   async function requestWithRetry(payload, tries = 3) {
     const req = getXRPLRequester();
-    if (!req) throw new Error("XRPL request interface not found (expected window.xrplConnection.request / window.xrplClient.request).");
+    if (!req) throw new Error("XRPL request interface not found.");
 
     let lastErr = null;
     for (let i = 0; i < tries; i++) {
@@ -85,439 +129,237 @@
     throw lastErr || new Error("XRPL request failed");
   }
 
-  // -----------------------------
-  // Inspector integration hooks
-  // -----------------------------
-  function getInspectorRoot() {
-    return el("inspector");
-  }
+  // ---------------- INSPECTOR SEED DETECTION ----------------
+  function getBestSeedFromInspectorUI() {
+    const quick = document.getElementById("uiQuickAddr");
+    const target = document.getElementById("uiTarget");
+    const issuerSel = document.getElementById("uiIssuerSelect");
 
-  function isInspectorActive() {
-    const root = getInspectorRoot();
-    return !!(root && root.classList.contains("active"));
-  }
-
-  function findTabList(root) {
-    // Prefer ARIA tablist
-    let tablist = root.querySelector('[role="tablist"]');
-    if (tablist) return tablist;
-
-    // Common class fallbacks
-    tablist =
-      root.querySelector(".inspector-tabs") ||
-      root.querySelector(".tabs") ||
-      root.querySelector(".tab-bar") ||
-      root.querySelector(".tablist");
-
-    return tablist || null;
-  }
-
-  function findPanelsContainer(root) {
-    // If ARIA tabpanels exist, container is parent of first panel
-    const panel = root.querySelector('[role="tabpanel"]');
-    if (panel && panel.parentElement) return panel.parentElement;
-
-    // Common fallbacks
-    return (
-      root.querySelector(".inspector-panels") ||
-      root.querySelector(".tab-panels") ||
-      root.querySelector(".panels") ||
-      root
-    );
-  }
-
-  function findAnyTabButton(tablist) {
-    return tablist.querySelector('[role="tab"], button, a');
-  }
-
-  function findAnyPanel(root) {
-    return root.querySelector('[role="tabpanel"], .tab-panel, .panel, section, div');
-  }
-
-  function alreadyInstalled(root) {
-    return !!root.querySelector(`#${TAB_ID}-tab`) || !!root.querySelector(`#${TAB_ID}-panel`);
-  }
-
-  function getCurrentInspectorAccount() {
-    const root = getInspectorRoot();
-    if (!root) return "";
-
-    // Try known ids
     const candidates = [
-      root.querySelector("#inspectorAccount"),
-      root.querySelector("#accountInput"),
-      root.querySelector("#account-input"),
-      root.querySelector("input[name='account']"),
-      root.querySelector("input[type='text']")
-    ].filter(Boolean);
+      quick?.value,
+      target?.value,
+      issuerSel?.value
+    ].map(v => String(v || "").trim()).filter(Boolean);
 
-    for (const inp of candidates) {
-      const v = (inp.value || "").trim();
-      if (isXRPLAccount(v)) return v;
-
-      const ph = (inp.getAttribute("placeholder") || "").toLowerCase();
-      if (ph.includes("r...") || ph.includes("account")) {
-        if (isXRPLAccount(v)) return v;
-      }
-    }
-
-    // Try reading any inspector state if you exposed it
-    if (typeof window.getInspectorAccount === "function") {
-      const v = String(window.getInspectorAccount() || "").trim();
+    for (const v of candidates) {
       if (isXRPLAccount(v)) return v;
     }
-
     return "";
   }
 
-  function trySetInspectorAccount(account) {
-    if (!isXRPLAccount(account)) return;
+  // ---------------- MAIN RENDER ----------------
+  function renderInto(mountEl) {
+    currentMount = mountEl;
+    lastResult = null;
 
-    if (typeof window.setInspectorAccount === "function") {
-      try { window.setInspectorAccount(account); } catch (_) {}
-      return;
-    }
-
-    const root = getInspectorRoot();
-    if (!root) return;
-
-    const inp =
-      root.querySelector("#inspectorAccount") ||
-      root.querySelector("#accountInput") ||
-      root.querySelector("#account-input") ||
-      root.querySelector("input[name='account']") ||
-      root.querySelector("input[type='text']");
-
-    if (inp) inp.value = account;
-  }
-
-  // -----------------------------
-  // Tab injection
-  // -----------------------------
-  function injectTraceTab() {
-    const root = getInspectorRoot();
-    if (!root) return;
-
-    if (alreadyInstalled(root)) return;
-
-    const tablist = findTabList(root);
-    if (!tablist) {
-      // If inspector has no tablist, we won’t force a new global layout.
-      // We’ll inject a collapsible section at the top instead (still accessible).
-      injectFallbackSection(root);
-      return;
-    }
-
-    const panelsContainer = findPanelsContainer(root);
-
-    // Create new tab
-    const templateTab = findAnyTabButton(tablist);
-    const tab = templateTab ? templateTab.cloneNode(true) : document.createElement("button");
-
-    tab.id = `${TAB_ID}-tab`;
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("type", "button");
-    tab.setAttribute("aria-selected", "false");
-    tab.setAttribute("aria-controls", `${TAB_ID}-panel`);
-    tab.classList.add("nalu-trace-tab");
-
-    // Normalize text
-    tab.innerHTML = `
-      <span class="nav-icon" style="font-size:1.05rem;">${TAB_ICON}</span>
-      <span class="nav-label">${TAB_LABEL}</span>
-    `;
-
-    // Create panel
-    const panel = document.createElement("div");
-    panel.id = `${TAB_ID}-panel`;
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-labelledby", tab.id);
-    panel.hidden = true;
-
-    // Use about card styles (already in your app) so we don’t need extra CSS
-    panel.innerHTML = renderTracePanelHTML();
-
-    // Insert tab near other “action” tabs (end)
-    tablist.appendChild(tab);
-    panelsContainer.appendChild(panel);
-
-    // Add tab click behavior (works even if inspector has its own)
-    tab.addEventListener("click", (e) => {
-      e.preventDefault();
-      activateTab(root, tablist, panelsContainer, tab.id, panel.id);
-      ensureTracePanelReady();
-    });
-
-    // Capture clicks on other tabs to hide our panel (prevents “stuck open”)
-    tablist.addEventListener("click", (e) => {
-      const t = e.target.closest('[role="tab"], button, a');
-      if (!t) return;
-      if (t.id === tab.id) return;
-
-      // If some other tab was clicked, hide trace panel
-      panel.hidden = true;
-      tab.setAttribute("aria-selected", "false");
-      tab.classList.remove("active", "is-active", "selected");
-    }, true);
-
-    // Prefill victim field when installed
-    setTimeout(() => {
-      const acct = getCurrentInspectorAccount();
-      if (acct) el("traceVictimInInspector").value = acct;
-    }, 50);
-
-    // Bind panel UI
-    ensureTracePanelReady();
-
-    console.log(`✅ Trace tab injected (${VERSION})`);
-  }
-
-  function activateTab(root, tablist, panelsContainer, tabId, panelId) {
-    // Deactivate all tabs
-    tablist.querySelectorAll('[role="tab"], button, a').forEach((t) => {
-      t.setAttribute?.("aria-selected", "false");
-      t.classList.remove("active", "is-active", "selected");
-    });
-
-    // Hide all panels if they use role=tabpanel
-    root.querySelectorAll('[role="tabpanel"]').forEach((p) => {
-      if (p.id !== panelId) p.hidden = true;
-    });
-
-    const tab = el(tabId);
-    const panel = el(panelId);
-    if (tab) {
-      tab.setAttribute("aria-selected", "true");
-      tab.classList.add("active");
-    }
-    if (panel) panel.hidden = false;
-  }
-
-  // If no tab system exists, we still add it (not as a tab) so feature exists
-  function injectFallbackSection(root) {
-    const existing = root.querySelector("#nalu-trace-fallback");
-    if (existing) return;
-
-    const wrap = document.createElement("div");
-    wrap.id = "nalu-trace-fallback";
-    wrap.innerHTML = `
-      <div class="about-card" style="margin-top: 14px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">${TAB_ICON}</div>
-          <div class="about-card-title">${TAB_LABEL}</div>
-          <button class="about-acc-toggle" type="button" id="traceFallbackToggle">
-            <span>Open</span><span class="about-acc-chevron">▾</span>
-          </button>
-        </div>
-        <div class="about-acc-body" id="traceFallbackBody" style="display:none;">
-          ${renderTracePanelInnerHTML()}
-        </div>
-      </div>
-    `;
-
-    root.prepend(wrap);
-
-    const toggle = el("traceFallbackToggle");
-    const body = el("traceFallbackBody");
-    if (toggle && body) {
-      toggle.addEventListener("click", () => {
-        const open = body.style.display !== "none";
-        body.style.display = open ? "none" : "block";
-        const chev = toggle.querySelector(".about-acc-chevron");
-        if (chev) chev.textContent = open ? "▾" : "▴";
-      });
-    }
-
-    setTimeout(() => {
-      const acct = getCurrentInspectorAccount();
-      const v = el("traceVictimInInspector");
-      if (acct && v) v.value = acct;
-      ensureTracePanelReady();
-    }, 50);
-
-    console.log(`✅ Trace fallback injected (${VERSION})`);
-  }
-
-  // -----------------------------
-  // Panel HTML + bindings
-  // -----------------------------
-  function renderTracePanelHTML() {
-    return `
-      <div style="padding-top: 10px;">
-        ${renderTracePanelInnerHTML()}
-      </div>
-    `;
-  }
-
-  function renderTracePanelInnerHTML() {
-    return `
-      <div class="about-card" style="margin-top: 10px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">🧾</div>
-          <div class="about-card-title">Incident tracing (Payments)</div>
-          <button class="about-acc-toggle" type="button" id="traceHelpBtnInInspector" aria-expanded="false">
-            <span>How it works</span><span class="about-acc-chevron">▾</span>
+    mountEl.innerHTML = `
+      <div class="nalu-trace-wrap inspector-panel">
+        <div class="nalu-trace-head">
+          <div class="nalu-trace-title">🔬 Enhanced Multi-Asset Trace <span style="opacity:.65;font-weight:800;font-size:.85rem;">(Payment • NFT • AMM • DEX)</span></div>
+          <button class="nalu-btn ghost" type="button" id="traceHelpBtnInInspector" aria-expanded="false">
+            <span>How it works</span> <span class="about-acc-chevron">▾</span>
           </button>
         </div>
 
-        <div class="about-card-body">
-          Follow outgoing <strong>Payment</strong> flows hop-by-hop. This is <strong>on-ledger</strong> only.
-          Exchanges may “absorb” funds off-ledger after a deposit — so treat results as investigative pivots, not conclusions.
+        <div class="nalu-trace-sub">
+          Track <strong>all asset flows</strong> including XRP payments, NFT trades, AMM operations, and DEX activity. Detect manipulation across all transaction types.
         </div>
 
-        <div class="about-acc-body" id="traceHelpBodyInInspector" style="display:none;">
-          <ul class="about-bullets">
-            <li><strong>Hop 0</strong>: victim → destinations found in account_tx</li>
-            <li><strong>Hop 1+</strong>: each destination → its destinations (BFS)</li>
-            <li><strong>Limits</strong>: per-account tx cap + global edge cap to avoid rate limits</li>
-            <li><strong>Best practice</strong>: use a narrow ledger window around the incident</li>
+        <div class="nalu-trace-help" id="traceHelpBodyInInspector" hidden>
+          <ul>
+            <li><strong>Multi-Asset:</strong> Traces Payments, NFTs, AMM, DEX simultaneously</li>
+            <li><strong>NFT Detection:</strong> Wash sales, floor manipulation, fake volume</li>
+            <li><strong>AMM Detection:</strong> Rug pulls, liquidity drains, sandwich attacks</li>
+            <li><strong>BFS Algorithm:</strong> Hop-by-hop exploration of all connections</li>
+            <li><strong>Tip:</strong> Enable only relevant transaction types for faster scans</li>
           </ul>
         </div>
 
-        <div style="margin-top: 12px; display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; align-items: end;">
-          <div style="grid-column: 1 / -1;">
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Victim account</label>
-            <input id="traceVictimInInspector" type="text" placeholder="r..."
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+        <div class="nalu-trace-form">
+          <div class="nalu-field nalu-col-12">
+            <label class="nalu-label">Target Account</label>
+            <input id="traceVictimInInspector" class="nalu-input" type="text" placeholder="r..." />
           </div>
 
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Max hops</label>
-            <input id="traceHopsInInspector" type="number" min="1" max="10" value="${DEFAULTS.maxHops}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+          <!-- Transaction Type Filters -->
+          <div class="nalu-field nalu-col-12" style="border: 1px solid rgba(255,255,255,0.1); padding: 12px; border-radius: 10px; margin-bottom: 12px;">
+            <label class="nalu-label" style="margin-bottom: 8px;">Transaction Types to Trace</label>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypePayment" checked style="width: 18px; height: 18px;">
+                <span>💸 Payments</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypeNFT" checked style="width: 18px; height: 18px;">
+                <span>🎨 NFTs</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypeAMM" checked style="width: 18px; height: 18px;">
+                <span>💧 AMM/LP</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypeDEX" checked style="width: 18px; height: 18px;">
+                <span>📊 DEX Offers</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypeEscrow" style="width: 18px; height: 18px;">
+                <span>🔒 Escrows</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="traceTypeCheck" style="width: 18px; height: 18px;">
+                <span>✓ Checks</span>
+              </label>
+            </div>
           </div>
 
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Ledger min</label>
-            <input id="traceLedgerMinInInspector" type="number" value="${DEFAULTS.ledgerMin}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+          <div class="nalu-field nalu-col-3">
+            <label class="nalu-label">Max hops</label>
+            <input id="traceHopsInInspector" class="nalu-input" type="number" min="1" max="10" value="${DEFAULTS.maxHops}" />
           </div>
 
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Ledger max</label>
-            <input id="traceLedgerMaxInInspector" type="number" value="${DEFAULTS.ledgerMax}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+          <div class="nalu-field nalu-col-3">
+            <label class="nalu-label">Ledger min</label>
+            <input id="traceLedgerMinInInspector" class="nalu-input" type="number" value="${DEFAULTS.ledgerMin}" />
           </div>
 
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Per-account tx</label>
-            <input id="tracePerAcctInInspector" type="number" min="10" max="400" value="${DEFAULTS.perAccountTxLimit}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+          <div class="nalu-field nalu-col-3">
+            <label class="nalu-label">Ledger max</label>
+            <input id="traceLedgerMaxInInspector" class="nalu-input" type="number" value="${DEFAULTS.ledgerMax}" />
           </div>
 
-          <div>
-            <label style="display:block; color: var(--text-secondary); font-weight: 800; margin-bottom: 6px;">Max edges</label>
-            <input id="traceMaxEdgesInInspector" type="number" min="50" max="5000" value="${DEFAULTS.maxEdges}"
-              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.35); color:var(--text-primary); outline:none;" />
+          <div class="nalu-field nalu-col-3">
+            <label class="nalu-label">Per-account tx</label>
+            <input id="tracePerAcctInInspector" class="nalu-input" type="number" min="10" max="400" value="${DEFAULTS.perAccountTxLimit}" />
           </div>
 
-          <div style="grid-column: 1 / -1; display:flex; gap:10px; flex-wrap:wrap; margin-top: 6px;">
-            <button id="traceUseCurrentAccount" class="about-btn" type="button">Use inspector account</button>
-            <button id="traceRunInInspector" class="about-btn" type="button">Start trace</button>
-            <button id="traceCancelInInspector" class="about-btn" type="button" style="opacity:0.85;">Cancel</button>
-            <button id="traceExportJsonInInspector" class="about-btn" type="button" disabled>Export JSON</button>
-            <button id="traceExportCsvInInspector" class="about-btn" type="button" disabled>Export CSV</button>
-          </div>
-
-          <div style="grid-column: 1 / -1; margin-top: 10px;">
-            <div id="traceStatusInInspector" style="color: var(--text-secondary);"></div>
+          <div class="nalu-field nalu-col-3">
+            <label class="nalu-label">Max edges</label>
+            <input id="traceMaxEdgesInInspector" class="nalu-input" type="number" min="50" max="5000" value="${DEFAULTS.maxEdges}" />
           </div>
         </div>
-      </div>
 
-      <div id="traceResultsInInspector" style="margin-top: 14px;"></div>
+        <div class="nalu-trace-actions">
+          <button id="traceUseCurrentAccount" class="nalu-btn" type="button">Use inspector seed</button>
+          <button id="traceRunInInspector" class="nalu-btn primary" type="button">Start Enhanced Trace</button>
+          <button id="traceCancelInInspector" class="nalu-btn danger" type="button">Cancel</button>
+          <button id="traceExportJsonInInspector" class="nalu-btn" type="button" disabled>Export JSON</button>
+          <button id="traceExportCsvInInspector" class="nalu-btn" type="button" disabled>Export CSV</button>
+        </div>
+
+        <div id="traceStatusInInspector" class="nalu-trace-status"></div>
+        <div id="traceResultsInInspector" class="nalu-trace-results"></div>
+      </div>
     `;
+
+    bindUI();
+    
+    const seed = getBestSeedFromInspectorUI();
+    if (seed && $("traceVictimInInspector")) {
+      $("traceVictimInInspector").value = seed;
+    }
   }
 
-  function ensureTracePanelReady() {
-    // Avoid double binding
-    const runBtn = el("traceRunInInspector");
+  function bindUI() {
+    const runBtn = $("traceRunInInspector");
     if (runBtn && runBtn.__bound) return;
     if (runBtn) runBtn.__bound = true;
 
-    // Help accordion
-    el("traceHelpBtnInInspector")?.addEventListener("click", () => {
-      const body = el("traceHelpBodyInInspector");
-      const btn = el("traceHelpBtnInInspector");
+    $("traceHelpBtnInInspector")?.addEventListener("click", () => {
+      const body = $("traceHelpBodyInInspector");
+      const btn = $("traceHelpBtnInInspector");
       if (!body || !btn) return;
-      const open = body.style.display !== "none";
-      body.style.display = open ? "none" : "block";
+
+      const open = !body.hidden;
+      body.hidden = open;
       btn.setAttribute("aria-expanded", open ? "false" : "true");
+
       const chev = btn.querySelector(".about-acc-chevron");
       if (chev) chev.textContent = open ? "▾" : "▴";
     });
 
-    // Use current inspector account
-    el("traceUseCurrentAccount")?.addEventListener("click", () => {
-      const acct = getCurrentInspectorAccount();
-      if (acct) el("traceVictimInInspector").value = acct;
-      else setTraceStatus("⚠️ No inspector account detected yet. Enter an account, or load one in the inspector first.", false);
+    $("traceUseCurrentAccount")?.addEventListener("click", () => {
+      const seed = getBestSeedFromInspectorUI();
+      if (seed && $("traceVictimInInspector")) {
+        $("traceVictimInInspector").value = seed;
+      } else {
+        setTraceStatus("⚠️ No seed detected yet. Paste an account (r...) above.", false);
+      }
     });
 
-    // Trace buttons
-    el("traceRunInInspector")?.addEventListener("click", runTrace);
-    el("traceCancelInInspector")?.addEventListener("click", cancelTrace);
+    $("traceRunInInspector")?.addEventListener("click", runTrace);
+    $("traceCancelInInspector")?.addEventListener("click", cancelTrace);
   }
 
   function setTraceStatus(msg, isError) {
-    const out = el("traceStatusInInspector");
+    const out = $("traceStatusInInspector");
     if (!out) return;
-    out.style.color = isError ? "#ff6e6e" : "var(--text-secondary)";
+    out.style.color = isError ? "#ff6e6e" : "var(--text-secondary, rgba(255,255,255,0.78))";
     out.innerHTML = msg;
   }
 
   function disableTraceControls(disabled) {
     ["traceRunInInspector", "traceUseCurrentAccount"].forEach((id) => {
-      const b = el(id);
+      const b = $(id);
       if (b) b.disabled = !!disabled;
     });
-    const cancelBtn = el("traceCancelInInspector");
+
+    const cancelBtn = $("traceCancelInInspector");
     if (cancelBtn) cancelBtn.disabled = false;
 
-    const ej = el("traceExportJsonInInspector");
-    const ec = el("traceExportCsvInInspector");
+    const ej = $("traceExportJsonInInspector");
+    const ec = $("traceExportCsvInInspector");
     if (ej) ej.disabled = true;
     if (ec) ec.disabled = true;
   }
 
   function clearResults() {
-    const r = el("traceResultsInInspector");
+    const r = $("traceResultsInInspector");
     if (r) r.innerHTML = "";
   }
 
-  // -----------------------------
-  // Trace engine (Payments BFS)
-  // -----------------------------
+  // ---------------- TRACE ENGINE (MULTI-ASSET BFS) ----------------
   async function runTrace() {
     if (traceRunning) return;
 
-    const victim = (el("traceVictimInInspector")?.value || "").trim();
+    const victim = ($("traceVictimInInspector")?.value || "").trim();
     if (!isXRPLAccount(victim)) {
       setTraceStatus("❌ Please enter a valid XRPL account (r...).", true);
       return;
     }
 
-    const maxHops = clampInt(el("traceHopsInInspector")?.value, 1, 10, DEFAULTS.maxHops);
-    const ledgerMin = parseInt(el("traceLedgerMinInInspector")?.value ?? DEFAULTS.ledgerMin, 10);
-    const ledgerMax = parseInt(el("traceLedgerMaxInInspector")?.value ?? DEFAULTS.ledgerMax, 10);
-    const perAcct = clampInt(el("tracePerAcctInInspector")?.value, 10, 400, DEFAULTS.perAccountTxLimit);
-    const maxEdges = clampInt(el("traceMaxEdgesInInspector")?.value, 50, 5000, DEFAULTS.maxEdges);
+    const maxHops = clampInt($("traceHopsInInspector")?.value, 1, 10, DEFAULTS.maxHops);
+    const ledgerMin = parseInt($("traceLedgerMinInInspector")?.value ?? DEFAULTS.ledgerMin, 10);
+    const ledgerMax = parseInt($("traceLedgerMaxInInspector")?.value ?? DEFAULTS.ledgerMax, 10);
+    const perAcct = clampInt($("tracePerAcctInInspector")?.value, 10, 400, DEFAULTS.perAccountTxLimit);
+    const maxEdges = clampInt($("traceMaxEdgesInInspector")?.value, 50, 5000, DEFAULTS.maxEdges);
+
+    // Get enabled transaction types
+    const traceTypes = {
+      payment: $("traceTypePayment")?.checked ?? true,
+      nft: $("traceTypeNFT")?.checked ?? true,
+      amm: $("traceTypeAMM")?.checked ?? true,
+      dex: $("traceTypeDEX")?.checked ?? true,
+      escrow: $("traceTypeEscrow")?.checked ?? false,
+      check: $("traceTypeCheck")?.checked ?? false
+    };
 
     traceRunning = true;
     traceCancelled = false;
+    lastResult = null;
 
-    setTraceStatus("⏳ Starting trace…", false);
+    setTraceStatus("⏳ Starting enhanced multi-asset trace…", false);
     disableTraceControls(true);
     clearResults();
 
     try {
-      const result = await traceOutgoingPaymentsBFS({
+      const result = await traceMultiAssetBFS({
         victim,
         maxHops,
         ledgerMin: Number.isFinite(ledgerMin) ? ledgerMin : -1,
         ledgerMax: Number.isFinite(ledgerMax) ? ledgerMax : -1,
         perAccountTxLimit: perAcct,
-        maxEdges
+        maxEdges,
+        traceTypes
       });
 
       if (traceCancelled) {
@@ -525,9 +367,34 @@
         return;
       }
 
+      lastResult = result;
+      
+      // Store globally for pattern detection
+      window._currentTraceData = {
+        origin: result.victim,
+        edges: result.edges,
+        nodes: result.nodes,
+        nftData: result.nftData,
+        ammData: result.ammData,
+        params: {
+          maxHops: result.maxHops,
+          ledgerMin: result.ledgerMin,
+          ledgerMax: result.ledgerMax,
+          traceTypes: result.traceTypes
+        }
+      };
+
       renderTraceResults(result);
       wireExportButtons(result);
-      setTraceStatus(`✅ Trace complete: ${result.edges.length} edges • ${result.nodes.size} accounts • depth ${result.maxDepthReached}`, false);
+      
+      // Initialize integrations after results are rendered
+      initializeIntegrations();
+
+      const typeCounts = result.typeBreakdown;
+      setTraceStatus(
+        `✅ Trace complete: ${result.edges.length} edges (💸${typeCounts.payment} 🎨${typeCounts.nft} 💧${typeCounts.amm} 📊${typeCounts.dex}) • ${result.nodes.size} accounts • depth ${result.maxDepthReached}`,
+        false
+      );
     } catch (err) {
       console.error(err);
       setTraceStatus(`❌ Trace failed: ${escapeHtml(err?.message || String(err))}`, true);
@@ -543,18 +410,21 @@
     setTraceStatus("🟡 Cancelling…", false);
   }
 
-  async function traceOutgoingPaymentsBFS(opts) {
-    const { victim, maxHops, ledgerMin, ledgerMax, perAccountTxLimit, maxEdges } = opts;
+  async function traceMultiAssetBFS(opts) {
+    const { victim, maxHops, ledgerMin, ledgerMax, perAccountTxLimit, maxEdges, traceTypes } = opts;
 
     const visited = new Set();
     const nodes = new Set();
     const edges = [];
+    const nftData = []; // NFT-specific data
+    const ammData = []; // AMM-specific data
     const queue = [{ account: victim, depth: 0 }];
 
     visited.add(victim);
     nodes.add(victim);
 
     let maxDepthReached = 0;
+    const typeBreakdown = { payment: 0, nft: 0, amm: 0, dex: 0, escrow: 0, check: 0, other: 0 };
 
     while (queue.length) {
       if (traceCancelled) break;
@@ -563,29 +433,43 @@
       const { account, depth } = queue.shift();
       maxDepthReached = Math.max(maxDepthReached, depth);
 
-      setTraceStatus(`🔍 Depth ${depth}/${maxHops} • edges ${edges.length}/${maxEdges} • ${escapeHtml(shortAddr(account))}`, false);
+      setTraceStatus(
+        `🔍 Depth ${depth}/${maxHops} • edges ${edges.length}/${maxEdges} • ${escapeHtml(shortAddr(account))} • [💸${typeBreakdown.payment} 🎨${typeBreakdown.nft} 💧${typeBreakdown.amm} 📊${typeBreakdown.dex}]`,
+        false
+      );
 
       if (depth >= maxHops) continue;
 
-      const outgoing = await fetchOutgoingPaymentEdges(account, {
+      const { edges: outgoing, nfts, amms } = await fetchMultiAssetEdges(account, {
         ledgerMin,
         ledgerMax,
-        perAccountTxLimit
+        perAccountTxLimit,
+        traceTypes
       });
 
       for (const e of outgoing) {
         if (traceCancelled) break;
-        edges.push(e);
-        nodes.add(e.from);
-        nodes.add(e.to);
 
-        if (!visited.has(e.to)) {
+        edges.push(e);
+        
+        // Track type breakdown
+        const category = categorizeEdgeType(e);
+        typeBreakdown[category] = (typeBreakdown[category] || 0) + 1;
+        
+        nodes.add(e.from);
+        if (e.to) nodes.add(e.to);
+
+        if (e.to && !visited.has(e.to)) {
           visited.add(e.to);
           queue.push({ account: e.to, depth: depth + 1 });
         }
 
         if (edges.length >= maxEdges) break;
       }
+
+      // Store NFT/AMM specific data
+      nftData.push(...nfts);
+      ammData.push(...amms);
 
       await sleep(80);
     }
@@ -597,25 +481,41 @@
       ledgerMax,
       perAccountTxLimit,
       maxEdges,
+      traceTypes,
       maxDepthReached,
       nodes,
       edges,
+      nftData,
+      ammData,
+      typeBreakdown,
       createdAt: new Date().toISOString()
     };
   }
 
-  async function fetchOutgoingPaymentEdges(account, params) {
-    const { ledgerMin, ledgerMax, perAccountTxLimit } = params;
+  async function fetchMultiAssetEdges(account, params) {
+    const { ledgerMin, ledgerMax, perAccountTxLimit, traceTypes } = params;
 
     const edges = [];
+    const nfts = [];
+    const amms = [];
     let marker = undefined;
     let fetched = 0;
+
+    // Build enabled types list
+    const enabledTypes = [];
+    if (traceTypes.payment) enabledTypes.push(...TX_TYPES.PAYMENT);
+    if (traceTypes.nft) enabledTypes.push(...TX_TYPES.NFT);
+    if (traceTypes.amm) enabledTypes.push(...TX_TYPES.AMM);
+    if (traceTypes.dex) enabledTypes.push(...TX_TYPES.DEX);
+    if (traceTypes.escrow) enabledTypes.push(...TX_TYPES.ESCROW);
+    if (traceTypes.check) enabledTypes.push(...TX_TYPES.CHECK);
 
     while (true) {
       if (traceCancelled) break;
       if (fetched >= perAccountTxLimit) break;
 
       const limit = Math.min(200, perAccountTxLimit - fetched);
+
       const payload = {
         command: "account_tx",
         account,
@@ -627,42 +527,256 @@
       if (marker) payload.marker = marker;
 
       const res = await requestWithRetry(payload, 3);
-      const txs = res?.result?.transactions || [];
+
+      const rr = res?.result ? res.result : res;
+      const txs = rr?.transactions || [];
       fetched += txs.length;
 
       for (const item of txs) {
         const tx = item?.tx || item;
         const meta = item?.meta || item?.metaData;
+        const txType = tx?.TransactionType;
 
-        if (!tx || tx.TransactionType !== "Payment") continue;
+        if (!tx || !enabledTypes.includes(txType)) continue;
         if (tx.Account !== account) continue;
-        if (!tx.Destination) continue;
 
-        const delivered = meta?.delivered_amount ?? meta?.DeliveredAmount;
-        const amt = delivered ?? tx.Amount;
+        // Parse based on type
+        const edge = parseTransactionToEdge(tx, meta, item);
+        if (edge) {
+          edges.push(edge);
 
-        const parsed = parseAmount(amt);
-
-        edges.push({
-          from: tx.Account,
-          to: tx.Destination,
-          amount: parsed.display,
-          amount_xrp: parsed.xrp,
-          currency: parsed.currency,
-          issuer: parsed.issuer,
-          tx_hash: item?.hash || tx?.hash || tx?.TransactionHash || null,
-          ledger_index: item?.ledger_index ?? tx?.ledger_index ?? null,
-          validated: !!item?.validated
-        });
+          // Store type-specific data
+          if (TX_TYPES.NFT.includes(txType)) {
+            nfts.push(extractNFTData(tx, meta, item));
+          } else if (TX_TYPES.AMM.includes(txType)) {
+            amms.push(extractAMMData(tx, meta, item));
+          }
+        }
 
         if (edges.length >= perAccountTxLimit) break;
       }
 
-      marker = res?.result?.marker;
+      marker = rr?.marker;
       if (!marker) break;
     }
 
-    return edges;
+    return { edges, nfts, amms };
+  }
+
+  function parseTransactionToEdge(tx, meta, item) {
+    const txType = tx.TransactionType;
+    const from = tx.Account;
+    const hash = item?.hash || tx?.hash || null;
+    const ledger = item?.ledger_index ?? tx?.ledger_index ?? null;
+    const validated = !!item?.validated;
+
+    let to = null;
+    let amount = null;
+    let currency = null;
+    let issuer = null;
+    let nftID = null;
+    let ammID = null;
+    let metadata = {};
+
+    // Payment
+    if (txType === 'Payment') {
+      to = tx.Destination;
+      const delivered = meta?.delivered_amount ?? meta?.DeliveredAmount ?? tx.Amount;
+      const parsed = parseAmount(delivered);
+      amount = parsed.display;
+      currency = parsed.currency;
+      issuer = parsed.issuer;
+    }
+
+    // NFT Transactions
+    else if (TX_TYPES.NFT.includes(txType)) {
+      nftID = tx.NFTokenID || tx.NFToken || null;
+      
+      if (txType === 'NFTokenAcceptOffer') {
+        // Buyer/Seller from metadata
+        const nodes = meta?.AffectedNodes || [];
+        for (const node of nodes) {
+          const modNode = node.ModifiedNode || node.CreatedNode || node.DeletedNode;
+          if (modNode?.LedgerEntryType === 'NFTokenOffer') {
+            to = modNode.FinalFields?.Destination || modNode.FinalFields?.Owner;
+            amount = modNode.FinalFields?.Amount;
+            break;
+          }
+        }
+      } else if (txType === 'NFTokenCreateOffer') {
+        to = tx.Destination || tx.Owner;
+        amount = tx.Amount;
+      } else if (txType === 'NFTokenMint') {
+        to = from; // Minter
+      } else if (txType === 'NFTokenBurn') {
+        to = null;
+      }
+
+      if (amount) {
+        const parsed = parseAmount(amount);
+        amount = parsed.display;
+        currency = parsed.currency;
+        issuer = parsed.issuer;
+      }
+
+      metadata = {
+        nftID,
+        uri: tx.URI ? hexToString(tx.URI) : null,
+        transferFee: tx.TransferFee,
+        flags: tx.Flags
+      };
+    }
+
+    // AMM Transactions
+    else if (TX_TYPES.AMM.includes(txType)) {
+      ammID = tx.Asset || tx.Asset2 || null;
+      to = tx.Account; // Usually self-referencing
+      
+      if (txType === 'AMMDeposit' || txType === 'AMMWithdraw') {
+        amount = tx.Amount || tx.Amount2;
+        if (amount) {
+          const parsed = parseAmount(amount);
+          amount = parsed.display;
+          currency = parsed.currency;
+          issuer = parsed.issuer;
+        }
+      }
+
+      metadata = {
+        ammID,
+        asset: tx.Asset,
+        asset2: tx.Asset2,
+        lpTokens: tx.LPTokenOut || tx.LPTokenIn,
+        tradingFee: tx.TradingFee
+      };
+    }
+
+    // DEX Offers
+    else if (TX_TYPES.DEX.includes(txType)) {
+      if (txType === 'OfferCreate') {
+        const takerGets = tx.TakerGets;
+        const takerPays = tx.TakerPays;
+        
+        // Extract counterparty from issuer
+        if (typeof takerGets === 'object' && takerGets.issuer) {
+          to = takerGets.issuer;
+        } else if (typeof takerPays === 'object' && takerPays.issuer) {
+          to = takerPays.issuer;
+        }
+
+        amount = takerPays;
+        if (amount) {
+          const parsed = parseAmount(amount);
+          amount = parsed.display;
+          currency = parsed.currency;
+          issuer = parsed.issuer;
+        }
+
+        metadata = {
+          takerGets: takerGets,
+          takerPays: takerPays,
+          offerSequence: tx.OfferSequence
+        };
+      }
+    }
+
+    // Escrow
+    else if (TX_TYPES.ESCROW.includes(txType)) {
+      to = tx.Destination;
+      amount = tx.Amount;
+      if (amount) {
+        const parsed = parseAmount(amount);
+        amount = parsed.display;
+        currency = parsed.currency;
+        issuer = parsed.issuer;
+      }
+      metadata = {
+        finishAfter: tx.FinishAfter,
+        cancelAfter: tx.CancelAfter,
+        condition: tx.Condition
+      };
+    }
+
+    // Check
+    else if (TX_TYPES.CHECK.includes(txType)) {
+      to = tx.Destination;
+      amount = tx.SendMax || tx.Amount;
+      if (amount) {
+        const parsed = parseAmount(amount);
+        amount = parsed.display;
+        currency = parsed.currency;
+        issuer = parsed.issuer;
+      }
+      metadata = {
+        checkID: tx.CheckID,
+        invoiceID: tx.InvoiceID
+      };
+    }
+
+    if (!to) to = from; // Self-referencing transactions
+
+    return {
+      from,
+      to,
+      type: txType,
+      amount,
+      currency,
+      issuer,
+      nftID,
+      ammID,
+      tx_hash: hash,
+      ledger_index: ledger,
+      validated,
+      metadata
+    };
+  }
+
+  function extractNFTData(tx, meta, item) {
+    return {
+      nftID: tx.NFTokenID || tx.NFToken,
+      type: tx.TransactionType,
+      account: tx.Account,
+      destination: tx.Destination || tx.Owner,
+      amount: tx.Amount,
+      uri: tx.URI ? hexToString(tx.URI) : null,
+      transferFee: tx.TransferFee,
+      flags: tx.Flags,
+      offerID: tx.NFTokenSellOffer || tx.NFTokenBuyOffer,
+      tx_hash: item?.hash || tx?.hash,
+      ledger_index: item?.ledger_index ?? tx?.ledger_index,
+      date: item?.date ?? tx?.date
+    };
+  }
+
+  function extractAMMData(tx, meta, item) {
+    return {
+      ammID: tx.Asset || tx.Asset2,
+      type: tx.TransactionType,
+      account: tx.Account,
+      asset: tx.Asset,
+      asset2: tx.Asset2,
+      amount: tx.Amount,
+      amount2: tx.Amount2,
+      lpTokens: tx.LPTokenOut || tx.LPTokenIn,
+      tradingFee: tx.TradingFee,
+      tx_hash: item?.hash || tx?.hash,
+      ledger_index: item?.ledger_index ?? tx?.ledger_index,
+      date: item?.date ?? tx?.date
+    };
+  }
+
+  function hexToString(hex) {
+    try {
+      const clean = hex.replace(/^0x/i, '');
+      let str = '';
+      for (let i = 0; i < clean.length; i += 2) {
+        const code = parseInt(clean.slice(i, i + 2), 16);
+        if (code) str += String.fromCharCode(code);
+      }
+      return str || null;
+    } catch {
+      return null;
+    }
   }
 
   function parseAmount(amt) {
@@ -693,134 +807,401 @@
     return { xrp: null, currency: null, issuer: null, display: "unknown" };
   }
 
-  function trimFloat(n) {
-    const s = String(n);
-    if (s.includes("e") || s.includes("E")) return n.toFixed(6);
-    const fixed = n.toFixed(6);
-    return fixed.replace(/\.?0+$/, "");
+  function categorizeEdgeType(edge) {
+    const type = edge.type;
+    if (TX_TYPES.PAYMENT.includes(type)) return 'payment';
+    if (TX_TYPES.NFT.includes(type)) return 'nft';
+    if (TX_TYPES.AMM.includes(type)) return 'amm';
+    if (TX_TYPES.DEX.includes(type)) return 'dex';
+    if (TX_TYPES.ESCROW.includes(type)) return 'escrow';
+    if (TX_TYPES.CHECK.includes(type)) return 'check';
+    return 'other';
   }
 
-  // -----------------------------
-  // Results + exports
-  // -----------------------------
+  // ---------------- RESULTS RENDERING ----------------
   function renderTraceResults(result) {
-    const r = el("traceResultsInInspector");
+    const r = $("traceResultsInInspector");
     if (!r) return;
 
     const summary = summarizeEdges(result.edges, result.victim);
+    const typeCounts = result.typeBreakdown;
 
     r.innerHTML = `
-      <div class="about-card">
-        <div class="about-card-top">
-          <div class="about-card-icon">📌</div>
-          <div class="about-card-title">Summary</div>
-          <div></div>
+      <div class="inspector-panel">
+        <div class="nalu-trace-head">
+          <div class="nalu-trace-title">📌 Multi-Asset Summary</div>
+          <div class="nalu-trace-sub">All transaction types</div>
         </div>
-        <div class="about-card-body">
-          <div style="display:flex; gap:14px; flex-wrap:wrap;">
-            <div><strong>Victim:</strong> ${escapeHtml(result.victim)}</div>
-            <div><strong>Edges:</strong> ${result.edges.length}</div>
-            <div><strong>Accounts:</strong> ${result.nodes.size}</div>
-            <div><strong>Depth reached:</strong> ${result.maxDepthReached}</div>
+
+        <div class="nalu-kv">
+          <div><strong>Target:</strong> <span class="addr">${escapeHtml(result.victim)}</span></div>
+          <div><strong>Total Edges:</strong> ${result.edges.length}</div>
+          <div><strong>Accounts:</strong> ${result.nodes.size}</div>
+          <div><strong>Depth:</strong> ${result.maxDepthReached}</div>
+        </div>
+
+        <div style="margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;">
+          <div style="padding: 12px; background: rgba(80, 250, 123, 0.15); border-radius: 10px; border: 1px solid rgba(80, 250, 123, 0.3);">
+            <div style="font-size: 24px; font-weight: 900; color: #50fa7b;">${typeCounts.payment}</div>
+            <div style="font-size: 12px; opacity: 0.9;">💸 Payments</div>
           </div>
+          <div style="padding: 12px; background: rgba(189, 147, 249, 0.15); border-radius: 10px; border: 1px solid rgba(189, 147, 249, 0.3);">
+            <div style="font-size: 24px; font-weight: 900; color: #bd93f9;">${typeCounts.nft}</div>
+            <div style="font-size: 12px; opacity: 0.9;">🎨 NFTs</div>
+          </div>
+          <div style="padding: 12px; background: rgba(0, 212, 255, 0.15); border-radius: 10px; border: 1px solid rgba(0, 212, 255, 0.3);">
+            <div style="font-size: 24px; font-weight: 900; color: #00d4ff;">${typeCounts.amm}</div>
+            <div style="font-size: 12px; opacity: 0.9;">💧 AMM/LP</div>
+          </div>
+          <div style="padding: 12px; background: rgba(255, 184, 108, 0.15); border-radius: 10px; border: 1px solid rgba(255, 184, 108, 0.3);">
+            <div style="font-size: 24px; font-weight: 900; color: #ffb86c;">${typeCounts.dex}</div>
+            <div style="font-size: 12px; opacity: 0.9;">📊 DEX</div>
+          </div>
+        </div>
 
-          <div class="about-divider"></div>
-
-          <div style="font-weight:950; color: var(--text-primary); margin-bottom: 8px;">Top destinations (by outgoing count)</div>
-          <div style="display:grid; gap:8px;">
+        ${summary.topDests.length > 0 ? `
+          <div class="nalu-trace-sub" style="margin-top: 16px;">Top destinations (by count)</div>
+          <div class="nalu-mini-list">
             ${summary.topDests.slice(0, 10).map(d => `
-              <div class="whale-item">
-                <span>${escapeHtml(d.to)} <span style="color:var(--text-secondary)">(${escapeHtml(shortAddr(d.to))})</span></span>
-                <span style="color: var(--text-primary); font-weight:900;">${d.count}</span>
+              <div class="nalu-mini-item">
+                <span class="addr">${escapeHtml(d.to)} <span style="opacity:.75;">(${escapeHtml(shortAddr(d.to))})</span></span>
+                <span style="font-weight:950;">${d.count}</span>
               </div>
             `).join("")}
           </div>
+        ` : ''}
 
-          ${summary.totalXrpOut != null ? `
-            <div style="margin-top: 10px; color: var(--text-secondary);">
-              Estimated XRP out (victim payments parsed): <strong style="color: var(--text-primary);">${escapeHtml(trimFloat(summary.totalXrpOut))} XRP</strong>
+        ${summary.nftStats.uniqueNFTs > 0 ? `
+          <div style="margin-top: 16px; padding: 14px; background: rgba(189, 147, 249, 0.1); border-radius: 10px; border: 1px solid rgba(189, 147, 249, 0.2);">
+            <div style="font-weight: 900; margin-bottom: 8px;">🎨 NFT Activity</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 13px;">
+              <div><strong>Unique NFTs:</strong> ${summary.nftStats.uniqueNFTs}</div>
+              <div><strong>Mints:</strong> ${summary.nftStats.mints}</div>
+              <div><strong>Trades:</strong> ${summary.nftStats.trades}</div>
+              <div><strong>Burns:</strong> ${summary.nftStats.burns}</div>
             </div>
-          ` : `
-            <div style="margin-top: 10px; color: var(--text-secondary);">
-              Note: XRP totals may be incomplete if payments are issued assets / partials / non-standard.
+          </div>
+        ` : ''}
+
+        ${summary.ammStats.uniquePools > 0 ? `
+          <div style="margin-top: 16px; padding: 14px; background: rgba(0, 212, 255, 0.1); border-radius: 10px; border: 1px solid rgba(0, 212, 255, 0.2);">
+            <div style="font-weight: 900; margin-bottom: 8px;">💧 AMM/LP Activity</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 13px;">
+              <div><strong>Unique Pools:</strong> ${summary.ammStats.uniquePools}</div>
+              <div><strong>Deposits:</strong> ${summary.ammStats.deposits}</div>
+              <div><strong>Withdrawals:</strong> ${summary.ammStats.withdrawals}</div>
+              <div><strong>Creates:</strong> ${summary.ammStats.creates}</div>
             </div>
-          `}
-        </div>
+          </div>
+        ` : ''}
       </div>
 
-      <div class="about-card" style="margin-top: 14px;">
-        <div class="about-card-top">
-          <div class="about-card-icon">🧾</div>
-          <div class="about-card-title">Extracted payment edges</div>
-          <div style="color: var(--text-secondary); font-weight: 800;">Payments only</div>
+      <div class="inspector-panel">
+        <div class="nalu-trace-head">
+          <div class="nalu-trace-title">🧾 All Transaction Edges</div>
+          <div class="nalu-trace-sub">${result.edges.length} rows</div>
         </div>
-        <div class="about-card-body" style="overflow:auto;">
+
+        <div class="nalu-table-wrap">
           ${renderEdgesTable(result.edges)}
         </div>
+
+        ${result.edges.length > 1200 ? `<div class="nalu-trace-sub">Showing first 1200 edges. Export for full data.</div>` : ""}
       </div>
     `;
   }
 
   function summarizeEdges(edges, victim) {
     const destCount = new Map();
-    let totalXrpOut = 0;
-    let sawXrp = false;
+    const nftStats = {
+      uniqueNFTs: new Set(),
+      mints: 0,
+      trades: 0,
+      burns: 0
+    };
+    const ammStats = {
+      uniquePools: new Set(),
+      deposits: 0,
+      withdrawals: 0,
+      creates: 0
+    };
 
     for (const e of edges) {
-      if (e.from === victim) {
+      if (e.to) {
         destCount.set(e.to, (destCount.get(e.to) || 0) + 1);
-        if (typeof e.amount_xrp === "number") {
-          totalXrpOut += e.amount_xrp;
-          sawXrp = true;
-        }
+      }
+
+      // NFT stats
+      if (e.nftID) {
+        nftStats.uniqueNFTs.add(e.nftID);
+        if (e.type === 'NFTokenMint') nftStats.mints++;
+        if (e.type === 'NFTokenAcceptOffer') nftStats.trades++;
+        if (e.type === 'NFTokenBurn') nftStats.burns++;
+      }
+
+      // AMM stats
+      if (e.ammID) {
+        ammStats.uniquePools.add(e.ammID);
+        if (e.type === 'AMMDeposit') ammStats.deposits++;
+        if (e.type === 'AMMWithdraw') ammStats.withdrawals++;
+        if (e.type === 'AMMCreate') ammStats.creates++;
       }
     }
+
+    nftStats.uniqueNFTs = nftStats.uniqueNFTs.size;
+    ammStats.uniquePools = ammStats.uniquePools.size;
 
     const topDests = Array.from(destCount.entries())
       .map(([to, count]) => ({ to, count }))
       .sort((a, b) => b.count - a.count);
 
-    return { topDests, totalXrpOut: sawXrp ? totalXrpOut : null };
+    return { topDests, nftStats, ammStats };
   }
 
   function renderEdgesTable(edges) {
-    const rows = edges.slice(0, 1200).map((e) => `
-      <tr>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(shortAddr(e.from))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(shortAddr(e.to))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(e.amount)}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">${escapeHtml(String(e.ledger_index ?? ""))}</td>
-        <td style="padding:8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--text-secondary);">${escapeHtml((e.tx_hash || "").slice(0, 10) + (e.tx_hash ? "…" : ""))}</td>
-      </tr>
-    `).join("");
+    const rows = edges.slice(0, 1200).map((e) => {
+      const typeIcon = getTypeIcon(e.type);
+      return `
+        <tr>
+          <td>${typeIcon} ${escapeHtml(e.type)}</td>
+          <td>${escapeHtml(shortAddr(e.from))}</td>
+          <td>${escapeHtml(shortAddr(e.to || 'N/A'))}</td>
+          <td>${escapeHtml(e.amount || 'N/A')}</td>
+          <td>${escapeHtml(String(e.ledger_index ?? ""))}</td>
+          <td style="color: var(--text-secondary, rgba(255,255,255,0.78));">${escapeHtml((e.tx_hash || "").slice(0, 12) + (e.tx_hash ? "…" : ""))}</td>
+        </tr>
+      `;
+    }).join("");
 
     return `
-      <table style="width:100%; border-collapse: collapse; min-width: 860px;">
+      <table class="nalu-trace-table">
         <thead>
           <tr>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">From</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">To</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Amount</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Ledger</th>
-            <th style="text-align:left; padding:8px 10px; color: var(--text-secondary); font-weight: 950;">Tx</th>
+            <th>Type</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Amount</th>
+            <th>Ledger</th>
+            <th>Tx</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
-      ${edges.length > 1200 ? `<div style="margin-top:10px; color:var(--text-secondary);">Showing first 1200 edges. Export for full data.</div>` : ""}
     `;
   }
 
+  function getTypeIcon(type) {
+    if (TX_TYPES.PAYMENT.includes(type)) return '💸';
+    if (TX_TYPES.NFT.includes(type)) return '🎨';
+    if (TX_TYPES.AMM.includes(type)) return '💧';
+    if (TX_TYPES.DEX.includes(type)) return '📊';
+    if (TX_TYPES.ESCROW.includes(type)) return '🔒';
+    if (TX_TYPES.CHECK.includes(type)) return '✓';
+    return '📄';
+  }
+
+  // ---------------- INTEGRATIONS ----------------
+  function initializeIntegrations() {
+    setTimeout(() => {
+      addPatternDetectionSection();
+      console.log('✅ Enhanced trace tab integrations initialized');
+    }, 100);
+  }
+
+  function addPatternDetectionSection() {
+    const resultsContainer = $("traceResultsInInspector");
+    if (!resultsContainer || document.getElementById('trace-pattern-section')) return;
+    
+    const patternSection = document.createElement('div');
+    patternSection.id = 'trace-pattern-section';
+    patternSection.style.cssText = `
+      margin-top: 24px;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    `;
+    
+    patternSection.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h3 style="margin: 0 0 4px 0; font-size: 20px; font-weight: 900; color: #ff6b6b;">
+            🚨 Advanced Pattern Detection
+          </h3>
+          <p style="margin: 0; opacity: 0.8; font-size: 13px;">
+            Multi-asset manipulation detection: NFT wash sales, AMM rug pulls, LP sandwich attacks, floor manipulation
+          </p>
+        </div>
+        
+        <button id="runPatternDetection" class="nav-btn" style="padding: 10px 18px; border-radius: 12px; background: linear-gradient(135deg, #ff6b6b, #ff5252); border: none; color: #000; font-weight: 900; font-size: 13px; cursor: pointer; box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);">
+          🔍 Analyze All Patterns
+        </button>
+      </div>
+      
+      <div id="pattern-results" style="min-height: 80px;">
+        <div style="opacity: 0.7; text-align: center; padding: 20px;">
+          Click "Analyze All Patterns" to scan for suspicious activity across all asset types
+        </div>
+      </div>
+    `;
+    
+    resultsContainer.appendChild(patternSection);
+    
+    document.getElementById('runPatternDetection')?.addEventListener('click', async () => {
+      await analyzeCurrentTraceForPatterns();
+    });
+  }
+
+  async function analyzeCurrentTraceForPatterns() {
+    const resultsEl = document.getElementById('pattern-results');
+    if (!resultsEl) return;
+    
+    if (!lastResult || !lastResult.edges || lastResult.edges.length === 0) {
+      resultsEl.innerHTML = `
+        <div style="padding: 20px; text-align: center; color: #ffb86c;">
+          ⚠️ No trace data available. Build a trace first.
+        </div>
+      `;
+      return;
+    }
+    
+    resultsEl.innerHTML = `
+      <div style="padding: 20px; text-align: center;">
+        <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid rgba(255, 107, 107, 0.3); border-top-color: #ff6b6b; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+        <div style="margin-top: 12px; font-weight: 700;">Analyzing multi-asset patterns...</div>
+      </div>
+      <style>
+        @keyframes spin { to { transform: rotate(360deg); } }
+      </style>
+    `;
+    
+    try {
+      if (!window.EnhancedPatternDetector) {
+        throw new Error('EnhancedPatternDetector not loaded. Please ensure enhanced-pattern-detector.js is included.');
+      }
+
+      const findings = await window.EnhancedPatternDetector.analyze(window._currentTraceData);
+      const report = window.EnhancedPatternDetector.generateReport(findings);
+      
+      displayPatternFindings(report);
+    } catch (error) {
+      console.error('Pattern detection error:', error);
+      resultsEl.innerHTML = `
+        <div style="padding: 20px; text-align: center; color: #ff6b6b;">
+          ❌ Error analyzing patterns: ${escapeHtml(error.message)}
+        </div>
+      `;
+    }
+  }
+
+  function displayPatternFindings(report) {
+    const resultsEl = document.getElementById('pattern-results');
+    if (!resultsEl) return;
+    
+    const { summary, findings } = report;
+    
+    if (findings.length === 0) {
+      resultsEl.innerHTML = `
+        <div style="padding: 20px; text-align: center; color: #50fa7b;">
+          ✅ No suspicious patterns detected across all asset types!
+        </div>
+      `;
+      return;
+    }
+    
+    const severityColors = {
+      HIGH: '#ff6b6b',
+      MEDIUM: '#ffb86c',
+      LOW: '#f1fa8c'
+    };
+    
+    resultsEl.innerHTML = `
+      <div style="padding: 16px; background: rgba(255, 107, 107, 0.1); border: 2px solid rgba(255, 107, 107, 0.3); border-radius: 12px; margin-bottom: 16px;">
+        <div style="font-weight: 900; font-size: 16px; margin-bottom: 12px;">
+          🚨 Found ${summary.total} Suspicious Pattern${summary.total !== 1 ? 's' : ''} Across All Assets
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
+          <div style="padding: 10px; background: rgba(255, 107, 107, 0.2); border-radius: 8px; text-align: center;">
+            <div style="font-size: 24px; font-weight: 900; color: ${severityColors.HIGH};">${summary.high}</div>
+            <div style="font-size: 12px; opacity: 0.8;">HIGH Severity</div>
+          </div>
+          <div style="padding: 10px; background: rgba(255, 184, 108, 0.2); border-radius: 8px; text-align: center;">
+            <div style="font-size: 24px; font-weight: 900; color: ${severityColors.MEDIUM};">${summary.medium}</div>
+            <div style="font-size: 12px; opacity: 0.8;">MEDIUM Severity</div>
+          </div>
+          <div style="padding: 10px; background: rgba(241, 250, 140, 0.2); border-radius: 8px; text-align: center;">
+            <div style="font-size: 24px; font-weight: 900; color: ${severityColors.LOW};">${summary.low}</div>
+            <div style="font-size: 12px; opacity: 0.8;">LOW Severity</div>
+          </div>
+        </div>
+      </div>
+      
+      <div style="max-height: 600px; overflow-y: auto;">
+        ${findings.map((finding) => `
+          <div style="padding: 16px; margin-bottom: 12px; background: rgba(0, 0, 0, 0.3); border-left: 4px solid ${severityColors[finding.severity]}; border-radius: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+              <div>
+                <span style="background: ${severityColors[finding.severity]}33; color: ${severityColors[finding.severity]}; padding: 4px 10px; border-radius: 6px; font-weight: 900; font-size: 11px; letter-spacing: 0.5px;">
+                  ${finding.severity}
+                </span>
+                <span style="margin-left: 8px; opacity: 0.7; font-size: 12px;">
+                  ${(finding.confidence * 100).toFixed(0)}% confidence
+                </span>
+              </div>
+              <div style="font-weight: 900; font-size: 13px; color: ${severityColors[finding.severity]};">
+                ${getTypeIcon(finding.assetType || 'other')} ${finding.type.replace(/_/g, ' ')}
+              </div>
+            </div>
+            
+            <div style="font-size: 14px; line-height: 1.6; margin-bottom: 8px;">
+              ${escapeHtml(finding.description)}
+            </div>
+            
+            ${finding.recommendation ? `
+              <div style="margin-top: 8px; padding: 8px; background: rgba(0, 255, 240, 0.1); border-radius: 6px; font-size: 12px;">
+                💡 <strong>Recommendation:</strong> ${escapeHtml(finding.recommendation)}
+              </div>
+            ` : ''}
+            
+            ${finding.edges && finding.edges.length > 0 ? `
+              <details style="margin-top: 10px;">
+                <summary style="cursor: pointer; font-weight: 700; font-size: 12px; opacity: 0.8; padding: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 6px;">
+                  📊 View ${finding.edges.length} Related Transaction${finding.edges.length !== 1 ? 's' : ''}
+                </summary>
+                <div style="margin-top: 8px; padding: 10px; background: rgba(0, 0, 0, 0.3); border-radius: 6px; max-height: 200px; overflow-y: auto;">
+                  ${finding.edges.slice(0, 5).map(e => `
+                    <div style="padding: 6px; margin: 4px 0; background: rgba(255, 255, 255, 0.03); border-radius: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace;">
+                      <div>${getTypeIcon(e.type)} <strong>${escapeHtml(shortAddr(e.from))}</strong> → <strong>${escapeHtml(shortAddr(e.to || 'N/A'))}</strong></div>
+                      <div style="opacity: 0.7; margin-top: 2px;">${escapeHtml(e.amount || 'N/A')} • Ledger ${e.ledger_index || 'N/A'}</div>
+                    </div>
+                  `).join('')}
+                  ${finding.edges.length > 5 ? `<div style="text-align: center; opacity: 0.6; margin-top: 8px; font-size: 11px;">+ ${finding.edges.length - 5} more</div>` : ''}
+                </div>
+              </details>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+      
+      <div style="margin-top: 16px; padding: 12px; background: rgba(0, 255, 240, 0.1); border: 1px solid rgba(0, 255, 240, 0.3); border-radius: 10px; font-size: 12px; opacity: 0.9;">
+        💡 <strong>Multi-Asset Detection:</strong> Patterns analyzed across Payments, NFTs, AMM/LP, and DEX operations for comprehensive fraud detection.
+      </div>
+    `;
+  }
+
+  // ---------------- EXPORT FUNCTIONS ----------------
   function wireExportButtons(result) {
-    const ej = el("traceExportJsonInInspector");
-    const ec = el("traceExportCsvInInspector");
+    const ej = $("traceExportJsonInInspector");
+    const ec = $("traceExportCsvInInspector");
+
     if (ej) {
       ej.disabled = false;
-      ej.onclick = () => downloadJSON(serializeResult(result), `nalu_trace_${result.victim}_${Date.now()}.json`);
+      ej.onclick = () => downloadJSON(serializeResult(result), `nalu_enhanced_trace_${result.victim}_${Date.now()}.json`);
     }
     if (ec) {
       ec.disabled = false;
-      ec.onclick = () => downloadCSV(result.edges, `nalu_trace_edges_${result.victim}_${Date.now()}.csv`);
+      ec.onclick = () => downloadCSV(result.edges, `nalu_enhanced_trace_edges_${result.victim}_${Date.now()}.csv`);
     }
   }
 
@@ -833,10 +1214,14 @@
         ledgerMin: result.ledgerMin,
         ledgerMax: result.ledgerMax,
         perAccountTxLimit: result.perAccountTxLimit,
-        maxEdges: result.maxEdges
+        maxEdges: result.maxEdges,
+        traceTypes: result.traceTypes
       },
       nodes: Array.from(result.nodes),
-      edges: result.edges
+      edges: result.edges,
+      nftData: result.nftData,
+      ammData: result.ammData,
+      typeBreakdown: result.typeBreakdown
     };
   }
 
@@ -853,7 +1238,7 @@
   }
 
   function downloadCSV(edges, filename) {
-    const headers = ["from", "to", "amount", "amount_xrp", "currency", "issuer", "ledger_index", "tx_hash", "validated"];
+    const headers = ["type", "from", "to", "amount", "currency", "issuer", "nftID", "ammID", "ledger_index", "tx_hash", "validated"];
     const lines = [headers.join(",")];
 
     for (const e of edges) {
@@ -879,28 +1264,53 @@
     return s;
   }
 
-  // -----------------------------
-  // Install: watch inspector section activation
-  // -----------------------------
-  function install() {
-    const root = getInspectorRoot();
-    if (!root) return;
-
-    // Inject immediately if already active
-    if (isInspectorActive()) injectTraceTab();
-
-    // Observe class changes to detect when inspector becomes active
-    if (!root.__naluTraceObserver) {
-      const obs = new MutationObserver(() => {
-        if (isInspectorActive()) injectTraceTab();
-      });
-      obs.observe(root, { attributes: true, attributeFilter: ["class"] });
-      root.__naluTraceObserver = obs;
+  // ---------------- PUBLIC API ----------------
+  function initInspectorTraceTab({ mountId } = {}) {
+    const id = String(mountId || "inspectorTraceMount");
+    const mount = document.getElementById(id);
+    if (!mount) {
+      console.warn("Trace mount not found:", id);
+      return;
     }
+    
+    renderInto(mount);
+    
+    console.log(`✅ ${VERSION} mounted into #${id}`);
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    install();
-    console.log(`✅ ${VERSION} loaded`);
-  });
+  function setSeedAddress(addr) {
+    const v = String(addr || "").trim();
+    if (!isXRPLAccount(v)) return false;
+    const input = $("traceVictimInInspector") || document.getElementById("traceVictimInInspector");
+    if (input) input.value = v;
+    return true;
+  }
+
+  function getTraceData() {
+    if (!lastResult) return null;
+    return {
+      origin: lastResult.victim,
+      edges: lastResult.edges,
+      nodes: lastResult.nodes,
+      nftData: lastResult.nftData,
+      ammData: lastResult.ammData,
+      params: {
+        maxHops: lastResult.maxHops,
+        ledgerMin: lastResult.ledgerMin,
+        ledgerMax: lastResult.ledgerMax,
+        traceTypes: lastResult.traceTypes
+      }
+    };
+  }
+
+  // Export public API
+  window.initInspectorTraceTab = initInspectorTraceTab;
+  window.InspectorTraceTab = {
+    version: VERSION,
+    setSeedAddress,
+    getLastResult: () => lastResult,
+    getTraceData
+  };
+
+  console.log(`✅ ${VERSION} loaded - Multi-Asset Support Enabled`);
 })();
