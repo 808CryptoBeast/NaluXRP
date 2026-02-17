@@ -4,22 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NaluLF 🌊 – Riding The Ledger Waves</title>
-
   <meta name="description" content="NaluLF: Riding The Ledger Waves – Live XRPL analytics, validators, tokens, AMMs, NFTs, and more." />
-  <meta property="og:title" content="NaluLF 🌊 – Riding The Ledger Waves" />
-  <meta property="og:description" content="Ride the ledger waves with real-time XRP Ledger analytics, tokens, pools, and more." />
-  <meta property="og:type" content="website" />
-  <meta property="og:image" content="assets/logo.png" />
-
   <link rel="icon" href="assets/logo.png" type="image/png" />
 
-  <!-- COMPONENTS -->
   <link rel="stylesheet" href="css/components/animations.css" />
   <link rel="stylesheet" href="css/components/card.css" />
   <link rel="stylesheet" href="css/components/status.css" />
   <link rel="stylesheet" href="css/global-fonts.css" />
-
-  <!-- CSS (modular) -->
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/navbar.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
@@ -28,154 +19,179 @@
   <link rel="stylesheet" href="css/responsive.css" />
   <link rel="stylesheet" href="css/about.css" />
   <link rel="stylesheet" href="css/inspector.css" />
-
-  <!-- ✅ PAGE NAVIGATION SYSTEM - Ensures only one page visible at a time -->
   <link rel="stylesheet" href="css/page-navigation.css" />
 
-  <!-- XRPL + Charts -->
   <script src="https://unpkg.com/xrpl@4.4.2/build/xrpl-latest-min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body class="theme-gold">
 
-<!-- ========== NAVBAR ========== -->
-  <nav class="navbar" id="navbar">
+<!-- ===================== NAVBAR ===================== -->
+<nav class="navbar" id="navbar">
+  <div class="nav-main-row">
     <div class="nav-content">
 
-      <!-- Logo -->
-      <div class="nav-logo" onclick="switchPage('dashboard')" role="button" tabindex="0" aria-label="Go to Dashboard">
-        <div class="logo-text">🌊 <strong>NaluLF</strong></div>
-        <small class="logo-slogan">Riding The Ledger Waves</small>
+      <!-- ── LEFT: Shield + Title + Slogan ── -->
+      <div class="nav-logo" onclick="switchPage('dashboard')"
+           role="button" tabindex="0" aria-label="Go to Dashboard">
+        <div class="logo-shield">
+          <img src="images/NLF-Shield-blue.jpg" alt="NaluLF Shield" />
+        </div>
+        <div class="logo-text-container">
+          <div class="logo-text">Nalu<strong>LF</strong></div>
+          <small class="logo-slogan">Riding The Ledger Waves</small>
+        </div>
       </div>
-      
-      <!-- Menu Button -->
-      <button id="hamburger" type="button" aria-label="Open menu" aria-controls="navLinks" aria-expanded="false"></button>
 
-      <!-- Navigation Links -->
-      <div class="nav-links" id="navLinks" aria-label="Primary navigation">
+      <!-- ── CENTER: Dashboard · Inspector · Explore ▼ ── -->
+      <div class="nav-center" id="navLinks">
 
-        <button class="nav-btn" onclick="switchPage('dashboard')" type="button" title="Dashboard">
-          <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
+        <button class="nav-btn is-active" onclick="switchPage('dashboard')" type="button">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
         </button>
 
-        <button class="nav-btn" onclick="switchPage('inspector')" type="button" title="Account Inspector">
-          <span class="nav-icon">🔎</span><span class="nav-label">Inspector</span>
+        <button class="nav-btn" onclick="switchPage('inspector')" type="button">
+          <span class="nav-icon">🔎</span>
+          <span class="nav-label">Inspector</span>
         </button>
 
+        <!-- Combined Explore dropdown: Network + DeFi + Resources -->
         <div class="nav-dropdown">
           <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
-            <span class="nav-icon">🌐</span><span class="nav-label">Network</span>
+            <span class="nav-icon">🌊</span>
+            <span class="nav-label">Explore</span>
           </button>
+
           <div class="dropdown-menu" role="menu">
-            <button class="dropdown-item" type="button" onclick="switchPage('validators')">🛡️ Validators</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('analytics')">📈 Analytics</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('explorer')">🔍 Explorer</button>
+
+            <div class="dropdown-section-label">🌐 Network</div>
+            <button class="dropdown-item" onclick="switchPage('validators')">🛡️ Validators</button>
+            <button class="dropdown-item" onclick="switchPage('analytics')">📈 Analytics</button>
+            <button class="dropdown-item" onclick="switchPage('explorer')">🔍 Explorer</button>
+
+            <div class="dropdown-section-label">💰 DeFi</div>
+            <button class="dropdown-item" onclick="switchPage('tokens')">🪙 Tokens</button>
+            <button class="dropdown-item" onclick="switchPage('amm')">💧 AMM Pools</button>
+            <button class="dropdown-item" onclick="switchPage('nfts')">🎨 NFTs</button>
+
+            <div class="dropdown-section-label">📚 Resources</div>
+            <button class="dropdown-item" onclick="switchPage('news')">📰 News</button>
+            <button class="dropdown-item" onclick="switchPage('history')">📜 History</button>
+            <button class="dropdown-item" onclick="switchPage('about')">ℹ️ About</button>
+
           </div>
         </div>
 
-        <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
-            <span class="nav-icon">💰</span><span class="nav-label">DeFi</span>
-          </button>
-          <div class="dropdown-menu" role="menu">
-            <button class="dropdown-item" type="button" onclick="switchPage('tokens')">🪙 Tokens</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('amm')">💧 AMM Pools</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('nfts')">🎨 NFTs</button>
+      </div>
+
+      <!-- ── RIGHT: XRP Price · Mainnet · Profile · Hamburger ── -->
+      <div class="nav-right">
+
+        <!-- XRP Live Price -->
+        <div class="nav-pill nav-price-ticker" title="Live XRP Price">
+          <span class="price-label">XRP</span>
+          <span class="price-value" id="xrpPrice">$--</span>
+          <span class="price-change up" id="xrpChange">+0.0%</span>
+        </div>
+
+        <!-- Network / Mainnet selector -->
+        <div class="nav-pill nav-network-selector"
+             onclick="NaluNavbar.toggleNetworkSelector()"
+             data-dropdown-parent title="Switch Network">
+          <span class="network-dot" id="networkDot"></span>
+          <span class="network-name" id="networkName">Mainnet</span>
+
+          <div class="network-dropdown" id="networkDropdown">
+            <div class="network-option active" data-network="mainnet">
+              <span class="network-dot"></span>
+              <span class="network-option-name">Mainnet</span>
+              <span class="network-option-check">✓</span>
+            </div>
+            <div class="network-option" data-network="testnet">
+              <span class="network-dot testnet"></span>
+              <span class="network-option-name">Testnet</span>
+              <span class="network-option-check" style="display:none">✓</span>
+            </div>
+            <div class="network-option" data-network="devnet">
+              <span class="network-dot devnet"></span>
+              <span class="network-option-name">Devnet</span>
+              <span class="network-option-check" style="display:none">✓</span>
+            </div>
           </div>
         </div>
 
-        <div class="nav-dropdown">
-          <button class="nav-btn dropdown-toggle" type="button" aria-haspopup="true" aria-expanded="false">
-            <span class="nav-icon">📚</span><span class="nav-label">Resources</span>
-          </button>
-          <div class="dropdown-menu" role="menu">
-            <button class="dropdown-item" type="button" onclick="switchPage('news')">📰 News</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('history')">📜 History</button>
-            <button class="dropdown-item" type="button" onclick="switchPage('about')">ℹ️ About</button>
-          </div>
-        </div>
-
+        <!-- Profile (wallet connect lives inside profile page) -->
         <button class="nav-btn" onclick="switchPage('profile')" type="button" title="Profile">
-          <span class="nav-icon">👤</span><span class="nav-label">Profile</span>
+          <span class="nav-icon">👤</span>
+          <span class="nav-label">Profile</span>
         </button>
 
-        <button class="nav-btn" onclick="switchPage('settings')" type="button" title="Settings">
-          <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
-        </button>
+        <!-- Hamburger (tablet / small screens) -->
+        <button id="hamburger" type="button"
+                aria-label="Open menu" aria-expanded="false"></button>
 
-        <button class="nav-btn theme-btn" onclick="cycleTheme()" title="Change Theme" type="button">
-          🎨
-        </button>
       </div>
-
-      <!-- Connection Status -->
-      <div class="status-badge" title="XRPL Connection Status">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="connectionStatus">Connecting...</span>
-      </div>
-
     </div>
-  </nav>
-
-  <!-- Background Effects -->
-  <div class="background-effects">
-    <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
-    <div class="galaxy"></div>
-    <div class="stars-container" id="starsContainer"></div>
-  </div>
-  
-  <!-- =================== PAGE SECTIONS =================== -->
-  <div class="container">
-    <section id="dashboard" class="page-section active"></section>
-    <section id="validators" class="page-section"></section>
-    <section id="tokens" class="page-section"></section>
-    <section id="amm" class="page-section"></section>
-    <section id="analytics" class="page-section"></section>
-    <section id="explorer" class="page-section"></section>
-    <section id="nfts" class="page-section"></section>
-    <section id="profile" class="page-section"></section>
-    <section id="news" class="page-section"></section>
-    <section id="history" class="page-section"></section>
-    <section id="settings" class="page-section"></section>
-    <section id="about" class="page-section"></section>
-    <section id="inspector" class="page-section"></section>
   </div>
 
-  <!-- =================== JAVASCRIPT =================== -->
-  
-  <!-- Core utilities (load first) -->
-  <script src="js/utils.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/xrpl-connection.js"></script>
+  <!-- Breadcrumb -->
+  <div class="nav-breadcrumb-row">
+    <div class="nav-breadcrumb" id="navBreadcrumb">
+      <span class="breadcrumb-item active">Dashboard</span>
+    </div>
+  </div>
 
-  <!-- Page modules -->
-  <script type="module" src="js/dashboard.js"></script>
-  <script type="module" src="js/amm/index.js"></script>
+</nav>
 
-  <script src="js/validators.js"></script>
-  <script src="js/tokens.js"></script>
-  <script src="js/token-distribution.js"></script>
-  <script src="js/analytics.js"></script>
-  <script src="js/explorer.js"></script>
-  <script src="js/nfts.js"></script>
-  <script src="js/profile.js"></script>
-  <script src="js/news.js"></script>
-  <script src="js/history.js"></script>
-  <script src="js/settings.js"></script>
-  <script src="js/about.js"></script>
+<!-- Background Effects -->
+<div class="background-effects">
+  <div class="smoke"></div><div class="smoke"></div><div class="smoke"></div>
+  <div class="galaxy"></div>
+  <div class="stars-container" id="starsContainer"></div>
+</div>
 
-  <!-- Inspector modules -->
-  <script src="js/inspector/account-inspector.js"></script>
-  <script src="js/inspector/enhanced-pattern-detector.js"></script>
-  <script src="js/inspector/inspector-bubble-map.js"></script>
-  <script src="js/inspector/inspector-trace-tab.js"></script>
+<!-- PAGE SECTIONS -->
+<div class="container">
+  <section id="dashboard"  class="page-section active"></section>
+  <section id="validators" class="page-section"></section>
+  <section id="tokens"     class="page-section"></section>
+  <section id="amm"        class="page-section"></section>
+  <section id="analytics"  class="page-section"></section>
+  <section id="explorer"   class="page-section"></section>
+  <section id="nfts"       class="page-section"></section>
+  <section id="profile"    class="page-section"></section>
+  <section id="news"       class="page-section"></section>
+  <section id="history"    class="page-section"></section>
+  <section id="settings"   class="page-section"></section>
+  <section id="about"      class="page-section"></section>
+  <section id="inspector"  class="page-section"></section>
+</div>
 
-  <!-- ✅ Page Navigation System - Load LAST, after all page scripts -->
-  <script src="js/page-navigation.js"></script>
-
-  <!-- Navbar (load last) -->
-  <script src="js/navbar.js"></script>
+<!-- JAVASCRIPT -->
+<script src="js/utils.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/xrpl-connection.js"></script>
+<script type="module" src="js/dashboard.js"></script>
+<script type="module" src="js/amm/index.js"></script>
+<script src="js/validators.js"></script>
+<script src="js/tokens.js"></script>
+<script src="js/token-distribution.js"></script>
+<script src="js/analytics.js"></script>
+<script src="js/explorer.js"></script>
+<script src="js/nfts.js"></script>
+<script src="js/profile.js"></script>
+<script src="js/news.js"></script>
+<script src="js/history.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/about.js"></script>
+<script src="js/inspector/account-inspector.js"></script>
+<script src="js/inspector/enhanced-pattern-detector.js"></script>
+<script src="js/inspector/inspector-bubble-map.js"></script>
+<script src="js/inspector/inspector-trace-tab.js"></script>
+<script src="js/page-navigation.js"></script>
+<script src="js/navbar.js"></script>
 
 </body>
 </html>
