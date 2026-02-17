@@ -80,7 +80,6 @@ body {
   position: relative;
   background: var(--bg-primary);
   transition: background 0.6s ease, color 0.3s ease;
-  padding-top: 75px;  /* space for top navbar */
 }
 
 /* Gold theme (default) */
