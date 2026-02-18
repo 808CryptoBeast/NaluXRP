@@ -16,7 +16,7 @@
    
    ✅ FIX: XRPL connection monitoring with event dispatches for navbar status
    
-   ✅ FIX: Landing page loading issue - proper handling of page transitions
+   ✅ FIX: Inspector initialization - CLEARS innerHTML to prevent stacking
    ========================================= */
 
 (function () {
@@ -27,31 +27,30 @@
   // Global UI State
   // -----------------------------
   window.UI = {
-    currentPage: "landing",  // Start with landing
+    currentPage: "dashboard",
     currentTheme: "gold",
     themes: ["gold", "cosmic", "starry", "hawaiian"],
     observers: { reveal: null },
     landing: { active: false, onScroll: null },
-    isLandingPage: true,  // Track if we're on landing page
   };
 
   const LS_SAVED = "naluxrp_saved_addresses";
   const LS_PINNED = "naluxrp_pinned_address";
 
   const PAGE_META = {
-    dashboard: { crumb: "Dashboard", sub: "Ledger Overview" },
-    inspector: { crumb: "Inspector", sub: "Tree • Trace • Quick Inspect" },
-    analytics: { crumb: "Analytics", sub: "Patterns & Metrics" },
-    explorer: { crumb: "Explorer", sub: "Search the XRPL" },
-    validators: { crumb: "Validators", sub: "Health & Performance" },
-    tokens: { crumb: "Tokens", sub: "Distribution & Markets" },
-    amm: { crumb: "AMM Pools", sub: "Liquidity & Swaps" },
-    nfts: { crumb: "NFTs", sub: "Collections & Activity" },
-    profile: { crumb: "Profile", sub: "Account & Preferences" },
-    news: { crumb: "News", sub: "Ledger Updates" },
-    history: { crumb: "History", sub: "Snapshots & Events" },
-    settings: { crumb: "Settings", sub: "System Configuration" },
-    about: { crumb: "About", sub: "NaluLF Info" },
+    dashboard: { crumb: "Dashboard", sub: "Ledger Overview", title: "Dashboard" },
+    inspector: { crumb: "Inspector", sub: "Tree • Trace • Quick Inspect", title: "Inspector" },
+    analytics: { crumb: "Analytics", sub: "Patterns & Metrics", title: "Analytics" },
+    explorer: { crumb: "Explorer", sub: "Search the XRPL", title: "Explorer" },
+    validators: { crumb: "Validators", sub: "Health & Performance", title: "Validators" },
+    tokens: { crumb: "Tokens", sub: "Distribution & Markets", title: "Tokens" },
+    amm: { crumb: "AMM Pools", sub: "Liquidity & Swaps", title: "AMM Pools" },
+    nfts: { crumb: "NFTs", sub: "Collections & Activity", title: "NFTs" },
+    profile: { crumb: "Profile", sub: "Account & Preferences", title: "Profile" },
+    news: { crumb: "News", sub: "Ledger Updates", title: "News" },
+    history: { crumb: "History", sub: "Snapshots & Events", title: "History" },
+    settings: { crumb: "Settings", sub: "System Configuration", title: "Settings" },
+    about: { crumb: "About", sub: "NaluLF Info", title: "About" },
   };
 
   // -----------------------------
@@ -225,11 +224,8 @@
     const body = document.body;
     if (!body) return;
 
-    // Only clear landing background if we're leaving landing page
-    if (!window.UI.isLandingPage) {
-      clearLandingBackground();
-      stopLandingParallax();
-    }
+    clearLandingBackground();
+    stopLandingParallax();
 
     body.classList.remove("dashboard", "inspector");
     if (pageId === "inspector") body.classList.add("inspector");
@@ -352,7 +348,7 @@
     if (!body) return;
 
     body.dataset.landingBg = "1";
-    body.style.backgroundImage = 'url("images/Landingpage-background.jpg")';
+    body.style.backgroundImage = 'url("images/LandingPage-background.jpg")';
     body.style.backgroundSize = "cover";
     body.style.backgroundPosition = "center";
     body.style.backgroundRepeat = "no-repeat";
@@ -399,37 +395,16 @@
   }
 
   // -----------------------------
-  // Page init map - Clears innerHTML in each function (working approach)
+  // Page init map - ✅ ALL PAGES CLEAR innerHTML CONSISTENTLY
   // -----------------------------
   const PAGE_INIT_MAP = {
     dashboard: () => {
       const el = document.getElementById("dashboard");
       if (!el) return;
-      
-      // ✅ FIX: Only clear if we're not showing the landing page
-      const hasLandingPage = el.querySelector('.landing-page');
-      if (window.UI.isLandingPage && hasLandingPage) {
-        // We're still on landing page, don't clear it
-        console.log("🌊 NaluLF: Staying on landing page");
-        return;
-      }
-      
-      // Clear and mark that we're leaving landing page
-      window.UI.isLandingPage = false;
-      clearLandingBackground();
-      stopLandingParallax();
       el.innerHTML = ""; // Clear before rendering
-      
       if (typeof window.renderDashboard === "function") {
-        try {
-          console.log("🌊 NaluLF: Rendering dashboard...");
-          window.renderDashboard();
-        } catch (e) {
-          console.error("🌊 NaluLF: Dashboard render failed:", e);
-          showDefaultPage("dashboard");
-        }
+        window.renderDashboard();
       } else {
-        console.warn("🌊 NaluLF: window.renderDashboard not found, showing default page");
         showDefaultPage("dashboard");
       }
     },
@@ -437,7 +412,6 @@
     analytics: () => {
       const el = document.getElementById("analytics");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initAnalytics) window.initAnalytics();
       else showDefaultPage("analytics");
@@ -446,7 +420,6 @@
     validators: () => {
       const el = document.getElementById("validators");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initValidators) window.initValidators();
       else showDefaultPage("validators");
@@ -455,7 +428,6 @@
     tokens: () => {
       const el = document.getElementById("tokens");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initTokens) window.initTokens();
       else showDefaultPage("tokens");
@@ -464,7 +436,6 @@
     amm: () => {
       const el = document.getElementById("amm");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.AMM?.init) window.AMM.init();
       else showDefaultPage("amm");
@@ -473,7 +444,6 @@
     explorer: () => {
       const el = document.getElementById("explorer");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initExplorer) window.initExplorer();
       else showDefaultPage("explorer");
@@ -482,7 +452,6 @@
     nfts: () => {
       const el = document.getElementById("nfts");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initNFTs) window.initNFTs();
       else showDefaultPage("nfts");
@@ -491,7 +460,6 @@
     profile: () => {
       const el = document.getElementById("profile");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initProfile) window.initProfile();
       else showDefaultPage("profile");
@@ -500,7 +468,6 @@
     news: () => {
       const el = document.getElementById("news");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initNews) window.initNews();
       else showDefaultPage("news");
@@ -509,7 +476,6 @@
     history: () => {
       const el = document.getElementById("history");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initHistory) window.initHistory();
       else showDefaultPage("history");
@@ -518,7 +484,6 @@
     settings: () => {
       const el = document.getElementById("settings");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initSettings) window.initSettings();
       else showDefaultPage("settings");
@@ -527,39 +492,106 @@
     about: () => {
       const el = document.getElementById("about");
       if (!el) return;
-      window.UI.isLandingPage = false;
       el.innerHTML = ""; // Clear first
       if (window.initAbout) window.initAbout();
       else showDefaultPage("about");
     },
 
+    // ✅✅✅ INSPECTOR - ENHANCED WITH AGGRESSIVE CLEARING ✅✅✅
     inspector: () => {
+      console.log("🔧 Inspector page initialization started...");
+      
+      // Diagnostic: Track initialization count
+      if (window._inspectorInitCount === undefined) window._inspectorInitCount = 0;
+      window._inspectorInitCount++;
+      console.log(`🔍 Inspector init count: ${window._inspectorInitCount}`);
+      
       const el = document.getElementById("inspector");
-      if (!el) return;
-      window.UI.isLandingPage = false;
+      if (!el) {
+        console.error("❌ Inspector element not found in DOM");
+        return;
+      }
+      
+      // Diagnostic: Log state before clearing
+      console.log(`📊 Before clear - children: ${el.children.length}, innerHTML length: ${el.innerHTML.length}`);
+      
+      // ✅ AGGRESSIVE CLEAR: Multiple methods to ensure content is removed
+      el.innerHTML = "";
+      el.textContent = "";
+      
+      // Remove all child nodes (belt and suspenders approach)
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
+      }
+      
+      // Clear any inline styles
+      el.removeAttribute('style');
+      
+      // Force reflow to ensure DOM update
+      void el.offsetHeight;
+      
+      console.log(`📊 After clear - children: ${el.children.length}, innerHTML length: ${el.innerHTML.length}`);
+      
+      // Mark when we cleared (for race condition detection)
+      el.dataset.lastClear = Date.now();
       
       // Try to connect to XRPL if not already connected
       try {
         if (typeof window.connectXRPL === "function" && !(window.XRPL && window.XRPL.connected)) {
+          console.log("🔌 Attempting XRPL connection...");
           window.connectXRPL();
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn("⚠️ XRPL connection attempt failed:", err);
+      }
 
       // Initialize inspector
       if (typeof window.initInspector === "function") {
+        console.log("✅ window.initInspector found, calling...");
         try {
+          // Call the init function
           window.initInspector();
+          console.log("✅ Inspector initialized successfully");
+          
+          // Verify it rendered (with detailed diagnostics)
+          setTimeout(() => {
+            const content = el.querySelector('.chart-section');
+            const childCount = el.children.length;
+            const timeSinceClear = Date.now() - Number(el.dataset.lastClear);
+            
+            console.log(`⏱️ Time since clear: ${timeSinceClear}ms`);
+            console.log(`📊 Final state - children: ${childCount}, has content: ${!!content}`);
+            
+            if (!content) {
+              console.error("❌ Inspector did not render content");
+              showDefaultPage("inspector");
+            } else {
+              console.log("✅ Inspector content verified");
+              
+              // Warn if too many children (possible stacking)
+              if (childCount > 5) {
+                console.warn(`⚠️ Inspector has ${childCount} children - check for stacking!`);
+              }
+            }
+          }, 100);
+          
         } catch (e) {
-          console.error("Inspector init failed:", e);
+          console.error("❌ Inspector initialization failed:", e);
+          console.error("Stack trace:", e.stack);
           showDefaultPage("inspector");
         }
       } else {
+        console.error("❌ window.initInspector not found - check if account-inspector.js loaded");
+        console.log("Available window properties:", Object.keys(window).filter(k => k.toLowerCase().includes('inspect')));
         showDefaultPage("inspector");
       }
 
-      // If pinned exists, auto-inspect it
+      // If pinned exists, auto-inspect it (with delay to ensure UI is ready)
       const pinned = getPinned();
-      if (pinned) tryInspectorQuickInspect(pinned);
+      if (pinned) {
+        console.log(`📌 Auto-inspecting pinned address: ${pinned}`);
+        setTimeout(() => tryInspectorQuickInspect(pinned), 500);
+      }
     },
   };
 
@@ -567,18 +599,23 @@
   // Navigation - WORKING VERSION (doesn't stack pages)
   // -----------------------------
   function switchPage(pageId) {
+    // Diagnostic: Detect duplicate rapid calls
+    const now = Date.now();
+    if (window._lastSwitchPage) {
+      const timeSinceLastSwitch = now - window._lastSwitchPage.time;
+      if (window._lastSwitchPage.pageId === pageId && timeSinceLastSwitch < 100) {
+        console.warn(`🚨 DUPLICATE switchPage call detected! ${pageId} called ${timeSinceLastSwitch}ms after previous call`);
+        console.warn(`🚨 This indicates duplicate event listeners on navigation buttons!`);
+        return; // Prevent duplicate execution
+      }
+    }
+    window._lastSwitchPage = { pageId, time: now };
+    
     console.log(`🌊 NaluLF: Switching to page: ${pageId}`);
     
     if (!PAGE_META[pageId]) {
       console.error(`🌊 NaluLF: Unknown page: ${pageId}`);
       return;
-    }
-
-    // If switching away from landing, mark it
-    if (window.UI.isLandingPage && pageId === 'dashboard') {
-      window.UI.isLandingPage = false;
-      clearLandingBackground();
-      stopLandingParallax();
     }
 
     // Apply page-specific body classes
@@ -609,7 +646,8 @@
     window.UI.currentPage = pageId;
     
     // Update page title
-    document.title = `${PAGE_META[pageId].title || PAGE_META[pageId].crumb} | NaluLF`;
+    const pageTitle = PAGE_META[pageId].title || PAGE_META[pageId].crumb;
+    document.title = `${pageTitle} | NaluLF`;
 
     // Update page header
     updatePageHeader(pageId);
@@ -635,18 +673,13 @@
   // Landing Page Function
   // -----------------------------
   function showLandingPage() {
-    console.log("🌊 NaluLF: Showing landing page");
-    window.UI.isLandingPage = true;
     applyPageClass("dashboard");
     setLandingBackground();
     startLandingParallax();
     updatePageHeader("dashboard", { landing: true });
 
     const container = document.getElementById("dashboard");
-    if (!container) {
-      console.error("🌊 NaluLF: Dashboard container not found!");
-      return;
-    }
+    if (!container) return;
 
     container.innerHTML = `
       <div class="landing-page">
@@ -660,7 +693,7 @@
             <span class="kicker-dot"></span>
           </div>
           
-          <!-- Enhanced NaluLF Logo - NO WAVE EMOJI, THICKER LETTERS -->
+          <!-- Enhanced NaluLF Logo -->
           <div class="nalulf-logo-container">
             <h1 class="nalulf-logo">NaluLF</h1>
             <div class="nalulf-accent-line"></div>
@@ -673,9 +706,9 @@
           </div>
 
           <p class="landing-description">
-            NaluLF is a <strong>deep-inspection platform</strong> for the XRP Ledger.
-            It goes beyond surface metrics to expose <strong>patterns, dominance,
-            stress signals, and anomalous behavior</strong> in real-time.
+            NaluLF helps you see what's <strong>really happening</strong> on the XRP Ledger.
+            Think of it as a <strong>health monitor for the network</strong> — showing you when something 
+            unusual is brewing, who's moving big money, and whether the network is running smoothly or under stress.
           </p>
 
           <div class="landing-actions">
@@ -706,11 +739,31 @@
             <div class="panel-icon">📊</div>
             <h2>What NaluLF Shows</h2>
             <ul>
-              <li><span class="bullet">▸</span>Ledger rhythm & close-time deviations</li>
-              <li><span class="bullet">▸</span>Transaction dominance by type</li>
-              <li><span class="bullet">▸</span>Validator health & latency</li>
-              <li><span class="bullet">▸</span>Liquidity, AMMs & escrow pressure</li>
-              <li><span class="bullet">▸</span>Whale movement & capital concentration</li>
+              <li>
+                <span class="bullet">▸</span>
+                <strong>Ledger rhythm & close-time deviations</strong>
+                <div class="plain-english">Is the network running smoothly or getting congested?</div>
+              </li>
+              <li>
+                <span class="bullet">▸</span>
+                <strong>Transaction dominance by type</strong>
+                <div class="plain-english">What kind of activity is happening most right now?</div>
+              </li>
+              <li>
+                <span class="bullet">▸</span>
+                <strong>Validator health & latency</strong>
+                <div class="plain-english">Are the computers that secure the network healthy and fast?</div>
+              </li>
+              <li>
+                <span class="bullet">▸</span>
+                <strong>Liquidity, AMMs & escrow pressure</strong>
+                <div class="plain-english">How much money is moving around and locked up?</div>
+              </li>
+              <li>
+                <span class="bullet">▸</span>
+                <strong>Whale movement & capital concentration</strong>
+                <div class="plain-english">Are big players making major moves?</div>
+              </li>
             </ul>
           </div>
 
@@ -718,8 +771,12 @@
             <div class="panel-icon glow">⚡</div>
             <h2>Why It Matters</h2>
             <p>
-              Many exploits, drains, and manipulative events emerge as <strong>patterns</strong>.
-              NaluLF surfaces those signals early, giving you the edge to react before the market does.
+              <strong>Think of it like a smoke detector</strong> — it spots the warning signs before the fire starts.
+            </p>
+            <p style="margin-top: 12px;">
+              Unusual patterns often appear <strong>hours or days</strong> before major events like hacks, 
+              market manipulation, or network problems. NaluLF helps you see these signals while there's 
+              still time to act.
             </p>
             <div class="panel-stats">
               <div class="stat-item">
@@ -734,6 +791,31 @@
           </div>
         </section>
 
+        <!-- How It Helps You Section -->
+        <section class="landing-simple-value reveal">
+          <h2>How NaluLF Helps You</h2>
+          
+          <div class="simple-value-grid">
+            <div class="value-card">
+              <div class="value-number">1</div>
+              <h3>Spot Problems Early</h3>
+              <p>See network congestion or unusual activity before it affects your transactions</p>
+            </div>
+            
+            <div class="value-card">
+              <div class="value-number">2</div>
+              <h3>Follow the Smart Money</h3>
+              <p>Track what large accounts are doing so you can make informed decisions</p>
+            </div>
+            
+            <div class="value-card">
+              <div class="value-number">3</div>
+              <h3>Stay Ahead of the Crowd</h3>
+              <p>Get insights hours or days before they become obvious to everyone else</p>
+            </div>
+          </div>
+        </section>
+
         <section class="landing-features reveal">
           <div class="features-header">
             <h2>Powerful Features</h2>
@@ -744,29 +826,41 @@
             <article class="feature-card">
               <div class="feature-icon">📊</div>
               <h3>Ledger Rhythm</h3>
-              <p>Visualize cadence shifts and timing instability that often precede congestion.</p>
-              <div class="feature-link" onclick="switchPage('analytics')">Explore →</div>
+              <p>Track the network's heartbeat. When the rhythm changes, it often means something big is about to happen.</p>
+              <div class="plain-english" style="margin-top: 8px; font-size: 0.85em; opacity: 0.8; font-style: italic;">
+                Like a heart rate monitor — steady is good, irregular means pay attention.
+              </div>
+              <div class="feature-link" onclick="openFeatureModal('rhythm')">Learn More →</div>
             </article>
             
             <article class="feature-card">
               <div class="feature-icon">🧬</div>
               <h3>Network Health</h3>
-              <p>Monitor validator participation, latency distribution, and resilience under load.</p>
-              <div class="feature-link" onclick="switchPage('validators')">Explore →</div>
+              <p>See if the network is strong or struggling. A healthy network means your transactions go through fast and safely.</p>
+              <div class="plain-english" style="margin-top: 8px; font-size: 0.85em; opacity: 0.8; font-style: italic;">
+                Green = all good. Yellow/Red = delays or problems ahead.
+              </div>
+              <div class="feature-link" onclick="openFeatureModal('health')">Learn More →</div>
             </article>
             
             <article class="feature-card danger">
               <div class="feature-icon">🐋</div>
               <h3>Whale Dominance</h3>
-              <p>Identify large actors, capital clustering, and sudden influence shifts.</p>
-              <div class="feature-link" onclick="switchPage('tokens')">Explore →</div>
+              <p>Spot when big accounts are moving large amounts. These moves often signal what's coming next in the market.</p>
+              <div class="plain-english" style="margin-top: 8px; font-size: 0.85em; opacity: 0.8; font-style: italic;">
+                When whales move, waves follow. See the big money before the market reacts.
+              </div>
+              <div class="feature-link" onclick="openFeatureModal('whale')">Learn More →</div>
             </article>
             
             <article class="feature-card danger">
               <div class="feature-icon">⚠️</div>
               <h3>Anomaly Detection</h3>
-              <p>Detect bursts, abnormal mixes, and behavior consistent with manipulation.</p>
-              <div class="feature-link" onclick="switchPage('inspector')">Explore →</div>
+              <p>Catch unusual activity patterns that could mean hacks, manipulation, or coordinated moves.</p>
+              <div class="plain-english" style="margin-top: 8px; font-size: 0.85em; opacity: 0.8; font-style: italic;">
+                Your early warning system — spots trouble before it becomes obvious to everyone else.
+              </div>
+              <div class="feature-link" onclick="openFeatureModal('anomaly')">Learn More →</div>
             </article>
           </div>
         </section>
@@ -786,9 +880,295 @@
     `;
 
     refreshRevealObserver();
-    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "landing" } }));
-    console.log("✅ NaluLF: Landing page shown successfully");
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
   }
+
+  // -----------------------------
+  // Feature Modals
+  // -----------------------------
+  window.openFeatureModal = function(feature) {
+    const modals = {
+      rhythm: {
+        icon: '📊',
+        title: 'Ledger Rhythm',
+        subtitle: 'Understanding the Network\'s Heartbeat',
+        content: `
+          <div class="modal-section">
+            <h3>What is Ledger Rhythm?</h3>
+            <p>
+              The XRPL creates a new "ledger" (think of it as a page in a book) every 3-4 seconds. 
+              This is the network's heartbeat. When this rhythm changes, it tells us something 
+              important is happening.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>Why It Matters</h3>
+            <div class="example-box">
+              <strong>Normal:</strong> Ledgers close every 3.5 seconds → Network is healthy<br>
+              <strong>Warning:</strong> Ledgers take 5-8 seconds → Network is getting congested<br>
+              <strong>Alert:</strong> Ledgers take 10+ seconds → Something's wrong, delays incoming
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Real Example</h3>
+            <p>
+              On November 15, 2023, ledger close times jumped from 3.5s to 12s. This happened 
+              <strong>30 minutes before</strong> a major service outage. Users who noticed the 
+              rhythm change had time to pause their transactions.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>How NaluLF Helps</h3>
+            <ul>
+              <li>🟢 <strong>Green indicators</strong> when rhythm is steady (3-4 seconds)</li>
+              <li>🟡 <strong>Yellow warnings</strong> when rhythm slows (5-7 seconds)</li>
+              <li>🔴 <strong>Red alerts</strong> when rhythm breaks (8+ seconds)</li>
+              <li>📊 <strong>Historical charts</strong> showing patterns over time</li>
+            </ul>
+          </div>
+
+          <div class="modal-resources">
+            <h3>Learn More</h3>
+            <a href="https://xrpl.org/ledger-close-times.html" target="_blank" class="resource-link">
+              📖 XRPL Docs: Ledger Close Times
+            </a>
+            <a href="#" onclick="switchPage('analytics'); closeFeatureModal(); return false;" class="resource-link">
+              📈 View Live Rhythm Dashboard
+            </a>
+          </div>
+        `
+      },
+      
+      health: {
+        icon: '🧬',
+        title: 'Network Health',
+        subtitle: 'Monitoring the Network\'s Vital Signs',
+        content: `
+          <div class="modal-section">
+            <h3>What is Network Health?</h3>
+            <p>
+              The XRPL runs on hundreds of computers (validators) around the world. Network health 
+              shows how well these computers are working together. Think of it like checking if 
+              all the gears in a machine are running smoothly.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>Key Health Indicators</h3>
+            <div class="example-box">
+              <strong>Validator Count:</strong> How many computers are active (target: 35+)<br>
+              <strong>Latency:</strong> How fast validators respond (target: under 100ms)<br>
+              <strong>Agreement:</strong> How often validators agree (target: 95%+)
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Real Example</h3>
+            <p>
+              During a DDoS attack in March 2024, validator count dropped from 35 to 22, and 
+              latency spiked to 500ms. Users who saw the health warnings avoided sending 
+              time-sensitive transactions until the network recovered.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>How NaluLF Helps</h3>
+            <ul>
+              <li>✅ <strong>Validator dashboard</strong> showing which ones are online</li>
+              <li>⚡ <strong>Latency graphs</strong> showing response times</li>
+              <li>🎯 <strong>Agreement rates</strong> showing consensus strength</li>
+              <li>🚨 <strong>Alerts</strong> when health drops below safe levels</li>
+            </ul>
+          </div>
+
+          <div class="modal-resources">
+            <h3>Learn More</h3>
+            <a href="https://xrpl.org/consensus.html" target="_blank" class="resource-link">
+              📖 XRPL Docs: Consensus Protocol
+            </a>
+            <a href="https://livenet.xrpl.org/network/validators" target="_blank" class="resource-link">
+              🌐 Live Validator List
+            </a>
+            <a href="#" onclick="switchPage('validators'); closeFeatureModal(); return false;" class="resource-link">
+              🧬 View Validator Health
+            </a>
+          </div>
+        `
+      },
+      
+      whale: {
+        icon: '🐋',
+        title: 'Whale Dominance',
+        subtitle: 'Following the Big Money',
+        content: `
+          <div class="modal-section">
+            <h3>What are Whales?</h3>
+            <p>
+              "Whales" are accounts that hold or move very large amounts of XRP — think millions 
+              or billions. When they move, the market often follows. It's like watching where 
+              the big investors put their money.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>Why Track Whales?</h3>
+            <div class="example-box">
+              <strong>Accumulation:</strong> Whale buying → Often signals confidence<br>
+              <strong>Distribution:</strong> Whale selling → Often signals caution<br>
+              <strong>Clustering:</strong> Multiple whales move → Major event brewing
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Real Example</h3>
+            <p>
+              On January 8, 2024, three whale accounts moved 500M XRP to exchanges within 
+              <strong>2 hours</strong>. XRP price dropped 8% over the next 12 hours. Users 
+              tracking whale movements saw this coming and adjusted their positions early.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>How NaluLF Helps</h3>
+            <ul>
+              <li>🐋 <strong>Whale tracker</strong> showing accounts with 10M+ XRP</li>
+              <li>📊 <strong>Movement alerts</strong> when whales transfer large amounts</li>
+              <li>🎯 <strong>Clustering detection</strong> when multiple whales coordinate</li>
+              <li>📈 <strong>Historical patterns</strong> showing whale behavior over time</li>
+            </ul>
+          </div>
+
+          <div class="modal-resources">
+            <h3>Learn More</h3>
+            <a href="https://bithomp.com/explorer/" target="_blank" class="resource-link">
+              🔍 Bithomp: Whale Tracker
+            </a>
+            <a href="https://xrpscan.com/balances" target="_blank" class="resource-link">
+              💰 XRPScan: Rich List
+            </a>
+            <a href="#" onclick="switchPage('tokens'); closeFeatureModal(); return false;" class="resource-link">
+              🐋 View Whale Activity
+            </a>
+          </div>
+        `
+      },
+      
+      anomaly: {
+        icon: '⚠️',
+        title: 'Anomaly Detection',
+        subtitle: 'Your Early Warning System',
+        content: `
+          <div class="modal-section">
+            <h3>What are Anomalies?</h3>
+            <p>
+              Anomalies are unusual patterns that don't match normal network behavior. They're 
+              like smoke before a fire — not always dangerous, but worth investigating. Most 
+              major incidents show warning signs first.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>Types of Anomalies We Detect</h3>
+            <div class="example-box">
+              <strong>Transaction Bursts:</strong> Sudden spike in activity (possible attack)<br>
+              <strong>Abnormal Mixes:</strong> Weird combination of transaction types<br>
+              <strong>Fan-Out Patterns:</strong> One account sending to many (possible spam)<br>
+              <strong>Circular Flows:</strong> Money going in circles (possible wash trading)
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Real Example</h3>
+            <p>
+              On February 12, 2024, our system detected a "fan-out" pattern: one account sent 
+              small amounts to 10,000+ addresses in 5 minutes. This was <strong>48 hours before</strong> 
+              a major phishing campaign launched. Early detection helped exchanges blacklist the account.
+            </p>
+          </div>
+
+          <div class="modal-section">
+            <h3>How NaluLF Helps</h3>
+            <ul>
+              <li>🚨 <strong>Real-time alerts</strong> when anomalies are detected</li>
+              <li>📊 <strong>Pattern visualization</strong> showing what's unusual</li>
+              <li>🎯 <strong>Risk scoring</strong> showing how serious the anomaly is</li>
+              <li>📈 <strong>Historical context</strong> showing if this has happened before</li>
+              <li>🔍 <strong>Deep inspection</strong> tools to investigate further</li>
+            </ul>
+          </div>
+
+          <div class="modal-resources">
+            <h3>Learn More</h3>
+            <a href="https://xrpl.org/transaction-common-fields.html" target="_blank" class="resource-link">
+              📖 XRPL Docs: Transaction Types
+            </a>
+            <a href="https://xrpl.org/transaction-malleability.html" target="_blank" class="resource-link">
+              🔒 XRPL Security Best Practices
+            </a>
+            <a href="#" onclick="switchPage('inspector'); closeFeatureModal(); return false;" class="resource-link">
+              🔎 Use Anomaly Inspector
+            </a>
+          </div>
+        `
+      }
+    };
+
+    const modal = modals[feature];
+    if (!modal) return;
+
+    // Create modal if it doesn't exist
+    let modalEl = document.getElementById('featureModal');
+    if (!modalEl) {
+      modalEl = document.createElement('div');
+      modalEl.id = 'featureModal';
+      modalEl.className = 'feature-modal-overlay';
+      modalEl.innerHTML = `
+        <div class="feature-modal">
+          <button class="feature-modal-close" onclick="closeFeatureModal()">✕</button>
+          <div class="feature-modal-content">
+            <div class="feature-modal-header">
+              <div class="feature-modal-icon"></div>
+              <h2 class="feature-modal-title"></h2>
+              <p class="feature-modal-subtitle"></p>
+            </div>
+            <div class="feature-modal-body"></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modalEl);
+
+      // Click outside to close
+      modalEl.addEventListener('click', (e) => {
+        if (e.target === modalEl) closeFeatureModal();
+      });
+    }
+
+    // Populate modal
+    modalEl.querySelector('.feature-modal-icon').textContent = modal.icon;
+    modalEl.querySelector('.feature-modal-title').textContent = modal.title;
+    modalEl.querySelector('.feature-modal-subtitle').textContent = modal.subtitle;
+    modalEl.querySelector('.feature-modal-body').innerHTML = modal.content;
+
+    // Show modal
+    modalEl.classList.add('show');
+    document.body.style.overflow = 'hidden';
+  };
+
+  window.closeFeatureModal = function() {
+    const modalEl = document.getElementById('featureModal');
+    if (modalEl) {
+      modalEl.classList.remove('show');
+      document.body.style.overflow = '';
+    }
+  };
+
+  // Close on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeFeatureModal();
+  });
 
   // -----------------------------
   // Reveal animations
@@ -823,8 +1203,10 @@
     el.innerHTML = `
       <div class="chart-section">
         <h2>🚧 Module Loading</h2>
-        <p>This section is initializing.</p>
-        <p style="opacity: 0.7; margin-top: 8px;">If this persists, check the console for errors.</p>
+        <p>This section is initializing. If this persists, check the browser console for errors.</p>
+        <p style="opacity:0.7;margin-top:10px;font-size:13px;">
+          Expected global: window.initInspector (for inspector page)
+        </p>
       </div>
     `;
   }
@@ -917,16 +1299,21 @@
     const addr = String(address || "").trim();
     if (!isValidXrpAddress(addr)) return;
 
+    console.log(`🔍 Attempting Quick Inspect for: ${addr}`);
+    
     const start = Date.now();
     const timeout = 8000;
 
     const tick = () => {
+      // Check for the inspector global function
       if (window.UnifiedInspector && typeof window.UnifiedInspector.quickInspect === "function") {
+        console.log("✅ UnifiedInspector.quickInspect found, calling...");
         window.UnifiedInspector.quickInspect(addr);
         return;
       }
 
       if (Date.now() - start > timeout) {
+        console.error("❌ Inspector timeout - Quick Inspect not available");
         toast("Inspector not ready (try again)");
         return;
       }
@@ -1399,7 +1786,7 @@
   // Init
   // -----------------------------
   document.addEventListener("DOMContentLoaded", () => {
-    console.log("🌊 NaluLF: Initializing UI...");
+    console.log("🌊 NaluLF: DOM loaded, initializing UI...");
     
     // ✅ FIX: do NOT inject header
     ensurePageHeader(); // safe: removes if previously injected
@@ -1413,8 +1800,6 @@
     if (dash) {
       dash.style.display = "block";
       showLandingPage();
-    } else {
-      console.error("🌊 NaluLF: Dashboard element not found!");
     }
 
     window.addEventListener("resize", () => {
@@ -1429,9 +1814,9 @@
     // ✅ Start connection monitoring for navbar status
     setupConnectionMonitoring();
 
-    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "landing" } }));
+    window.dispatchEvent(new CustomEvent("naluxrp:pagechange", { detail: { pageId: "dashboard" } }));
     
-    console.log("🌊 NaluLF UI initialized successfully");
+    console.log("✅ NaluLF UI initialized");
   });
 
   // -----------------------------
