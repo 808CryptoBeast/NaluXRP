@@ -3,7 +3,7 @@
    Clean · Simple · Always Readable
    
    Layout:
-   [Shield + NaluLF + Slogan] | [Dashboard] [Inspector] [Explore ▼] | [XRP $2.45 ↑] [● Mainnet]
+   [Shield + NaluLF + Slogan] | [Dashboard] [Profile] [Explore ▼] | [XRP $2.45 ↑] [● Mainnet]
    ========================================= */
 
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Uncial+Antiqua&display=swap');
@@ -105,7 +105,6 @@ body.has-bottom-nav {
   padding: 0 28px;
   height: var(--nav-height);
   display: grid;
-  /* Logo never shrinks | buttons centered | right tools never shrinks */
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 24px;
@@ -198,7 +197,7 @@ body.has-bottom-nav {
 }
 
 /* ========================================= */
-/* CENTER — Dashboard · Inspector · Explore  */
+/* CENTER — Dashboard · Profile · Explore    */
 /* ========================================= */
 .nav-center {
   display: flex;
@@ -456,7 +455,6 @@ body.has-bottom-nav {
 
 /* For network dropdown (right-aligned, no translateX) */
 .network-dropdown {
-  /* Override the shared fadeDown for right-aligned dropdown */
   animation: fadeDownRight 0.2s ease;
 }
 .network-dropdown.show { animation: fadeDownRight 0.2s ease; }

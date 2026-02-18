@@ -5,6 +5,7 @@
    ✅ FIXED: Memory leaks, error boundaries, performance
    ✅ ENHANCED: Explanations, localStorage persistence
    ✅ IMPROVED: Metrics (removed validators/load factor)
+   ✅ FIXED: Cleanup method for proper page switching
    ========================================= */
 
 (function () {
@@ -38,7 +39,7 @@
     STORAGE_VERSION: 1,
     
     // Animation
-    STREAM_SCROLL_PX_PER_SEC: 75  // Increased for more dynamic live feel
+    STREAM_SCROLL_PX_PER_SEC: 35  // ✅ Slowed down for better readability (was 75)
   };
 
   const Dashboard = {
@@ -458,16 +459,12 @@
     applyXRPLState(state) {
       if (!state) return;
 
-      try {
-        this.updateTopMetrics(state);
-      } catch (e) {
-        console.error("❌ updateTopMetrics failed:", e);
-      }
-
       if (Array.isArray(state.recentTransactions)) {
         this.recentTransactions = state.recentTransactions.slice(-CONFIG.MAX_TX_MEMORY);
       }
 
+      // ✅ FIXED: Push ledger to stream FIRST, THEN update metrics
+      // This ensures updateTopMetrics reads the LATEST ledger from the stream
       try {
         if (state.latestLedger?.ledgerIndex) {
           this.pushLedgerToStream(state.latestLedger);
@@ -483,6 +480,13 @@
         }
       } catch (e) {
         console.error("❌ pushLedgerToStream failed:", e);
+      }
+
+      // Now update metrics - this will read the fresh ledger from the stream
+      try {
+        this.updateTopMetrics(state);
+      } catch (e) {
+        console.error("❌ updateTopMetrics failed:", e);
       }
 
       try {
@@ -615,19 +619,67 @@
     updateTopMetrics(state) {
       const $ = (id) => document.getElementById(id);
 
-      if ($("d2-ledger-index")) {
-        $("d2-ledger-index").textContent = state.ledgerIndex != null ? state.ledgerIndex.toLocaleString() : "—";
-      }
-      if ($("d2-ledger-age")) {
-        $("d2-ledger-age").textContent = `Age: ${state.ledgerAge || "—"}`;
+      // ✅ FIXED: Show the LATEST ledger from the stream to match the Realtime Stream
+      // BUT use state.ledgerIndex if it's NEWER (handles race conditions)
+      const latestLedger = this.ledgerStream.length > 0 
+        ? this.ledgerStream[this.ledgerStream.length - 1] 
+        : null;
+      
+      // Use whichever is newer
+      let displayLedgerIndex = state.ledgerIndex;
+      if (latestLedger?.ledgerIndex != null) {
+        displayLedgerIndex = Math.max(latestLedger.ledgerIndex, state.ledgerIndex || 0);
       }
 
+      // Ledger Index - show most recent
+      if ($("d2-ledger-index")) {
+        $("d2-ledger-index").textContent = displayLedgerIndex != null ? displayLedgerIndex.toLocaleString() : "—";
+      }
+      
+      // ✅ FIXED: Show close time instead of generic "age"
+      if ($("d2-ledger-age")) {
+        // Use stream data if available and matches the displayed ledger
+        if (latestLedger?.closeTimeSec != null && latestLedger.ledgerIndex === displayLedgerIndex) {
+          $("d2-ledger-age").textContent = `Close Time: ${latestLedger.closeTimeSec.toFixed(2)}s`;
+        } else if (latestLedger?.closeTime && latestLedger.ledgerIndex === displayLedgerIndex) {
+          const closeTime = new Date(latestLedger.closeTime);
+          const timeStr = closeTime.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: false 
+          });
+          $("d2-ledger-age").textContent = `Closed: ${timeStr}`;
+        } else {
+          // Fallback to showing current time
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: false 
+          });
+          $("d2-ledger-age").textContent = `Updated: ${timeStr}`;
+        }
+      }
+
+      // TX/Second
       if ($("d2-tps")) {
         const tps = state.tps != null ? state.tps : state.txnPerSec != null ? state.txnPerSec : null;
         $("d2-tps").textContent = tps != null ? Number(tps).toFixed(1) : "—";
       }
+      
+      // ✅ FIXED: Show throughput description instead of vague "trend"
       if ($("d2-tps-trend")) {
-        $("d2-tps-trend").textContent = state.tpsTrend || "Trend: Collecting…";
+        const tps = state.tps != null ? state.tps : state.txnPerSec != null ? state.txnPerSec : null;
+        if (tps != null) {
+          if (tps < 5) $("d2-tps-trend").textContent = "Low Activity";
+          else if (tps < 15) $("d2-tps-trend").textContent = "Normal Activity";
+          else if (tps < 30) $("d2-tps-trend").textContent = "High Activity";
+          else $("d2-tps-trend").textContent = "Very High Activity";
+        } else {
+          $("d2-tps-trend").textContent = "Waiting…";
+        }
       }
 
       // Network Capacity (based on current load vs theoretical max)
@@ -651,49 +703,74 @@
         }
       }
 
-      // Quorum (validator agreement)
+      // ✅ FIXED: Quorum - Show validator COUNT from latest ledger, not percentage
       if ($("d2-quorum")) {
-        const quorum = state.quorum || state.validatorQuorum || state.validators;
+        // Try to get validator count from latest ledger first
+        let validatorCount = null;
         
-        if (quorum != null) {
-          // If it's a percentage
-          if (typeof quorum === 'number' && quorum <= 100) {
-            $("d2-quorum").textContent = `${quorum.toFixed(1)}%`;
-            
-            if ($("d2-quorum-note")) {
-              if (quorum >= 80) $("d2-quorum-note").textContent = "Strong Consensus";
-              else if (quorum >= 60) $("d2-quorum-note").textContent = "Good";
-              else $("d2-quorum-note").textContent = "Weak";
-            }
-          }
-          // If it's a count
-          else if (typeof quorum === 'object' && quorum.total) {
-            const pct = quorum.agreed && quorum.total ? (quorum.agreed / quorum.total) * 100 : 80;
-            $("d2-quorum").textContent = `${quorum.agreed || quorum.total}/${quorum.total}`;
-            
-            if ($("d2-quorum-note")) {
-              if (pct >= 80) $("d2-quorum-note").textContent = "Strong Consensus";
-              else if (pct >= 60) $("d2-quorum-note").textContent = "Good";
-              else $("d2-quorum-note").textContent = "Weak";
-            }
-          }
-          // Fallback to validator count
-          else {
-            $("d2-quorum").textContent = String(quorum);
-            if ($("d2-quorum-note")) $("d2-quorum-note").textContent = "Validators";
+        if (latestLedger?.validators != null) {
+          validatorCount = latestLedger.validators;
+        } else if (state.validators != null) {
+          validatorCount = state.validators;
+        }
+        
+        if (validatorCount != null && typeof validatorCount === 'number') {
+          $("d2-quorum").textContent = String(validatorCount);
+          
+          if ($("d2-quorum-note")) {
+            $("d2-quorum-note").textContent = `Validators Active`;
           }
         } else {
-          $("d2-quorum").textContent = "—";
-          if ($("d2-quorum-note")) $("d2-quorum-note").textContent = "Waiting…";
+          // Fallback to old logic if we don't have count
+          const quorum = state.quorum || state.validatorQuorum;
+          
+          if (quorum != null) {
+            if (typeof quorum === 'object' && quorum.total) {
+              $("d2-quorum").textContent = `${quorum.total}`;
+              if ($("d2-quorum-note")) $("d2-quorum-note").textContent = "Validators Active";
+            } else if (typeof quorum === 'number' && quorum > 100) {
+              // Large number = likely a count
+              $("d2-quorum").textContent = String(Math.floor(quorum));
+              if ($("d2-quorum-note")) $("d2-quorum-note").textContent = "Validators Active";
+            } else {
+              // Small number = percentage (fallback)
+              $("d2-quorum").textContent = `${quorum.toFixed(1)}%`;
+              if ($("d2-quorum-note")) {
+                if (quorum >= 80) $("d2-quorum-note").textContent = "Strong Consensus";
+                else if (quorum >= 60) $("d2-quorum-note").textContent = "Good";
+                else $("d2-quorum-note").textContent = "Weak";
+              }
+            }
+          } else {
+            $("d2-quorum").textContent = "—";
+            if ($("d2-quorum-note")) $("d2-quorum-note").textContent = "Waiting…";
+          }
         }
       }
 
+      // TX per Ledger - use state if stream has 0 (data issue)
       if ($("d2-tx-per-ledger")) {
-        const tpl = state.txPerLedger != null ? state.txPerLedger : state.txnPerLedger != null ? state.txnPerLedger : null;
+        const streamTx = latestLedger?.totalTx;
+        const stateTx = state.txPerLedger ?? state.txnPerLedger;
+        // Prefer non-zero stream value, otherwise use state
+        const tpl = (streamTx != null && streamTx > 0) ? streamTx : stateTx;
         $("d2-tx-per-ledger").textContent = tpl != null ? String(tpl) : "—";
       }
+      
+      // ✅ FIXED: Show transaction volume description instead of "spread"
       if ($("d2-tx-spread")) {
-        $("d2-tx-spread").textContent = `Spread: ${state.txSpread || "—"}`;
+        const streamTx = latestLedger?.totalTx;
+        const stateTx = state.txPerLedger ?? state.txnPerLedger;
+        const tpl = (streamTx != null && streamTx > 0) ? streamTx : stateTx;
+        if (tpl != null) {
+          if (tpl < 10) $("d2-tx-spread").textContent = "Very Light";
+          else if (tpl < 50) $("d2-tx-spread").textContent = "Light Volume";
+          else if (tpl < 150) $("d2-tx-spread").textContent = "Normal Volume";
+          else if (tpl < 300) $("d2-tx-spread").textContent = "High Volume";
+          else $("d2-tx-spread").textContent = "Very High Volume";
+        } else {
+          $("d2-tx-spread").textContent = "Waiting…";
+        }
       }
 
       if ($("d2-fee-pressure")) {

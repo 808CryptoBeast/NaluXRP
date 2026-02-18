@@ -2,7 +2,9 @@
 // navbar.js – NaluLF 🌊 "Riding The Ledger Waves"
 //
 // Navbar shows:
-//   [Shield + NaluLF + Slogan] | [Dashboard] [Inspector] [Explore ▼] | [XRP Price] [● Mainnet]
+//   [Shield + NaluLF + Slogan] | [Dashboard] [Profile] [Explore ▼] | [XRP Price] [● Mainnet]
+//
+// Logo → goes to Landing
 // =====================================================
 
 (function () {
@@ -15,7 +17,7 @@
   const STORAGE_KEY = 'nalu_navbar';
 
   const S = {
-    page:    'dashboard',
+    page:    'landing',  // Start on landing page
     network: 'mainnet',
     price:   null,
     change:  null,
@@ -133,19 +135,38 @@
   }
 
   const PAGE_NAMES = {
-    dashboard:'Dashboard', inspector:'Inspector', validators:'Validators',
-    analytics:'Analytics', explorer:'Explorer',  tokens:'Tokens',
-    amm:'AMM Pools',       nfts:'NFTs',           profile:'Profile',
-    settings:'Settings',   about:'About',         news:'News', history:'History'
+    landing:   'Landing',
+    dashboard: 'Dashboard',
+    inspector: 'Inspector',
+    validators:'Validators',
+    analytics: 'Analytics',
+    explorer:  'Explorer',
+    tokens:    'Tokens',
+    amm:       'AMM Pools',
+    nfts:      'NFTs',
+    profile:   'Profile',
+    settings:  'Settings',
+    about:     'About',
+    news:      'News',
+    history:   'History'
   };
 
   function renderCrumb(page) {
     S.page = page;
     const el = document.getElementById('navBreadcrumb');
     if (!el) return;
-    const trail = page === 'dashboard'
-      ? [{ id:'dashboard', name:'Dashboard' }]
-      : [{ id:'dashboard', name:'Dashboard' }, { id: page, name: PAGE_NAMES[page] || cap(page) }];
+
+    // Build trail: Landing is root, everything else branches off it
+    let trail;
+    if (page === 'landing') {
+      trail = [{ id: 'landing', name: 'Landing' }];
+    } else {
+      trail = [
+        { id: 'landing', name: 'Landing' },
+        { id: page, name: PAGE_NAMES[page] || cap(page) }
+      ];
+    }
+
     el.innerHTML = trail.map((t, i) => {
       const last = i === trail.length - 1;
       return `<span class="breadcrumb-item${last ? ' active' : ''}"
@@ -204,9 +225,9 @@
           <span class="bottom-ico">📊</span>
           <span class="bottom-lbl">Dashboard</span>
         </button>
-        <button class="bottom-item" data-page="inspector">
-          <span class="bottom-ico">🔎</span>
-          <span class="bottom-lbl">Inspector</span>
+        <button class="bottom-item" data-page="profile">
+          <span class="bottom-ico">👤</span>
+          <span class="bottom-lbl">Profile</span>
         </button>
         <button class="bottom-item" data-page="analytics">
           <span class="bottom-ico">📈</span>
@@ -267,6 +288,13 @@
       <div class="sheet-body">
 
         <div class="sheet-group">
+          <div class="sheet-group-label">Inspector & Tools</div>
+          <button class="sheet-item" onclick="switchPage('inspector');NaluNavbar.closeSheet()">
+            <span class="sheet-ico">🔎</span><span class="sheet-lbl">Inspector</span>
+          </button>
+        </div>
+
+        <div class="sheet-group">
           <div class="sheet-group-label">🌐 Network</div>
           <button class="sheet-item" onclick="switchPage('validators');NaluNavbar.closeSheet()">
             <span class="sheet-ico">🛡️</span><span class="sheet-lbl">Validators</span>
@@ -307,9 +335,6 @@
 
         <div class="sheet-group">
           <div class="sheet-group-label">Account</div>
-          <button class="sheet-item" onclick="switchPage('profile');NaluNavbar.closeSheet()">
-            <span class="sheet-ico">👤</span><span class="sheet-lbl">Profile</span>
-          </button>
           <button class="sheet-item" onclick="switchPage('settings');NaluNavbar.closeSheet()">
             <span class="sheet-ico">⚙️</span><span class="sheet-lbl">Settings</span>
           </button>
