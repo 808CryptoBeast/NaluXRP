@@ -2,34 +2,41 @@
    FILE: js/inspector/account-inspector.js
    NanaKilo - Core Forensic Engine
    NaluLF (Nalu Ledger Forensics)
-   
+
    Deep Observation • Deeper Insights
-   
+
    FEATURES:
    ✅ Flow Analysis (Issuer Tree)
    ✅ Multi-Asset Tracing
    ✅ Pattern Detection
    ✅ Token/IOU Support
    ✅ Quick Inspection
-   
+
    ARCHITECTURE:
    - Client-side only (no secrets stored)
-   - Public XRPL RPC/WS endpoints
+   - Public XRPL WS endpoints via shared xrpl.js Client
    - LocalStorage for cache/preferences
-   
+
    ✅ FIX v3.0.1: Added initialization guard + always clear before render
+
+   🔧 TRANSPORT FIX (2026-02-23):
+   - Removed invalid HTTP JSON-RPC fallback to https://xrplcluster.com
+     (xrplcluster.com is WS, not HTTP JSON-RPC).
+   - All requests now go through WebSocket clients:
+       1) window.sharedXrplClient (preferred)
+       2) window.XRPL.client (fallback, if available)
    ========================================================= */
 
 (function () {
   "use strict";
 
   // ---------------- CONFIG ----------------
-  const MODULE_VERSION = "nanakilo-forensics@3.0.1-FIXED";
-  
+  const MODULE_VERSION = "nanakilo-forensics@3.0.1-FIXED-WS-ONLY";
+
   const LOCAL_KEY_ISSUER_LIST = "nanakilo_issuerList";
   const LOCAL_KEY_ACTIVE_ISSUER = "nanakilo_activeIssuer";
   const LOCAL_KEY_GRAPH_CACHE = "nanakilo_graphCache_";
-  
+
   const SHARED_WAIT_MS = 8000;
   const DEFAULT_ISSUER_LIST = [];
 
@@ -66,7 +73,10 @@
 
   function escapeHtml(s) {
     if (s == null) return "";
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   function isValidXrpAddress(addr) {
@@ -103,7 +113,7 @@
     const btn = $("uiBuild");
     if (!btn) return;
     btn.disabled = busy;
-    btn.textContent = busy ? (label || "Building...") : "🌳 Build Flow Analysis";
+    btn.textContent = busy ? label || "Building..." : "🌳 Build Flow Analysis";
   }
 
   function openModal(title, html) {
@@ -114,7 +124,9 @@
     if (content) {
       content.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-          <h3 style="margin:0;font-size:20px;font-weight:900;color:var(--inspector-primary);">${escapeHtml(title)}</h3>
+          <h3 style="margin:0;font-size:20px;font-weight:900;color:var(--inspector-primary);">${escapeHtml(
+            title
+          )}</h3>
           <button id="uiModalClose" style="padding:8px 12px;border-radius:10px;border:2px solid rgba(255,0,0,0.3);background:rgba(255,0,0,0.15);color:#ff6b6b;cursor:pointer;font-weight:900;font-size:16px;line-height:1;">✕</button>
         </div>
         <div style="max-height:70vh;overflow-y:auto;">${html}</div>
@@ -124,7 +136,8 @@
   }
 
   function closeModal() {
-    $("uiModalOverlay").style.display = "none";
+    const o = $("uiModalOverlay");
+    if (o) o.style.display = "none";
   }
 
   async function copyToClipboard(text) {
@@ -201,10 +214,26 @@
     return `${v.toFixed(6)} ${cur}${iss}`;
   }
 
-  // ---------------- TRANSPORT BADGE + AUTO-RETRY ----------------
+  // ---------------- TRANSPORT (WS ONLY) ----------------
+  function getWsClient() {
+    // Prefer the shared client if present
+    if (window.sharedXrplClient) return window.sharedXrplClient;
+
+    // Fallback: use the dashboard XRPL module's client if exposed/connected
+    if (window.XRPL && window.XRPL.client) return window.XRPL.client;
+
+    return null;
+  }
+
   function computeWsConnected() {
-    if (!window.sharedXrplClient) return false;
-    return window.sharedXrplClient.isConnected();
+    const c = getWsClient();
+    if (!c) return false;
+
+    // xrpl.js Client has isConnected()
+    if (typeof c.isConnected === "function") return c.isConnected();
+
+    // If some other client implementation, best-effort:
+    return !!window.XRPL?.connected;
   }
 
   function setTransportLastSource(src) {
@@ -216,15 +245,14 @@
     transportState.wsConnected = computeWsConnected();
     const dot = $("uiConnDot");
     const text = $("uiConnText");
+
     if (dot) {
-      if (transportState.wsConnected) {
-        dot.classList.add("connected");
-      } else {
-        dot.classList.remove("connected");
-      }
+      if (transportState.wsConnected) dot.classList.add("connected");
+      else dot.classList.remove("connected");
     }
+
     if (text) {
-      const status = transportState.wsConnected ? "WS" : "HTTP";
+      const status = transportState.wsConnected ? "WS" : "OFFLINE";
       text.textContent = `${status} • ${transportState.lastSource}`;
     }
   }
@@ -233,17 +261,17 @@
     if (!window.sharedXrplClient) {
       throw new Error("sharedXrplClient not available");
     }
-    
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         window.sharedXrplClient.removeListener("connected", onConn);
         reject(new Error("WS connection timeout"));
       }, timeoutMs);
 
-      const onConn = (ev) => {
+      const onConn = () => {
         clearTimeout(timer);
         window.sharedXrplClient.removeListener("connected", onConn);
-        resolve(ev);
+        resolve();
       };
 
       if (window.sharedXrplClient.isConnected()) {
@@ -258,24 +286,35 @@
   function attemptSharedReconnect(reason) {
     console.log("🔄 NanaKilo: Reconnecting...", reason);
     if (window.sharedXrplClient && typeof window.sharedXrplClient.connect === "function") {
-      window.sharedXrplClient.connect().catch(err => {
+      window.sharedXrplClient.connect().catch((err) => {
         console.warn("Reconnect failed:", err);
       });
+      return;
+    }
+
+    // Fallback: if the dashboard module exposes connectXRPL
+    if (typeof window.connectXRPL === "function") {
+      window.connectXRPL();
     }
   }
 
-  // ---------------- HTTP JSON-RPC ----------------
-  async function tryFetchJson(url, { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}) {
+  // ---------------- HTTP JSON-RPC (DISABLED) ----------------
+  // NOTE: xrplcluster.com is NOT an HTTP JSON-RPC endpoint.
+  // Leaving helper in place (unused) for future *valid* HTTP endpoints, if you add one.
+  async function tryFetchJson(
+    url,
+    { method = "GET", body = null, timeoutMs = 15000, headers = {} } = {}
+  ) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    
+
     try {
       const opts = { method, headers, signal: controller.signal };
       if (body) opts.body = typeof body === "string" ? body : JSON.stringify(body);
-      
+
       const res = await fetch(url, opts);
       clearTimeout(timer);
-      
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
@@ -291,57 +330,71 @@
   }
 
   async function rpcCall(method, paramsObj, { timeoutMs = 15000, retries = 2 } = {}) {
-    const payload = {
-      method,
-      params: [paramsObj]
-    };
-    
-    let lastErr;
-    for (let i = 0; i <= retries; i++) {
-      try {
-        const publicRpc = "https://xrplcluster.com";
-        setTransportLastSource("xrplcluster.com");
-        const json = await tryFetchJson(publicRpc, {
-          method: "POST",
-          body: JSON.stringify(payload),
-          timeoutMs,
-          headers: { "Content-Type": "application/json" }
-        });
-        return unwrapRpcResult(json);
-      } catch (e) {
-        lastErr = e;
-        if (i < retries) await new Promise(r => setTimeout(r, 300));
-      }
-    }
-    throw lastErr;
+    // Disabled by design to prevent invalid calls that cause ERR_CONNECTION_RESET.
+    // If you later add a real XRPL HTTP JSON-RPC endpoint, wire it here.
+    void timeoutMs;
+    void retries;
+    throw new Error(
+      `HTTP JSON-RPC is disabled (no valid public HTTP endpoint configured). Tried method=${method}`
+    );
   }
 
-  async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = true } = {}) {
-    if (window.sharedXrplClient && window.sharedXrplClient.isConnected()) {
+  async function xrplRequest(payload, { timeoutMs = 20000, allowHttpFallback = false } = {}) {
+    void timeoutMs;
+
+    // 1) sharedXrplClient (preferred)
+    if (window.sharedXrplClient) {
+      if (!window.sharedXrplClient.isConnected()) {
+        // try waiting briefly (helps on page-switch)
+        try {
+          setTransportLastSource("WS (waiting)");
+          await waitForSharedConn(SHARED_WAIT_MS);
+        } catch (e) {
+          // continue to fallback checks below
+        }
+      }
+
+      if (window.sharedXrplClient.isConnected()) {
+        try {
+          setTransportLastSource("shared WS");
+          const result = await window.sharedXrplClient.request(payload);
+          transportState.wsConnected = true;
+          updateConnBadge();
+          return result;
+        } catch (e) {
+          console.warn("shared WS request failed:", e);
+          // continue to try window.XRPL.client
+        }
+      }
+    }
+
+    // 2) window.XRPL.client (dashboard module client)
+    if (window.XRPL && window.XRPL.client && window.XRPL.connected) {
       try {
-        setTransportLastSource("WS");
-        const result = await window.sharedXrplClient.request(payload);
+        setTransportLastSource("XRPL WS");
+        const result = await window.XRPL.client.request(payload);
         transportState.wsConnected = true;
         updateConnBadge();
         return result;
       } catch (e) {
-        console.warn("WS request failed:", e);
-        if (!allowHttpFallback) throw e;
+        console.warn("XRPL WS request failed:", e);
       }
     }
-    
+
+    // 3) Optional HTTP fallback (kept off by default)
     if (allowHttpFallback) {
       return await rpcCall(payload.command, payload, { timeoutMs });
     }
-    
-    throw new Error("No transport available");
+
+    updateConnBadge();
+    throw new Error("No XRPL WebSocket connection available");
   }
 
   // ---------------- TX NORMALIZATION ----------------
   function normalizeTxEntry(entry) {
     const tx = entry.tx || entry.transaction || entry;
     const meta = entry.meta || entry.metaData || tx.meta || tx.metaData || {};
-    
+
     return {
       hash: tx.hash || entry.hash,
       ledger_index: tx.ledger_index || entry.ledger_index,
@@ -358,28 +411,26 @@
   }
 
   function normalizeAndSortTxsAsc(entries) {
-    return entries.map(normalizeTxEntry).sort((a, b) => {
-      const la = a.ledger_index || 0;
-      const lb = b.ledger_index || 0;
-      return la - lb;
-    });
+    return entries
+      .map(normalizeTxEntry)
+      .sort((a, b) => (a.ledger_index || 0) - (b.ledger_index || 0));
   }
 
   function withinConstraints(tx, constraints) {
     const { ledgerMin, ledgerMax, startDate, endDate, minXrp } = constraints;
     const ledger = tx.ledger_index || 0;
-    
+
     if (ledgerMin != null && ledger < ledgerMin) return false;
     if (ledgerMax != null && ledger > ledgerMax) return false;
-    
+
     if (startDate && tx._iso && tx._iso < startDate) return false;
     if (endDate && tx._iso && tx._iso > endDate) return false;
-    
+
     if (minXrp) {
       const amt = parseAmount(tx.Amount);
       if (amt.currency === "XRP" && amt.value < minXrp) return false;
     }
-    
+
     return true;
   }
 
@@ -392,9 +443,9 @@
       ledger_index_min: ledgerMin == null ? -1 : ledgerMin,
       ledger_index_max: ledgerMax == null ? -1 : ledgerMax
     };
-    
+
     if (marker) params.marker = marker;
-    
+
     const result = await xrplRequest(params);
     return {
       txs: result.transactions || [],
@@ -416,7 +467,7 @@
   function normalizeAccountInfo(info) {
     const balanceDrops = info.Balance || "0";
     const balanceXrp = parseFloat(balanceDrops) / 1_000_000;
-    
+
     return {
       address: info.Account,
       balanceXrp,
@@ -431,7 +482,7 @@
   async function fetchAccountInfo(address) {
     if (!isValidXrpAddress(address)) return null;
     if (accountInfoCache.has(address)) return accountInfoCache.get(address);
-    
+
     try {
       const result = await xrplRequest({
         command: "account_info",
@@ -450,22 +501,22 @@
   // ---------------- ACCOUNT LINES + ISSUED TOKENS ----------------
   async function fetchAccountLinesAll(address) {
     if (!isValidXrpAddress(address)) return [];
-    
+
     const allLines = [];
     let marker = null;
     let pages = 0;
     const maxPages = 50;
-    
+
     do {
       pages++;
       const params = { command: "account_lines", account: address, limit: 400 };
       if (marker) params.marker = marker;
-      
+
       const result = await xrplRequest(params);
       if (result.lines) allLines.push(...result.lines);
       marker = result.marker;
     } while (marker && pages < maxPages);
-    
+
     return allLines;
   }
 
@@ -485,9 +536,9 @@
   function buildTokenSummaryFromLines(address, linesResp, gatewayResp) {
     const holding = [];
     const issued = [];
-    
+
     if (Array.isArray(linesResp)) {
-      linesResp.forEach(line => {
+      linesResp.forEach((line) => {
         const val = parseFloat(line.balance);
         if (val > 0) {
           holding.push({
@@ -508,13 +559,19 @@
         }
       });
     }
-    
+
     if (gatewayResp?.obligations) {
       Object.entries(gatewayResp.obligations).forEach(([cur, val]) => {
-        issued.push({ currency: cur, value: parseFloat(val), holder: "various", holders: 0, outstanding: parseFloat(val) });
+        issued.push({
+          currency: cur,
+          value: parseFloat(val),
+          holder: "various",
+          holders: 0,
+          outstanding: parseFloat(val)
+        });
       });
     }
-    
+
     return {
       address,
       trustlineCount: linesResp ? linesResp.length : 0,
@@ -532,12 +589,12 @@
     const addr = String(address || "").trim();
     if (!isValidXrpAddress(addr)) return null;
     if (tokenSummaryCache.has(addr)) return tokenSummaryCache.get(addr);
-    
+
     const [lines, gateway] = await Promise.all([
       fetchAccountLinesAll(addr),
       fetchGatewayBalances(addr)
     ]);
-    
+
     const summary = buildTokenSummaryFromLines(addr, lines, gateway);
     tokenSummaryCache.set(addr, summary);
     return summary;
@@ -548,12 +605,12 @@
     if (!isValidXrpAddress(address)) {
       return { activator: null, complete: false, scanned: 0, pages: 0, source: "invalid" };
     }
-    
+
     if (activationCache.has(address)) {
       const cached = activationCache.get(address);
       if (cached.complete) return cached;
     }
-    
+
     try {
       const fetchResp = await fetchAccountTxPaged(address, {
         limit: ACTIVATION_PAGE_LIMIT,
@@ -562,14 +619,15 @@
         ledgerMax: constraints.ledgerMax,
         marker: null
       });
-      
+
       const txs = normalizeAndSortTxsAsc(fetchResp.txs);
-      const first = txs.find(t => 
-        t.TransactionType === "Payment" && 
-        t.Destination === address &&
-        withinConstraints(t, constraints)
+      const first = txs.find(
+        (t) =>
+          t.TransactionType === "Payment" &&
+          t.Destination === address &&
+          withinConstraints(t, constraints)
       );
-      
+
       if (first) {
         const activation = {
           activator: first.Account,
@@ -581,7 +639,7 @@
         activationCache.set(address, activation);
         return activation;
       }
-      
+
       const activation = {
         activator: null,
         complete: true,
@@ -606,7 +664,7 @@
   // ---------------- COUNTERPARTY EXTRACTION (for edges) ----------------
   function extractCounterparty(tx) {
     if (!tx) return null;
-    
+
     const type = (tx.TransactionType || "").toLowerCase();
 
     if (type === "payment") {
@@ -641,10 +699,10 @@
     let marker = null;
     let pages = 0;
     let scanned = 0;
-    
+
     while (collected.length < needCount && pages < MAX_PAGES_TREE_SCAN) {
       pages++;
-      
+
       const result = await fetchAccountTxPaged(address, {
         marker,
         limit: PAGE_LIMIT,
@@ -652,21 +710,21 @@
         ledgerMin: constraints.ledgerMin,
         ledgerMax: constraints.ledgerMax
       });
-      
+
       const txs = normalizeAndSortTxsAsc(result.txs);
       scanned += txs.length;
-      
+
       for (const tx of txs) {
         if (tx.Account === address && withinConstraints(tx, constraints)) {
           collected.push(tx);
           if (collected.length >= needCount) break;
         }
       }
-      
+
       marker = result.marker;
       if (!marker) break;
     }
-    
+
     return {
       txs: collected,
       scanned,
@@ -893,14 +951,14 @@
   function normalizeIssuerListText(text) {
     return text
       .split(/[\n,;]+/)
-      .map(line => line.trim())
-      .filter(line => line && isValidXrpAddress(line));
+      .map((line) => line.trim())
+      .filter((line) => line && isValidXrpAddress(line));
   }
 
   function getIssuerList() {
     const raw = safeGetStorage(LOCAL_KEY_ISSUER_LIST);
     if (!raw) return DEFAULT_ISSUER_LIST;
-    
+
     try {
       const arr = JSON.parse(raw);
       return Array.isArray(arr) ? arr : DEFAULT_ISSUER_LIST;
@@ -916,17 +974,17 @@
   function hydrateIssuerSelect() {
     const sel = $("uiIssuerSelect");
     if (!sel) return;
-    
+
     sel.innerHTML = '<option value="">-- Select Issuer --</option>';
-    
+
     const list = getIssuerList();
-    list.forEach(addr => {
+    list.forEach((addr) => {
       const opt = document.createElement("option");
       opt.value = addr;
       opt.textContent = `${addr.slice(0, 12)}...${addr.slice(-8)}`;
       sel.appendChild(opt);
     });
-    
+
     const last = safeGetStorage(LOCAL_KEY_ACTIVE_ISSUER);
     if (last && list.includes(last)) {
       sel.value = last;
@@ -937,7 +995,7 @@
   function onIssuerSelected(issuer, { autoBuildIfMissing } = { autoBuildIfMissing: false }) {
     activeIssuer = issuer;
     safeSetStorage(LOCAL_KEY_ACTIVE_ISSUER, issuer);
-    
+
     if (issuerRegistry.has(issuer)) {
       renderAll(issuerRegistry.get(issuer));
     } else {
@@ -952,9 +1010,9 @@
   function bindInspectorTabs() {
     const tabs = document.querySelectorAll(".inspector-tab-btn");
     const panes = document.querySelectorAll(".inspector-tab-pane");
-    
+
     function activate(name) {
-      tabs.forEach(btn => {
+      tabs.forEach((btn) => {
         if (btn.dataset.tab === name) {
           btn.classList.add("is-active");
           btn.setAttribute("aria-selected", "true");
@@ -963,22 +1021,18 @@
           btn.setAttribute("aria-selected", "false");
         }
       });
-      
-      panes.forEach(pane => {
-        if (pane.dataset.tab === name) {
-          pane.style.display = "block";
-        } else {
-          pane.style.display = "none";
-        }
+
+      panes.forEach((pane) => {
+        pane.style.display = pane.dataset.tab === name ? "block" : "none";
       });
     }
-    
-    tabs.forEach(btn => {
+
+    tabs.forEach((btn) => {
       btn.addEventListener("click", () => {
         activate(btn.dataset.tab);
       });
     });
-    
+
     activate("flow");
   }
 
@@ -995,11 +1049,9 @@
   }
 
   // ---------------- RENDER ----------------
-  // ✅✅✅ FIX #1: Always clear before rendering (prevents stacking)
   function ensurePage() {
     let page = $("inspector");
-    
-    // If element doesn't exist, create it (shouldn't happen if HTML has it)
+
     if (!page) {
       page = document.createElement("section");
       page.id = "inspector";
@@ -1007,8 +1059,7 @@
       const main = document.querySelector("main") || document.body;
       main.appendChild(page);
     }
-    
-    // ✅ CRITICAL FIX: ALWAYS clear before rendering (no conditional check)
+
     page.innerHTML = "";
 
     page.innerHTML = `
@@ -1273,9 +1324,9 @@
     function activationLine(entry) {
       const { activatedBy, activatedBySource } = entry;
       if (!activatedBy) return `<div style="opacity:0.5;font-size:11px;">no activation found (${activatedBySource})</div>`;
-      return `<div style="font-size:11px;opacity:0.7;">activated_by: <code>${escapeHtml(activatedBy)}</code> • src: ${escapeHtml(
-        activatedBySource
-      )}</div>`;
+      return `<div style="font-size:11px;opacity:0.7;">activated_by: <code>${escapeHtml(
+        activatedBy
+      )}</code> • src: ${escapeHtml(activatedBySource)}</div>`;
     }
 
     function nodeRow(addr) {
@@ -1283,7 +1334,8 @@
       if (!n) return "";
 
       const short = addr.slice(0, 8) + "..." + addr.slice(-6);
-      const bal = n.acctInfo?.balanceXrp != null ? n.acctInfo.balanceXrp.toFixed(6) + " XRP" : "—";
+      const bal =
+        n.acctInfo?.balanceXrp != null ? n.acctInfo.balanceXrp.toFixed(6) + " XRP" : "—";
       const dom = n.acctInfo?.domain ? escapeHtml(n.acctInfo.domain).slice(0, 24) : "—";
 
       const btnExpand = `<button class="uiToggle" data-addr="${escapeHtml(addr)}">+</button>`;
@@ -1304,10 +1356,14 @@
             <strong>Domain:</strong> ${escapeHtml(dom)}
           </div>
           <div style="font-size:12px;margin-bottom:4px;">
-            <strong>Out:</strong> ${n.outCount} txs (scanned: ${n.outScanned}, pages: ${n.outPages}, complete: ${n.outComplete ? "✅" : "⚠️"})
+            <strong>Out:</strong> ${n.outCount} txs (scanned: ${n.outScanned}, pages: ${n.outPages}, complete: ${
+        n.outComplete ? "✅" : "⚠️"
+      })
           </div>
           ${activationLine(n)}
-          <div class="uiChildrenContainer" data-addr="${escapeHtml(addr)}" style="display:none;margin-top:8px;"></div>
+          <div class="uiChildrenContainer" data-addr="${escapeHtml(
+            addr
+          )}" style="display:none;margin-top:8px;"></div>
         </div>
       `;
     }
@@ -1316,7 +1372,9 @@
       const children = Array.from(g.nodes.values()).filter((x) => x.activatedBy === addr);
       if (children.length === 0) return "";
 
-      const inner = children.map((c) => nodeRow(c.addr) + renderRec(c.addr, indentPx + 24)).join("");
+      const inner = children
+        .map((c) => nodeRow(c.addr) + renderRec(c.addr, indentPx + 24))
+        .join("");
       return `<div style="margin-left:${indentPx}px;">${inner}</div>`;
     }
 
@@ -1607,7 +1665,12 @@
         })
       ].join("\n");
 
-      $("qiExportCsv").onclick = () => downloadText(csv, `nanakilo-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`, "text/csv");
+      $("qiExportCsv").onclick = () =>
+        downloadText(
+          csv,
+          `nanakilo-quickinspect-${addr}-outgoing-${outgoing.length}-txs.csv`,
+          "text/csv"
+        );
 
       $("qiExportJson").onclick = () => {
         const data = {
@@ -1618,7 +1681,11 @@
           exportedAt: new Date().toISOString(),
           source: "NanaKilo Quick Inspect"
         };
-        downloadText(JSON.stringify(data, null, 2), `nanakilo-quickinspect-${addr}.json`, "application/json");
+        downloadText(
+          JSON.stringify(data, null, 2),
+          `nanakilo-quickinspect-${addr}.json`,
+          "application/json"
+        );
       };
 
       $("qiTraceFrom").onclick = () => {
@@ -1778,26 +1845,23 @@
   }
 
   // ---------------- INIT ----------------
-  // ✅✅✅ FIX #2: Guard to prevent duplicate initialization
   function initInspector() {
-    // ⚡⚡⚡ CRITICAL: Prevent duplicate initialization within 1 second
     if (window._naluInspectorInitialized) {
       console.log("⚠️ Inspector already initialized, skipping duplicate call");
       return;
     }
-    
+
     window._naluInspectorInitialized = true;
     console.log("🔧 Inspector initializing...");
-    
-    // Reset the flag after 1 second to allow re-init after page switch
+
     setTimeout(() => {
       window._naluInspectorInitialized = false;
       console.log("🔓 Inspector lock released");
     }, 1000);
-    
+
     renderPage();
     setStatus("Ready");
-    
+
     console.log("✅ Inspector initialized");
   }
 
@@ -1816,10 +1880,8 @@
     switchToTrace: (addr) => switchToTraceAndSetSeed(addr)
   };
 
-  // ✅ Also export as window.initInspector for ui.js
   window.initInspector = initInspector;
-  
-  // ✅ Export UnifiedInspector for quick inspect
+
   window.UnifiedInspector = {
     quickInspect: (addr) => quickInspectAddress(addr, { perNode: 160 })
   };
